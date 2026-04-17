@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ikabot Empire</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] } } },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-100 font-sans">
+  <div id="root"></div>
+
+  {% raw %}
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    // ─── Constants ───────────────────────────────────────────────────────────────
+
+    const MATERIALS = [
+      { pt: 'Madeira',  en: 'Wood',    icon: 'fa-tree',        color: 'text-green-500'  },
+      { pt: 'Vinho',    en: 'Wine',    icon: 'fa-wine-bottle', color: 'text-red-400'    },
+      { pt: 'Mármore',  en: 'Marble',  icon: 'fa-mountain',    color: 'text-slate-400'  },
+      { pt: 'Cristal',  en: 'Crystal', icon: 'fa-gem',         color: 'text-cyan-400'   },
+      { pt: 'Enxofre',  en: 'Sulfur',  icon: 'fa-flask',       color: 'text-yellow-400' },
+    ];
+
+    const AUTO_REFRESH_SECONDS = 300; // 5 minutes
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+    function fmt(n) {
+      const num = Number(n);
+      if (n === null || n === undefined || isNaN(num)) return '—';
+      return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+    }
+
+    function fmtDuration(seconds) {
+      if (seconds < 0 || seconds === -1) return '∞';
+      if (seconds === 0) return '0s';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    function fmtCountdown(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    function fmtArrival(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts * 1000);
+      return d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // ─── Sidebar ─────────────────────────────────────────────────────────────────
+
+    function NavItem({ icon, label, active, onClick, badge }) {
+      return (
+        <button
+          onClick={onClick}
+          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+            active
+              ? 'bg-indigo-600 text-white shadow'
+              : 'text-slate-400 hover:bg-slate-700 hover:text-slate-100'
+          }`}
+        >
+          <i className={`fa-solid ${icon} w-4 text-center text-sm`} />
+          <span className="flex-1 text-left">{label}</span>
+          {badge > 0 && (
+            <span className="bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+              {badge}
+            </span>
+          )}
+        </button>
+      );
+    }
+
+    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, alertCount, movCount, countdown }) {
+      const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60;
+      return (
+        <aside className="w-56 flex-shrink-0 bg-slate-900 flex flex-col h-screen">
+          <div className="px-5 py-6 border-b border-slate-700/60">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <i className="fa-solid fa-globe text-white text-sm" />
+              </div>
+              <span className="text-white font-bold text-base tracking-tight">Ikabot</span>
+            </div>
+            <p className="text-slate-500 text-xs pl-10">Empire Dashboard</p>
+          </div>
+
+          <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+            <NavItem icon="fa-house"        label="Início"       active={active === 'home'}       onClick={() => setActive('home')}       />
+            <NavItem icon="fa-city"         label="Cidades"      active={active === 'cities'}     onClick={() => setActive('cities')}     />
+            <NavItem icon="fa-landmark"     label="Edifícios"    active={active === 'buildings'}  onClick={() => setActive('buildings')}  />
+            <NavItem icon="fa-ship"         label="Movimentos"   active={active === 'movements'}  onClick={() => setActive('movements')}  badge={movCount} />
+            <NavItem icon="fa-triangle-exclamation" label="Alertas" active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
+            <NavItem icon="fa-chart-line"   label="Histórico"    active={active === 'history'}    onClick={() => setActive('history')}    />
+          </nav>
+
+          <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
+            {isStale && (
+              <div className="flex items-center gap-1.5 text-yellow-400 text-xs">
+                <i className="fa-solid fa-triangle-exclamation" />
+                Dados desatualizados
+              </div>
+            )}
+            <p className={`text-xs leading-tight ${isStale ? 'text-yellow-500' : 'text-slate-600'}`}>
+              <i className="fa-regular fa-clock mr-1" />
+              {lastUpdated}
+            </p>
+            {countdown !== null && (
+              <p className="text-slate-600 text-xs">
+                <i className="fa-solid fa-arrows-rotate mr-1" />
+                Refresh em {fmtCountdown(countdown)}
+              </p>
+            )}
+          </div>
+        </aside>
+      );
+    }
+
+    // ─── Shared UI ───────────────────────────────────────────────────────────────
+
+    function PageHeader({ icon, title, children }) {
+      return (
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <i className={`fa-solid ${icon} text-indigo-500`} />
+            {title}
+          </h1>
+          {children}
+        </div>
+      );
+    }
+
+    function Card({ children, className = '' }) {
+      return (
+        <div className={`bg-white rounded-xl border border-slate-200 shadow-sm ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function CardHeader({ icon, title }) {
+      return (
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+          <i className={`fa-solid ${icon} text-indigo-400 text-sm`} />
+          <h2 className="text-sm font-semibold text-slate-700">{title}</h2>
+        </div>
+      );
+    }
+
+    function Th({ children, align = 'text-center', className = '' }) {
+      return <th className={`px-3 py-3 font-semibold ${align} ${className} whitespace-nowrap`}>{children}</th>;
+    }
+
+    function Td({ children, className = '' }) {
+      return <td className={`px-3 py-2.5 text-sm ${className}`}>{children}</td>;
+    }
+
+    function CitySelect({ cities, value, onChange }) {
+      return (
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+        >
+          <option value="all">Todas as cidades</option>
+          {cities.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      );
+    }
+
+    // ─── Export CSV helper ────────────────────────────────────────────────────────
+
+    function exportCsv(filename, rows) {
+      const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ─── HomePage ─────────────────────────────────────────────────────────────────
+
+    function StatBadge({ icon, iconColor, label, value }) {
+      return (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center bg-slate-50 ${iconColor}`}>
+            <i className={`fa-solid ${icon} text-base`} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-slate-400 leading-none mb-1 truncate">{label}</p>
+            <p className="text-lg font-bold text-slate-800 font-mono leading-none">{value}</p>
+          </div>
+        </div>
+      );
+    }
+
+    function HomePage({ data }) {
+      const { statusSummary: s } = data;
+      const res = s.resources;
+      const totalAvail = res.available.reduce((a, b) => a + b, 0);
+      const totalProd  = res.production.reduce((a, b) => a + b, 0);
+
+      return (
+        <div>
+          <PageHeader icon="fa-crown" title="Resumo do Império" />
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
+            <StatBadge icon="fa-anchor"       iconColor="text-blue-500"    label="Navios Disponíveis"  value={fmt(s.ships.available)}    />
+            <StatBadge icon="fa-ship"         iconColor="text-blue-600"    label="Navios Totais"        value={fmt(s.ships.total)}        />
+            <StatBadge icon="fa-house"        iconColor="text-emerald-500" label="Espaço Habitacional" value={fmt(s.housing.space)}      />
+            <StatBadge icon="fa-people-group" iconColor="text-purple-500"  label="Cidadãos"             value={fmt(s.housing.citizens)}   />
+            <StatBadge icon="fa-coins"        iconColor="text-yellow-500"  label="Ouro Total"           value={fmt(s.gold.total)}         />
+            <StatBadge icon="fa-chart-line"   iconColor="text-yellow-600"  label="Produção de Ouro"     value={fmt(s.gold.production)}    />
+            <StatBadge icon="fa-wine-glass"   iconColor="text-red-400"     label="Consumo de Vinho"     value={fmt(s.wine_consumption)}   />
+          </div>
+
+          <Card>
+            <CardHeader icon="fa-boxes-stacked" title="Recursos e Produção" />
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                    <Th align="text-left" className="px-5">Tipo</Th>
+                    {MATERIALS.map(m => (
+                      <Th key={m.en}>
+                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m.pt}
+                      </Th>
+                    ))}
+                    <Th className="text-indigo-300">Total</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { label: 'Disponível', values: res.available,  total: totalAvail },
+                    { label: 'Produção/h', values: res.production, total: totalProd  },
+                  ].map((row, ri) => (
+                    <tr key={ri} className={`border-b border-slate-100 hover:bg-slate-50 ${ri % 2 ? 'bg-slate-50/40' : ''}`}>
+                      <Td className="px-5 font-semibold text-slate-600">{row.label}</Td>
+                      {row.values.map((v, i) => (
+                        <Td key={i} className="text-center font-mono text-slate-700">{fmt(v)}</Td>
+                      ))}
+                      <Td className="text-center font-bold font-mono text-indigo-600">{fmt(row.total)}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    // ─── StorageBar ──────────────────────────────────────────────────────────────
+
+    function StorageBar({ value, capacity }) {
+      if (!capacity) return <span className="font-mono text-slate-600">{fmt(value)}</span>;
+      const pct = Math.min(100, Math.round((value / capacity) * 100));
+      const color = pct >= 95 ? 'bg-red-500' : pct >= 80 ? 'bg-yellow-400' : 'bg-indigo-400';
+      return (
+        <div className="flex flex-col items-center gap-0.5 min-w-[64px]">
+          <span className="font-mono text-slate-700 text-xs leading-none">{fmt(value)}</span>
+          <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-slate-400 text-[10px] leading-none">{pct}%</span>
+        </div>
+      );
+    }
+
+    // ─── CitiesPage ──────────────────────────────────────────────────────────────
+
+    function CitiesPage({ data }) {
+      const { resourcesData } = data;
+      const cities = Object.keys(resourcesData);
+      const [filter, setFilter] = useState('all');
+      const visible = filter === 'all' ? cities : cities.filter(c => c === filter);
+
+      const handleExport = () => {
+        const header = ['Cidade', ...MATERIALS.map(m => m.pt), 'Armazém', 'Vinho/h (prod)', 'Vinho/h (cons)', 'Vinho acaba em'];
+        const rows = [header, ...visible.map(city => {
+          const d = resourcesData[city];
+          const wineRunsOut = d.wineRunsOutIn === -1 ? '∞' : fmtDuration(d.wineRunsOutIn);
+          return [
+            city,
+            ...MATERIALS.map(m => d[m.en] ?? ''),
+            d.storageCapacity ?? '',
+            d.wineProductionPerHour ?? '',
+            d.wineConsumptionPerHour ?? '',
+            wineRunsOut,
+          ];
+        })];
+        exportCsv(`recursos_${new Date().toISOString().slice(0,10)}.csv`, rows);
+      };
+
+      return (
+        <div>
+          <PageHeader icon="fa-city" title="Recursos das Cidades">
+            <div className="flex items-center gap-2">
+              <CitySelect cities={cities} value={filter} onChange={setFilter} />
+              <button
+                onClick={handleExport}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                <i className="fa-solid fa-file-csv" /> CSV
+              </button>
+            </div>
+          </PageHeader>
+
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                    <Th align="text-left" className="px-5">Cidade</Th>
+                    {MATERIALS.map(m => (
+                      <Th key={m.en}>
+                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m.pt}
+                      </Th>
+                    ))}
+                    <Th><i className="fa-solid fa-wine-glass mr-1 text-red-400" /> Vinho</Th>
+                    <Th>Armazém</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((city, i) => {
+                    const d = resourcesData[city];
+                    const cap = d.storageCapacity || 0;
+                    const wineRunsOut = d.wineRunsOutIn;
+                    const wineUrgent = wineRunsOut !== -1 && wineRunsOut !== undefined && wineRunsOut < 4 * 3600;
+                    const wineWarning = wineRunsOut !== -1 && wineRunsOut !== undefined && wineRunsOut < 12 * 3600;
+
+                    return (
+                      <tr key={city} className={`border-b border-slate-100 hover:bg-indigo-50/60 transition-colors ${i % 2 ? 'bg-slate-50/50' : ''}`}>
+                        <Td className="px-5 font-semibold text-slate-700">{city}</Td>
+                        {MATERIALS.map(m => (
+                          <Td key={m.en} className="text-center">
+                            <StorageBar value={d[m.en]} capacity={cap} />
+                          </Td>
+                        ))}
+                        <Td className={`text-center font-mono text-xs ${wineUrgent ? 'text-red-600 font-bold' : wineWarning ? 'text-yellow-600 font-semibold' : 'text-slate-500'}`}>
+                          {wineUrgent && <i className="fa-solid fa-triangle-exclamation mr-1" />}
+                          {fmtDuration(wineRunsOut)}
+                          <div className="text-[10px] text-slate-400">
+                            {fmt(d.wineProductionPerHour)}/{fmt(d.wineConsumptionPerHour)} /h
+                          </div>
+                        </Td>
+                        <Td className="text-center text-xs font-mono text-slate-500">
+                          {fmt(cap)}
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+          <p className="text-xs text-slate-400 mt-2">Barras de recursos mostram % do armazém. Vermelho = &gt;95%, Amarelo = &gt;80%.</p>
+        </div>
+      );
+    }
+
+    // ─── BuildingsPage ───────────────────────────────────────────────────────────
+
+    function BuildingsPage({ data }) {
+      const { empireData } = data;
+      const cities = Object.keys(empireData);
+      const [filter, setFilter] = useState('all');
+      const visible = filter === 'all' ? cities : cities.filter(c => c === filter);
+
+      const buildingNames = useMemo(() => {
+        const names = new Set();
+        cities.forEach(c => Object.keys(empireData[c]).forEach(k => { if (!k.startsWith('_')) names.add(k); }));
+        return [...names];
+      }, [empireData]);
+
+      const averages = useMemo(() => {
+        const avgs = {};
+        buildingNames.forEach(b => {
+          const vals = cities.map(c => parseFloat(empireData[c][b])).filter(v => !isNaN(v));
+          avgs[b] = vals.length > 0 ? vals.reduce((a, v) => a + v, 0) / vals.length : 0;
+        });
+        return avgs;
+      }, [empireData]);
+
+      const now = Math.floor(Date.now() / 1000);
+
+      return (
+        <div>
+          <PageHeader icon="fa-landmark" title="Edifícios do Império">
+            <CitySelect cities={cities} value={filter} onChange={setFilter} />
+          </PageHeader>
+
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                    <th className="px-5 py-3 font-semibold text-left whitespace-nowrap sticky left-0 z-20 bg-slate-800 border-r border-slate-700">
+                      Cidade
+                    </th>
+                    {buildingNames.map(b => <Th key={b} className="text-xs">{b}</Th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((city, i) => {
+                    const cityData = empireData[city];
+                    const hasConstruction = Object.entries(cityData).some(([k, v]) => !k.startsWith('_') && String(v).includes('+'));
+                    const constrEnds = cityData['_constructionEnds'] || 0;
+                    const constrLeft = constrEnds > now ? constrEnds - now : 0;
+                    const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-slate-50';
+                    return (
+                      <tr key={city} className={`border-b border-slate-100 hover:bg-indigo-50 transition-colors group ${rowBg}`}>
+                        <td className={`px-5 py-2.5 text-sm font-semibold whitespace-nowrap sticky left-0 z-10 border-r border-slate-200 ${rowBg} group-hover:bg-indigo-50 ${hasConstruction ? 'text-orange-500' : 'text-slate-700'}`}>
+                          {hasConstruction && <i className="fa-solid fa-hammer mr-1.5 text-orange-400 text-xs" />}
+                          {city}
+                          {constrLeft > 0 && (
+                            <div className="text-[10px] text-orange-400 font-normal mt-0.5">
+                              {fmtDuration(constrLeft)}
+                            </div>
+                          )}
+                        </td>
+                        {buildingNames.map(b => {
+                          const val = cityData[b];
+                          const numVal = parseFloat(val);
+                          const isUnderConstruction = String(val).includes('+');
+                          const isBelowAvg = !isUnderConstruction && !isNaN(numVal) && numVal < averages[b];
+                          return (
+                            <Td key={b} className={`text-center font-mono
+                              ${isUnderConstruction ? 'text-orange-500 font-semibold' : ''}
+                              ${isBelowAvg ? 'text-red-500 font-bold' : ''}
+                              ${!isUnderConstruction && !isBelowAvg ? 'text-slate-600' : ''}
+                            `}>
+                              {val || '—'}
+                            </Td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <div className="flex gap-5 mt-4 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-500 inline-block" />Abaixo da média</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-orange-400 inline-block" />Em construção (tempo restante abaixo do nome)</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── MovementsPage ───────────────────────────────────────────────────────────
+
+    function MovementsPage() {
+      const [movements, setMovements] = useState(null);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        fetch('/api/movements')
+          .then(r => r.json())
+          .then(setMovements)
+          .catch(e => setError(e.message));
+      }, []);
+
+      if (error) return <p className="text-red-500 text-sm">{error}</p>;
+      if (!movements) return <p className="text-slate-400 text-sm">A carregar…</p>;
+
+      const own       = movements.filter(m => m.isOwn);
+      const hostile   = movements.filter(m => m.isHostile);
+      const allied    = movements.filter(m => !m.isOwn && !m.isHostile && m.isSameAlliance);
+      const other     = movements.filter(m => !m.isOwn && !m.isHostile && !m.isSameAlliance);
+
+      const Section = ({ title, items, color, icon }) => {
+        if (items.length === 0) return null;
+        return (
+          <Card className="mb-4">
+            <CardHeader icon={icon} title={`${title} (${items.length})`} />
+            <div className="divide-y divide-slate-100">
+              {items.map((m, i) => (
+                <div key={i} className="px-5 py-3 flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-semibold ${color}`}>
+                      {m.origin} <span className="font-mono">{m.direction}</span> {m.destination}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">{m.mission}</div>
+                    {m.resources && m.resources.length > 0 && (
+                      <div className="text-xs text-slate-400 mt-1">
+                        {m.resources.map((r, j) => <span key={j} className="mr-2">{r.amount} {r.resource}</span>)}
+                      </div>
+                    )}
+                    {m.troops != null && (
+                      <div className="text-xs text-red-400 mt-1">Tropas: {fmt(m.troops)} | Frotas: {fmt(m.fleets)}</div>
+                    )}
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-sm font-mono font-semibold text-slate-700">{fmtDuration(m.timeLeft)}</div>
+                    <div className="text-xs text-slate-400">chega às {fmtArrival(m.arrivalTime)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      };
+
+      return (
+        <div>
+          <PageHeader icon="fa-ship" title="Movimentos de Navios" />
+          {movements.length === 0 ? (
+            <Card className="p-8 text-center text-slate-400">
+              <i className="fa-solid fa-anchor text-3xl mb-2 block" />
+              Sem movimentos activos
+            </Card>
+          ) : (
+            <>
+              <Section title="Os meus movimentos" items={own}     color="text-indigo-600" icon="fa-flag"              />
+              <Section title="Ataques inimigos"   items={hostile} color="text-red-600"    icon="fa-skull-crossbones"  />
+              <Section title="Aliados"            items={allied}  color="text-green-600"  icon="fa-handshake"         />
+              <Section title="Outros"             items={other}   color="text-slate-600"  icon="fa-circle-info"       />
+            </>
+          )}
+        </div>
+      );
+    }
+
+    // ─── AlertsPage ───────────────────────────────────────────────────────────────
+
+    function AlertsPage({ data }) {
+      const { resourcesData, statusSummary: s } = data;
+      const alerts = [];
+
+      // Wine alerts
+      Object.entries(resourcesData).forEach(([city, d]) => {
+        const t = d.wineRunsOutIn;
+        if (t !== -1 && t !== undefined) {
+          if (t < 2 * 3600) alerts.push({ level: 'critical', icon: 'fa-wine-bottle', color: 'text-red-600 bg-red-50 border-red-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}!` });
+          else if (t < 8 * 3600) alerts.push({ level: 'warning', icon: 'fa-wine-bottle', color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}` });
+        }
+      });
+
+      // Storage overflow alerts (> 95%)
+      Object.entries(resourcesData).forEach(([city, d]) => {
+        const cap = d.storageCapacity;
+        if (!cap) return;
+        MATERIALS.forEach(m => {
+          const val = d[m.en];
+          if (val != null && val / cap >= 0.95) {
+            alerts.push({ level: 'warning', icon: m.icon, color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: ${m.pt} a ${Math.round(val/cap*100)}% do armazém` });
+          }
+        });
+      });
+
+      // Negative gold production
+      if (s.gold.production < 0) {
+        alerts.push({ level: 'critical', icon: 'fa-coins', color: 'text-red-600 bg-red-50 border-red-200', msg: `Produção de ouro negativa: ${fmt(s.gold.production)}/h` });
+      }
+
+      // All ships busy
+      if (s.ships.available === 0 && s.ships.total > 0) {
+        alerts.push({ level: 'info', icon: 'fa-ship', color: 'text-blue-600 bg-blue-50 border-blue-200', msg: `Todos os ${s.ships.total} navios estão ocupados` });
+      }
+
+      const critical = alerts.filter(a => a.level === 'critical');
+      const warning  = alerts.filter(a => a.level === 'warning');
+      const info     = alerts.filter(a => a.level === 'info');
+
+      return (
+        <div>
+          <PageHeader icon="fa-triangle-exclamation" title={`Alertas (${alerts.length})`} />
+          {alerts.length === 0 ? (
+            <Card className="p-10 text-center">
+              <i className="fa-solid fa-circle-check text-4xl text-emerald-400 mb-3 block" />
+              <p className="text-slate-600 font-semibold">Tudo em ordem!</p>
+              <p className="text-slate-400 text-sm mt-1">Nenhum alerta activo.</p>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {[...critical, ...warning, ...info].map((a, i) => (
+                <div key={i} className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${a.color}`}>
+                  <i className={`fa-solid ${a.icon} text-lg flex-shrink-0`} />
+                  <span className="text-sm font-medium">{a.msg}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── HistoryPage ─────────────────────────────────────────────────────────────
+
+    function HistoryPage() {
+      const [history, setHistory] = useState(null);
+      const [metric, setMetric]   = useState('gold');
+      const chartRef = useRef(null);
+      const chartInstance = useRef(null);
+
+      useEffect(() => {
+        fetch('/api/history')
+          .then(r => r.json())
+          .then(setHistory)
+          .catch(() => setHistory([]));
+      }, []);
+
+      useEffect(() => {
+        if (!history || history.length === 0 || !chartRef.current) return;
+        if (chartInstance.current) { chartInstance.current.destroy(); }
+
+        const labels = history.map(h => {
+          const d = new Date(h.timestamp * 1000);
+          return d.toLocaleString('pt-PT', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        });
+
+        const datasets = [];
+        const colors = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7'];
+
+        if (metric === 'gold') {
+          datasets.push({ label: 'Ouro', data: history.map(h => h.gold.total), borderColor: colors[0], backgroundColor: colors[0]+'22', tension: 0.3, fill: true });
+          datasets.push({ label: 'Prod. Ouro/h', data: history.map(h => h.gold.production), borderColor: colors[1], backgroundColor: colors[1]+'22', tension: 0.3, fill: false, yAxisID: 'y2' });
+        } else if (metric === 'resources') {
+          MATERIALS.forEach((m, i) => {
+            datasets.push({ label: m.pt, data: history.map(h => h.resources.available[i]), borderColor: colors[i % colors.length], tension: 0.3, fill: false });
+          });
+        } else if (metric === 'ships') {
+          datasets.push({ label: 'Navios disponíveis', data: history.map(h => h.ships.available), borderColor: colors[0], tension: 0.3, fill: false });
+          datasets.push({ label: 'Navios totais',      data: history.map(h => h.ships.total),     borderColor: colors[1], tension: 0.3, fill: false });
+        } else if (metric === 'citizens') {
+          datasets.push({ label: 'Cidadãos',            data: history.map(h => h.housing.citizens), borderColor: colors[2], tension: 0.3, fill: false });
+          datasets.push({ label: 'Espaço habitacional', data: history.map(h => h.housing.space),    borderColor: colors[0], tension: 0.3, fill: false });
+        }
+
+        const scales = {
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#e2e8f020' } },
+          x: { ticks: { color: '#94a3b8', maxTicksLimit: 12 }, grid: { color: '#e2e8f020' } },
+        };
+        if (metric === 'gold') {
+          scales.y2 = { position: 'right', ticks: { color: '#94a3b8' }, grid: { drawOnChartArea: false } };
+        }
+
+        chartInstance.current = new Chart(chartRef.current, {
+          type: 'line',
+          data: { labels, datasets },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 12 } } } },
+            scales,
+          },
+        });
+      }, [history, metric]);
+
+      const METRICS = [
+        { key: 'gold',      label: 'Ouro'       },
+        { key: 'resources', label: 'Recursos'    },
+        { key: 'ships',     label: 'Navios'      },
+        { key: 'citizens',  label: 'Cidadãos'    },
+      ];
+
+      return (
+        <div>
+          <PageHeader icon="fa-chart-line" title="Histórico do Império">
+            <div className="flex gap-1">
+              {METRICS.map(m => (
+                <button
+                  key={m.key}
+                  onClick={() => setMetric(m.key)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${metric === m.key ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </PageHeader>
+
+          <Card>
+            <div className="bg-slate-800 rounded-xl p-4" style={{ height: '360px' }}>
+              {!history ? (
+                <div className="flex items-center justify-center h-full text-slate-400 text-sm">A carregar histórico…</div>
+              ) : history.length === 0 ? (
+                <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                  Sem dados de histórico ainda. Aguarda o próximo ciclo de actualização.
+                </div>
+              ) : (
+                <canvas ref={chartRef} />
+              )}
+            </div>
+          </Card>
+
+          {history && history.length > 0 && (
+            <p className="text-xs text-slate-400 mt-2">
+              {history.length} pontos de dados — de {new Date(history[0].timestamp * 1000).toLocaleDateString('pt-PT')} a {new Date(history[history.length-1].timestamp * 1000).toLocaleDateString('pt-PT')}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Loading / Error screens ─────────────────────────────────────────────────
+
+    function LoadingScreen() {
+      return (
+        <div className="flex items-center justify-center h-screen bg-slate-100">
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin mx-auto mb-4" />
+            <p className="text-slate-500 text-sm">A carregar dados do império…</p>
+          </div>
+        </div>
+      );
+    }
+
+    function ErrorScreen({ message }) {
+      return (
+        <div className="flex items-center justify-center h-screen bg-slate-100">
+          <div className="bg-white rounded-xl border border-red-200 shadow p-8 text-center max-w-sm">
+            <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4">
+              <i className="fa-solid fa-triangle-exclamation text-red-400 text-xl" />
+            </div>
+            <h2 className="text-slate-800 font-semibold mb-2">Erro ao carregar dados</h2>
+            <p className="text-red-500 text-sm">{message}</p>
+            <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors">
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── App ─────────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [page, setPage]       = useState('home');
+      const [data, setData]       = useState(null);
+      const [error, setError]     = useState(null);
+      const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
+
+      const fetchData = useCallback(() => {
+        fetch('/api/data')
+          .then(r => r.json())
+          .then(d => { d.error ? setError(d.error) : setData(d); })
+          .catch(e => setError(e.message));
+      }, []);
+
+      // Initial load
+      useEffect(() => { fetchData(); }, []);
+
+      // Auto-refresh timer
+      useEffect(() => {
+        setCountdown(AUTO_REFRESH_SECONDS);
+        const interval = setInterval(() => {
+          setCountdown(prev => {
+            if (prev <= 1) { fetchData(); return AUTO_REFRESH_SECONDS; }
+            return prev - 1;
+          });
+        }, 1000);
+        return () => clearInterval(interval);
+      }, [fetchData]);
+
+      const alertCount = useMemo(() => {
+        if (!data) return 0;
+        let n = 0;
+        Object.values(data.resourcesData).forEach(d => {
+          const t = d.wineRunsOutIn;
+          if (t !== -1 && t !== undefined && t < 8 * 3600) n++;
+          const cap = d.storageCapacity;
+          if (cap) MATERIALS.forEach(m => { if ((d[m.en] || 0) / cap >= 0.95) n++; });
+        });
+        if (data.statusSummary.gold.production < 0) n++;
+        return n;
+      }, [data]);
+
+      // Movements badge from last fetch (we track count via a separate small fetch)
+      const [movCount, setMovCount] = useState(0);
+      useEffect(() => {
+        fetch('/api/movements').then(r => r.json()).then(m => setMovCount(m.filter(x => x.isOwn).length)).catch(() => {});
+      }, [data]);
+
+      if (error) return <ErrorScreen message={error} />;
+      if (!data)  return <LoadingScreen />;
+
+      return (
+        <div className="flex h-screen overflow-hidden">
+          <Sidebar
+            active={page}
+            setActive={setPage}
+            lastUpdated={data.lastUpdated}
+            lastUpdatedTs={data.lastUpdatedTs}
+            alertCount={alertCount}
+            movCount={movCount}
+            countdown={countdown}
+          />
+          <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
+            {page === 'home'      && <HomePage      data={data} />}
+            {page === 'cities'    && <CitiesPage    data={data} />}
+            {page === 'buildings' && <BuildingsPage data={data} />}
+            {page === 'movements' && <MovementsPage />}
+            {page === 'alerts'    && <AlertsPage    data={data} />}
+            {page === 'history'   && <HistoryPage />}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+  {% endraw %}
+</body>
+</html>

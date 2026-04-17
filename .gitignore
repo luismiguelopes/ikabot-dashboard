@@ -1,0 +1,8 @@
+# Environment variables
+.env
+
+# ikabot folder
+ikabot/
+
+# macOS
+.DS_Store

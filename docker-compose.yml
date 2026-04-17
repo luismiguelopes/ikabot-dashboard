@@ -1,0 +1,36 @@
+
+services:
+  ikabot:
+    image: ghcr.io/ikabot-collective/ikabot:latest
+    container_name: ikabot
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    volumes:
+      # Pega no ficheiro ./empireFunction.py que está ao lado do compose e injeta na diretoria correta do bot
+      - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py
+      # Pasta Virtual Partilhada
+      - ikalogs_volume:/tmp/ikalogs/
+    command: >
+      python3 -m ikabot ${IKABOT_EMAIL} ${IKABOT_PASSWORD} 21 8 1  /ikabot/ikabot/function/empireFunction.py "" 21 8 3
+    ports:
+      - "43357:43357"
+      - "43573:43573"
+
+  ikabot-gui:
+    image: python:3.12-slim
+    container_name: ikabot-gui
+    restart: unless-stopped
+    volumes:
+      # Pega na pasta inteira ./ikabot_gui que está ao lado do compose e mete no contentor
+      - ./ikabot_gui:/gui
+      # A mesma Pasta Virtual Partilhada
+      - ikalogs_volume:/tmp/ikalogs/
+    working_dir: /gui
+    command: >
+      bash -c "pip install flask && python app.py"
+    ports:
+      - "5001:5000"
+
+volumes:
+  ikalogs_volume:
