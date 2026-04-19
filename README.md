@@ -84,7 +84,7 @@ docker compose up -d
 | Cidades | Per-city resources, production, and wine timers |
 | Edifícios | Building levels and active constructions per city |
 | Movimentos | Active fleet and army movements |
-| Alertas | Configurable alerts (wine, storage, etc.) |
+| Alertas | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | Histórico | Charts of empire stats over the last 7 days |
 | Calculadoras | Building upgrade time estimator and island vs city ROI comparator |
 | Mundo | **Inactivos**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Ilhas**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
