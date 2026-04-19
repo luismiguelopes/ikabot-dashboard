@@ -1409,19 +1409,391 @@
       return <span className="text-slate-400 text-xs">{state}</span>;
     }
 
-    function MundoPage() {
-      const [scanData, setScanData]     = useState(null);
-      const [scanStatus, setScanStatus] = useState(null);
-      const [loading, setLoading]       = useState(true);
-      const [error, setError]           = useState(null);
-      const [marks, setMarks]           = useState({});
+    const RESOURCE_LABELS = ['', 'Vinho', 'Mármore', 'Cristal', 'Enxofre'];
+    const RESOURCE_ICONS  = ['', 'fa-wine-bottle', 'fa-mountain', 'fa-gem', 'fa-flask'];
+    const RESOURCE_COLORS = ['', 'text-red-400', 'text-slate-400', 'text-cyan-400', 'text-yellow-400'];
 
+    // ─── Inactivos sub-tab ───────────────────────────────────────────────────────
+
+    function InactivosTab({ scanData, scanStatus, loading, error, marks, setMarks, onForceRefresh }) {
       const [filterDist, setFilterDist]   = useState(20);
       const [filterState, setFilterState] = useState('all');
       const [filterMark, setFilterMark]   = useState('excl_ignorar');
+      const [filterNew, setFilterNew]     = useState(false);
       const [search, setSearch]           = useState('');
       const [sortKey, setSortKey]         = useState('distance');
       const [sortAsc, setSortAsc]         = useState(true);
+
+      const handleMark = useCallback((playerId, status) => {
+        setMarks(prev => ({ ...prev, [playerId]: status }));
+        fetch('/api/world-scan/mark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId, status }),
+        }).catch(() => {});
+      }, [setMarks]);
+
+      const players = useMemo(() => {
+        if (!scanData?.players) return [];
+        let list = scanData.players.map(p => ({ ...p, mark: marks[p.playerId] || p.mark || 'novo' }));
+
+        if (filterNew)             list = list.filter(p => p.isNew);
+        if (filterState !== 'all') list = list.filter(p => p.state === filterState);
+        if (filterMark === 'excl_ignorar') list = list.filter(p => p.mark !== 'ignorar');
+        else if (filterMark !== 'all')     list = list.filter(p => p.mark === filterMark);
+        if (filterDist > 0)        list = list.filter(p => p.distance <= filterDist);
+        if (search.trim())         list = list.filter(p => p.playerName.toLowerCase().includes(search.toLowerCase()));
+
+        list.sort((a, b) => {
+          let va, vb;
+          if (sortKey === 'distance')  { va = a.distance; vb = b.distance; }
+          else if (sortKey === 'army') { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army); }
+          else if (sortKey === 'building') { va = parseScore(a.scores?.building); vb = parseScore(b.scores?.building); }
+          else if (sortKey === 'player')   { va = a.playerName.toLowerCase(); vb = b.playerName.toLowerCase(); }
+          else                         { va = a[sortKey]; vb = b[sortKey]; }
+          if (va < vb) return sortAsc ? -1 : 1;
+          if (va > vb) return sortAsc ? 1 : -1;
+          return 0;
+        });
+        return list;
+      }, [scanData, marks, filterState, filterMark, filterDist, filterNew, search, sortKey, sortAsc]);
+
+      const newCount = useMemo(() =>
+        (scanData?.players || []).filter(p => p.isNew).length, [scanData]);
+
+      const handleSort = (key) => {
+        if (sortKey === key) setSortAsc(a => !a);
+        else { setSortKey(key); setSortAsc(true); }
+      };
+
+      const SortTh = ({ colKey, children, align = 'text-center' }) => (
+        <th
+          className={`px-3 py-3 font-semibold ${align} whitespace-nowrap cursor-pointer select-none hover:bg-slate-700 transition-colors`}
+          onClick={() => handleSort(colKey)}
+        >
+          {children}
+          {sortKey === colKey && <span className="ml-1 opacity-70">{sortAsc ? '↑' : '↓'}</span>}
+        </th>
+      );
+
+      const handleExportCsv = () => {
+        const header = ['Jogador', 'Aliança', 'Estado', 'Novo?', 'Ilha', 'Coord', 'Cidade próxima', 'Dist.',
+                        'Score Militar', 'Score Edifícios', 'Rank', 'Marcação'];
+        const rows = [header, ...players.map(p => [
+          p.playerName, p.allyTag || '—', p.state, p.isNew ? 'Sim' : 'Não',
+          p.islandName, `(${p.islandX},${p.islandY})`,
+          p.nearestOwnCity, p.distance,
+          fmtScore(p.scores?.army), fmtScore(p.scores?.building), p.scores?.rank || '—',
+          marks[p.playerId] || 'novo',
+        ])];
+        exportCsv(`inactivos_${new Date().toISOString().slice(0,10)}.csv`, rows);
+      };
+
+      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>;
+      if (error)   return (
+        <Card className="p-8 text-center">
+          <p className="text-slate-500 text-sm mb-3">{error}</p>
+          <button onClick={onForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">
+            Forçar primeiro scan
+          </button>
+        </Card>
+      );
+
+      return (
+        <div>
+          {/* Filters */}
+          <Card className="mb-4">
+            <div className="px-5 py-3 flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => setFilterNew(v => !v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                  filterNew
+                    ? 'bg-emerald-500 text-white border-emerald-500'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <i className="fa-solid fa-star" />
+                Novos esta semana {newCount > 0 && <span className={`ml-1 px-1.5 rounded-full text-[10px] font-bold ${filterNew ? 'bg-emerald-400 text-white' : 'bg-emerald-100 text-emerald-700'}`}>{newCount}</span>}
+              </button>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
+                <select value={filterDist} onChange={e => setFilterDist(Number(e.target.value))}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  {[5, 8, 10, 15, 20, 30, 0].map(v => <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">Estado</label>
+                <select value={filterState} onChange={e => setFilterState(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  <option value="all">Todos</option>
+                  <option value="inactive">Inactivos</option>
+                  <option value="vacation">Férias</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">Marcação</label>
+                <select value={filterMark} onChange={e => setFilterMark(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  <option value="excl_ignorar">Excluir Ignorados</option>
+                  <option value="all">Todos</option>
+                  <option value="novo">Apenas Novos</option>
+                  <option value="alvo">Apenas Alvos</option>
+                  <option value="visto">Apenas Vistos</option>
+                </select>
+              </div>
+              <input type="text" placeholder="Pesquisar jogador…" value={search} onChange={e => setSearch(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-1 min-w-[160px]" />
+              <button onClick={handleExportCsv}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                <i className="fa-solid fa-download" /> CSV
+              </button>
+            </div>
+          </Card>
+
+          {players.length === 0 ? (
+            <Card className="p-8 text-center text-slate-400 text-sm">Nenhum jogador encontrado com os filtros actuais.</Card>
+          ) : (
+            <Card>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                      <SortTh colKey="player" align="text-left">Jogador</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Aliança</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Estado</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Ilha</th>
+                      <SortTh colKey="distance">Dist.</SortTh>
+                      <SortTh colKey="army">Militar</SortTh>
+                      <SortTh colKey="building">Edifícios</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Marcação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {players.map((p, idx) => (
+                      <tr key={`${p.playerId}-${p.islandX}-${p.islandY}`}
+                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${marks[p.playerId] === 'ignorar' ? 'opacity-40' : ''} ${idx % 2 ? 'bg-slate-50/40' : ''}`}>
+                        <Td className="font-medium text-slate-800">
+                          <div className="flex items-center gap-1.5">
+                            {p.playerName}
+                            {p.isNew && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
+                                <i className="fa-solid fa-star text-[8px]" /> Novo
+                              </span>
+                            )}
+                          </div>
+                        </Td>
+                        <Td className="text-center">
+                          {p.allyTag
+                            ? <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-mono">{p.allyTag}</span>
+                            : <span className="text-slate-300">—</span>}
+                        </Td>
+                        <Td className="text-center"><StatePill state={p.state} /></Td>
+                        <Td className="text-center">
+                          <span className="text-slate-700 font-medium">{p.islandName}</span>
+                          <span className="text-slate-400 text-xs ml-1">({p.islandX},{p.islandY})</span>
+                          <br /><span className="text-slate-400 text-xs">{p.cityName}</span>
+                        </Td>
+                        <Td className="text-center">
+                          <span className="font-mono text-slate-700 text-sm font-semibold">{p.distance}</span>
+                          <br /><span className="text-slate-400 text-xs">{p.nearestOwnCity}</span>
+                        </Td>
+                        <Td className="text-center font-mono text-slate-700">
+                          {fmtScore(p.scores?.army)}
+                          {p.scores?.rank && <div className="text-slate-400 text-[10px]">#{p.scores.rank}</div>}
+                        </Td>
+                        <Td className="text-center font-mono text-slate-600 text-xs">
+                          {fmtScore(p.scores?.building)}
+                        </Td>
+                        <Td className="text-center">
+                          <MarkSelect playerId={p.playerId} current={marks[p.playerId] || 'novo'} onChange={handleMark} />
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
+                {players.length} jogador{players.length !== 1 ? 'es' : ''}
+                {newCount > 0 && <span className="ml-2 text-emerald-600 font-medium">· {newCount} novos esta semana</span>}
+              </div>
+            </Card>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Ilhas sub-tab ───────────────────────────────────────────────────────────
+
+    function IlhasTab({ scanData, loading, error, onForceRefresh }) {
+      const [filterDist, setFilterDist]     = useState(0);
+      const [filterFree, setFilterFree]     = useState(true);
+      const [filterOwn, setFilterOwn]       = useState(false);
+      const [filterResource, setFilterResource] = useState(0);
+      const [sortKey, setSortKey]           = useState('freeSlots');
+      const [sortAsc, setSortAsc]           = useState(false);
+
+      const islands = useMemo(() => {
+        if (!scanData?.islands) return [];
+        let list = [...scanData.islands];
+        if (filterFree)       list = list.filter(i => i.freeSlots > 0);
+        if (!filterOwn)       list = list.filter(i => !i.hasOwnCity);
+        if (filterResource)   list = list.filter(i => i.resourceType === filterResource);
+        if (filterDist > 0)   list = list.filter(i => i.distance <= filterDist);
+
+        list.sort((a, b) => {
+          let va, vb;
+          if (sortKey === 'freeSlots')   { va = a.freeSlots; vb = b.freeSlots; }
+          else if (sortKey === 'wood')   { va = parseInt(a.woodLevel) || 0; vb = parseInt(b.woodLevel) || 0; }
+          else if (sortKey === 'luxury') { va = parseInt(a.luxuryLevel) || 0; vb = parseInt(b.luxuryLevel) || 0; }
+          else if (sortKey === 'distance') { va = a.distance; vb = b.distance; }
+          else { va = a[sortKey]; vb = b[sortKey]; }
+          if (va < vb) return sortAsc ? -1 : 1;
+          if (va > vb) return sortAsc ? 1 : -1;
+          return 0;
+        });
+        return list;
+      }, [scanData, filterFree, filterOwn, filterResource, filterDist, sortKey, sortAsc]);
+
+      const handleSort = (key) => {
+        if (sortKey === key) setSortAsc(a => !a);
+        else { setSortKey(key); setSortAsc(false); }
+      };
+
+      const SortTh = ({ colKey, children }) => (
+        <th className="px-3 py-3 font-semibold text-center whitespace-nowrap cursor-pointer select-none hover:bg-slate-700 transition-colors"
+          onClick={() => handleSort(colKey)}>
+          {children}{sortKey === colKey && <span className="ml-1 opacity-70">{sortAsc ? '↑' : '↓'}</span>}
+        </th>
+      );
+
+      const handleExportCsv = () => {
+        const header = ['Ilha', 'Coord', 'Recurso', 'Floresta', 'Recurso Lux.', 'Maravilha', 'Lv Maravilha', 'Slots Livres', 'Total Slots', 'Cidade próxima', 'Dist.'];
+        const rows = [header, ...islands.map(i => [
+          i.islandName, `(${i.x},${i.y})`,
+          RESOURCE_LABELS[i.resourceType] || '—', i.woodLevel || '—', i.luxuryLevel || '—',
+          i.wonder || '—', i.wonderLevel || '—', i.freeSlots, i.totalSlots,
+          i.nearestOwnCity, i.distance,
+        ])];
+        exportCsv(`ilhas_${new Date().toISOString().slice(0,10)}.csv`, rows);
+      };
+
+      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>;
+      if (error || !scanData?.islands) return (
+        <Card className="p-8 text-center">
+          <p className="text-slate-500 text-sm mb-3">{error || 'Dados de ilhas não disponíveis. Aguarda o primeiro scan.'}</p>
+          <button onClick={onForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">Forçar Scan</button>
+        </Card>
+      );
+
+      return (
+        <div>
+          <Card className="mb-4">
+            <div className="px-5 py-3 flex flex-wrap items-center gap-3">
+              <button onClick={() => setFilterFree(v => !v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterFree ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                <i className="fa-solid fa-circle-plus" /> Apenas com slots livres
+              </button>
+              <button onClick={() => setFilterOwn(v => !v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterOwn ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                <i className="fa-solid fa-flag" /> Incluir ilhas próprias
+              </button>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">Recurso</label>
+                <select value={filterResource} onChange={e => setFilterResource(Number(e.target.value))}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  <option value={0}>Todos</option>
+                  {RESOURCE_LABELS.slice(1).map((l, i) => <option key={i+1} value={i+1}>{l}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
+                <select value={filterDist} onChange={e => setFilterDist(Number(e.target.value))}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  {[5, 8, 10, 15, 20, 0].map(v => <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>)}
+                </select>
+              </div>
+              <button onClick={handleExportCsv}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                <i className="fa-solid fa-download" /> CSV
+              </button>
+            </div>
+          </Card>
+
+          {islands.length === 0 ? (
+            <Card className="p-8 text-center text-slate-400 text-sm">Nenhuma ilha encontrada com os filtros actuais.</Card>
+          ) : (
+            <Card>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                      <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">Ilha</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Recurso</th>
+                      <SortTh colKey="wood">Floresta</SortTh>
+                      <SortTh colKey="luxury">Lv Recurso</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Maravilha</th>
+                      <SortTh colKey="freeSlots">Slots Livres</SortTh>
+                      <SortTh colKey="distance">Dist.</SortTh>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {islands.map((isl, idx) => (
+                      <tr key={isl.islandId}
+                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${idx % 2 ? 'bg-slate-50/40' : ''}`}>
+                        <Td className="font-medium text-slate-800">
+                          {isl.islandName}
+                          <span className="text-slate-400 text-xs ml-1">({isl.x},{isl.y})</span>
+                          {isl.hasOwnCity && <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium">tua</span>}
+                        </Td>
+                        <Td className="text-center">
+                          {isl.resourceType > 0 && (
+                            <span className={`flex items-center justify-center gap-1 text-xs font-medium ${RESOURCE_COLORS[isl.resourceType]}`}>
+                              <i className={`fa-solid ${RESOURCE_ICONS[isl.resourceType]}`} />
+                              {RESOURCE_LABELS[isl.resourceType]}
+                            </span>
+                          )}
+                        </Td>
+                        <Td className="text-center font-mono text-slate-700">{isl.woodLevel || '—'}</Td>
+                        <Td className="text-center font-mono text-slate-700">{isl.luxuryLevel || '—'}</Td>
+                        <Td className="text-center text-slate-600 text-xs">
+                          {isl.wonder
+                            ? <span>{isl.wonder}{isl.wonderLevel ? <span className="text-slate-400 ml-1">Lv {isl.wonderLevel}</span> : null}</span>
+                            : <span className="text-slate-300">—</span>}
+                        </Td>
+                        <Td className="text-center">
+                          <span className={`font-bold text-sm ${isl.freeSlots > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {isl.freeSlots}
+                          </span>
+                          <span className="text-slate-400 text-xs">/{isl.totalSlots}</span>
+                        </Td>
+                        <Td className="text-center">
+                          <span className="font-mono text-slate-700 text-sm font-semibold">{isl.distance}</span>
+                          <br /><span className="text-slate-400 text-xs">{isl.nearestOwnCity}</span>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
+                {islands.length} ilha{islands.length !== 1 ? 's' : ''}
+              </div>
+            </Card>
+          )}
+        </div>
+      );
+    }
+
+    // ─── MundoPage (shell with sub-tabs) ────────────────────────────────────────
+
+    function MundoPage() {
+      const [tab, setTab]             = useState('inactivos');
+      const [scanData, setScanData]   = useState(null);
+      const [scanStatus, setScanStatus] = useState(null);
+      const [loading, setLoading]     = useState(true);
+      const [error, setError]         = useState(null);
+      const [marks, setMarks]         = useState({});
 
       const fetchScan = useCallback(() => {
         fetch('/api/world-scan')
@@ -1442,7 +1814,6 @@
 
       useEffect(() => { fetchScan(); fetchStatus(); }, []);
 
-      // Poll status when scan is running
       useEffect(() => {
         if (scanStatus?.status !== 'running') return;
         const t = setInterval(() => {
@@ -1452,85 +1823,26 @@
         return () => clearInterval(t);
       }, [scanStatus?.status]);
 
-      const handleMark = useCallback((playerId, status) => {
-        setMarks(prev => ({ ...prev, [playerId]: status }));
-        fetch('/api/world-scan/mark', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId, status }),
-        }).catch(() => {});
-      }, []);
-
       const handleForceRefresh = () => {
         fetch('/api/world-scan/refresh', { method: 'POST' })
           .then(() => alert('Scan forçado agendado. Será executado no próximo ciclo do bot (~5-15 min).'));
       };
 
-      const players = useMemo(() => {
-        if (!scanData?.players) return [];
-        let list = scanData.players.map(p => ({ ...p, mark: marks[p.playerId] || p.mark || 'novo' }));
-
-        if (filterState !== 'all')
-          list = list.filter(p => p.state === filterState);
-        if (filterMark === 'excl_ignorar')
-          list = list.filter(p => p.mark !== 'ignorar');
-        else if (filterMark !== 'all')
-          list = list.filter(p => p.mark === filterMark);
-        if (filterDist > 0)
-          list = list.filter(p => p.distance <= filterDist);
-        if (search.trim())
-          list = list.filter(p => p.playerName.toLowerCase().includes(search.toLowerCase()));
-
-        list.sort((a, b) => {
-          let va, vb;
-          if (sortKey === 'distance')    { va = a.distance; vb = b.distance; }
-          else if (sortKey === 'army')   { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army); }
-          else if (sortKey === 'player') { va = a.playerName.toLowerCase(); vb = b.playerName.toLowerCase(); }
-          else                           { va = a[sortKey]; vb = b[sortKey]; }
-          if (va < vb) return sortAsc ? -1 : 1;
-          if (va > vb) return sortAsc ? 1 : -1;
-          return 0;
-        });
-        return list;
-      }, [scanData, marks, filterState, filterMark, filterDist, search, sortKey, sortAsc]);
-
-      const handleSort = (key) => {
-        if (sortKey === key) setSortAsc(a => !a);
-        else { setSortKey(key); setSortAsc(true); }
-      };
-
-      const SortTh = ({ colKey, children, align = 'text-center' }) => (
-        <th
-          className={`px-3 py-3 font-semibold ${align} whitespace-nowrap cursor-pointer select-none hover:bg-slate-700 transition-colors`}
-          onClick={() => handleSort(colKey)}
-        >
-          {children}
-          {sortKey === colKey && <span className="ml-1 opacity-70">{sortAsc ? '↑' : '↓'}</span>}
-        </th>
-      );
-
-      const handleExportCsv = () => {
-        const header = ['Jogador', 'Aliança', 'Estado', 'Ilha', 'Coord', 'Cidade próxima', 'Dist.', 'Score Militar', 'Marcação'];
-        const rows = [header, ...players.map(p => [
-          p.playerName, p.allyTag || '—', p.state,
-          p.islandName, `(${p.islandX},${p.islandY})`,
-          p.nearestOwnCity, p.distance,
-          fmtScore(p.scores?.army), marks[p.playerId] || 'novo',
-        ])];
-        exportCsv(`inactivos_${new Date().toISOString().slice(0,10)}.csv`, rows);
-      };
-
       const isRunning = scanStatus?.status === 'running';
       const lastUpdated = scanData?.lastUpdated
-        ? new Date(scanData.lastUpdated * 1000).toLocaleString('pt-PT')
-        : null;
+        ? new Date(scanData.lastUpdated * 1000).toLocaleString('pt-PT') : null;
       const nextScan = scanData?.lastUpdated
-        ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString('pt-PT')
-        : null;
+        ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString('pt-PT') : null;
+      const newCount = (scanData?.players || []).filter(p => p.isNew).length;
+
+      const TABS = [
+        { key: 'inactivos', label: 'Inactivos', icon: 'fa-user-slash' },
+        { key: 'ilhas',     label: 'Ilhas',     icon: 'fa-map'        },
+      ];
 
       return (
         <div>
-          <PageHeader icon="fa-earth-europe" title="Mundo — Inactivos Próximos" />
+          <PageHeader icon="fa-earth-europe" title="Mundo" />
 
           {/* Status card */}
           <Card className="mb-4">
@@ -1547,7 +1859,10 @@
                 )}
                 {scanData && (
                   <p className="text-xs text-slate-400">
-                    Raio: {scanData.scanRadius} · Inactivos encontrados: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
+                    Raio: {scanData.scanRadius}
+                    {' · '}Inactivos: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
+                    {newCount > 0 && <span className="ml-1.5 text-emerald-600 font-semibold">({newCount} novos)</span>}
+                    {scanData.islands && <span>{' · '}Ilhas: <span className="font-semibold text-slate-600">{scanData.islands.length}</span></span>}
                   </p>
                 )}
                 {isRunning && (
@@ -1558,155 +1873,46 @@
                     </p>
                     {scanStatus.total > 0 && (
                       <div className="w-full max-w-xs h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-indigo-500 rounded-full transition-all"
-                          style={{ width: `${Math.round((scanStatus.progress / scanStatus.total) * 100)}%` }}
-                        />
+                        <div className="h-full bg-indigo-500 rounded-full transition-all"
+                          style={{ width: `${Math.round((scanStatus.progress / scanStatus.total) * 100)}%` }} />
                       </div>
                     )}
                   </div>
                 )}
               </div>
-              <button
-                onClick={handleForceRefresh}
-                disabled={isRunning}
-                className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
-              >
+              <button onClick={handleForceRefresh} disabled={isRunning}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                 <i className="fa-solid fa-rotate" />
                 {isRunning ? 'A escanear…' : 'Forçar Scan'}
               </button>
             </div>
           </Card>
 
-          {/* Filters */}
-          <Card className="mb-4">
-            <div className="px-5 py-3 flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
-                <select
-                  value={filterDist}
-                  onChange={e => setFilterDist(Number(e.target.value))}
-                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                >
-                  {[5, 8, 10, 15, 20, 30, 0].map(v => (
-                    <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Estado</label>
-                <select
-                  value={filterState}
-                  onChange={e => setFilterState(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                >
-                  <option value="all">Todos</option>
-                  <option value="inactive">Inactivos</option>
-                  <option value="vacation">Férias</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Marcação</label>
-                <select
-                  value={filterMark}
-                  onChange={e => setFilterMark(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                >
-                  <option value="excl_ignorar">Excluir Ignorados</option>
-                  <option value="all">Todos</option>
-                  <option value="novo">Apenas Novos</option>
-                  <option value="alvo">Apenas Alvos</option>
-                  <option value="visto">Apenas Vistos</option>
-                </select>
-              </div>
-              <input
-                type="text"
-                placeholder="Pesquisar jogador…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-1 min-w-[160px]"
-              />
-              <button
-                onClick={handleExportCsv}
-                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                <i className="fa-solid fa-download" /> CSV
+          {/* Sub-tabs */}
+          <div className="flex gap-1 mb-4 bg-white border border-slate-200 rounded-xl p-1 shadow-sm w-fit">
+            {TABS.map(t => (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  tab === t.key ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                }`}>
+                <i className={`fa-solid ${t.icon} text-xs`} />{t.label}
               </button>
-            </div>
-          </Card>
+            ))}
+          </div>
 
-          {/* Table */}
-          {loading ? (
-            <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>
-          ) : error ? (
-            <Card className="p-8 text-center">
-              <p className="text-slate-500 text-sm mb-3">{error}</p>
-              <button onClick={handleForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">
-                Forçar primeiro scan
-              </button>
-            </Card>
-          ) : players.length === 0 ? (
-            <Card className="p-8 text-center text-slate-400 text-sm">Nenhum jogador encontrado com os filtros actuais.</Card>
-          ) : (
-            <Card>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                      <SortTh colKey="player" align="text-left" >Jogador</SortTh>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Aliança</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Estado</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Ilha</th>
-                      <SortTh colKey="distance">Dist.</SortTh>
-                      <SortTh colKey="army">Score Militar</SortTh>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Marcação</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {players.map((p, idx) => (
-                      <tr
-                        key={`${p.playerId}-${p.islandX}-${p.islandY}`}
-                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
-                          marks[p.playerId] === 'ignorar' ? 'opacity-40' : ''
-                        } ${idx % 2 ? 'bg-slate-50/40' : ''}`}
-                      >
-                        <Td className="font-medium text-slate-800">{p.playerName}</Td>
-                        <Td className="text-center">
-                          {p.allyTag
-                            ? <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-mono">{p.allyTag}</span>
-                            : <span className="text-slate-300">—</span>}
-                        </Td>
-                        <Td className="text-center"><StatePill state={p.state} /></Td>
-                        <Td className="text-center">
-                          <span className="text-slate-700 font-medium">{p.islandName}</span>
-                          <span className="text-slate-400 text-xs ml-1">({p.islandX},{p.islandY})</span>
-                          <br />
-                          <span className="text-slate-400 text-xs">{p.cityName}</span>
-                        </Td>
-                        <Td className="text-center">
-                          <span className="font-mono text-slate-700 text-sm font-semibold">{p.distance}</span>
-                          <br />
-                          <span className="text-slate-400 text-xs">{p.nearestOwnCity}</span>
-                        </Td>
-                        <Td className="text-center font-mono text-slate-700">
-                          {fmtScore(p.scores?.army)}
-                        </Td>
-                        <Td className="text-center">
-                          <MarkSelect
-                            playerId={p.playerId}
-                            current={marks[p.playerId] || 'novo'}
-                            onChange={handleMark}
-                          />
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
-                {players.length} jogador{players.length !== 1 ? 'es' : ''} · ordenado por {sortKey === 'distance' ? 'distância' : sortKey === 'army' ? 'score militar' : 'nome'}
-              </div>
-            </Card>
+          {tab === 'inactivos' && (
+            <InactivosTab
+              scanData={scanData} scanStatus={scanStatus}
+              loading={loading} error={error}
+              marks={marks} setMarks={setMarks}
+              onForceRefresh={handleForceRefresh}
+            />
+          )}
+          {tab === 'ilhas' && (
+            <IlhasTab
+              scanData={scanData} loading={loading} error={error}
+              onForceRefresh={handleForceRefresh}
+            />
           )}
         </div>
       );

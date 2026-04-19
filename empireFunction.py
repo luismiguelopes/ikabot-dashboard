@@ -131,6 +131,7 @@ def _collect_world_scan(session):
 
         # Phase 3: Deep scan — one getIsland request per filtered island
         inactive_players = []
+        islands_summary = []
         for i, island in enumerate(islands_to_scan):
             pause = random.randint(15, 30)
             print(f"      -> Pausa {pause}s | Ilha {i+1}/{len(islands_to_scan)} ({island['x']},{island['y']})...")
@@ -144,8 +145,29 @@ def _collect_world_scan(session):
                     key=lambda c: _dist(island["x"], island["y"], c["x"], c["y"]))
                 nearest_dist = _dist(island["x"], island["y"], nearest["x"], nearest["y"])
 
+                # ── Island summary (for colonisation tab) ──────────────────
+                cities_list = island_data.get("cities", [])
+                free_slots = sum(1 for c in cities_list if c.get("type") == "empty")
+                islands_summary.append({
+                    "islandId":       str(island["id"]),
+                    "islandName":     island_data.get("name", island.get("name", "")),
+                    "x":              island["x"],
+                    "y":              island["y"],
+                    "resourceType":   int(island["resource_type"]) if island.get("resource_type") else 0,
+                    "woodLevel":      island_data.get("resourceLevel", ""),
+                    "luxuryLevel":    island_data.get("tradegoodLevel", ""),
+                    "wonder":         island_data.get("wonderName", ""),
+                    "wonderLevel":    island_data.get("wonderLevel", ""),
+                    "freeSlots":      free_slots,
+                    "totalSlots":     len(cities_list),
+                    "hasOwnCity":     bool(island_data.get("isOwnCityOnIsland", False)),
+                    "nearestOwnCity": nearest["name"],
+                    "distance":       round(nearest_dist, 1),
+                })
+
+                # ── Inactive / vacation players ────────────────────────────
                 avatar_scores = island_data.get("avatarScores", {})
-                for city_slot in island_data.get("cities", []):
+                for city_slot in cities_list:
                     if city_slot.get("type") == "empty":
                         continue
                     state = city_slot.get("state", "")
@@ -184,13 +206,21 @@ def _collect_world_scan(session):
                 print(f"      -> Erro na ilha {island['id']}: {e}")
                 continue
 
+        # Backup previous scan before overwriting (used for new-inactive detection)
+        scan_path = os.path.join(LOGS_DIR, "world_scan.json")
+        if os.path.exists(scan_path):
+            with open(scan_path, "rb") as src:
+                with open(os.path.join(LOGS_DIR, "world_scan_prev.json"), "wb") as dst:
+                    dst.write(src.read())
+
         result = {
             "lastUpdated": int(time.time()),
             "scanRadius":  WORLD_SCAN_RADIUS,
             "ownCities":   own_cities,
             "players":     inactive_players,
+            "islands":     islands_summary,
         }
-        with open(os.path.join(LOGS_DIR, "world_scan.json"), "w") as f:
+        with open(scan_path, "w") as f:
             json.dump(result, f, indent=2)
 
         _write_scan_status("idle", "done", len(islands_to_scan), len(islands_to_scan),

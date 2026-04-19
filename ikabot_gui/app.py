@@ -14,6 +14,7 @@ HISTORY_JSONL_PATH      = os.path.join(LOGS_DIR, "history.jsonl")
 BUILDING_COSTS_JSON_PATH = os.path.join(LOGS_DIR, "building_costs.json")
 FORCE_COSTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_costs_update")
 WORLD_SCAN_JSON_PATH    = os.path.join(LOGS_DIR, "world_scan.json")
+WORLD_SCAN_PREV_PATH    = os.path.join(LOGS_DIR, "world_scan_prev.json")
 WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
 PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
@@ -121,10 +122,17 @@ def api_world_scan():
     if os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
+    # Build set of player IDs that were already inactive in the previous scan
+    prev_inactive_ids = set()
+    if os.path.exists(WORLD_SCAN_PREV_PATH):
+        with open(WORLD_SCAN_PREV_PATH) as f:
+            prev = json.load(f)
+        prev_inactive_ids = {p["playerId"] for p in prev.get("players", [])}
     for player in scan.get("players", []):
         pid = player["playerId"]
         player["mark"] = marks.get(pid, {}).get("status", "novo")
         player["markNote"] = marks.get(pid, {}).get("note", "")
+        player["isNew"] = pid not in prev_inactive_ids
     return jsonify(scan)
 
 
