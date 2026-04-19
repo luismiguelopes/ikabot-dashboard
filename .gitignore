@@ -4,5 +4,8 @@
 # ikabot folder
 ikabot/
 
+# Claude Code instructions (local only)
+CLAUDE.md
+
 # macOS
 .DS_Store
