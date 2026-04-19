@@ -637,14 +637,20 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 json.dump(own_cities_list, f)
 
             # ── Building costs (background, every 3 days) ────────────────────
-            if not _costs_running.is_set() and _should_update_building_costs():
+            # Don't start if world scan is running — never share the session across 3 threads
+            if (not _costs_running.is_set()
+                    and not _world_scan_running.is_set()
+                    and _should_update_building_costs()):
                 _costs_running.set()
                 threading.Thread(
                     target=_collect_building_costs, args=(session, ids), daemon=True
                 ).start()
 
             # ── World scan (background, every 7 days) ────────────────────────
-            if not _world_scan_running.is_set() and _should_update_world_scan():
+            # Don't start if building costs is running — never share the session across 3 threads
+            elif (not _world_scan_running.is_set()
+                    and not _costs_running.is_set()
+                    and _should_update_world_scan()):
                 _world_scan_running.set()
                 threading.Thread(
                     target=_collect_world_scan, args=(session,), daemon=True
