@@ -49,6 +49,12 @@ def load_all_data():
     with open(RESOURCES_JSON_PATH) as f:
         resources_data = json.load(f)
 
+    elapsed = int(time.time() - get_last_modified_ts(RESOURCES_JSON_PATH))
+    for city_data in resources_data.values():
+        t = city_data.get('wineRunsOutIn')
+        if t is not None and t != -1:
+            city_data['wineRunsOutIn'] = max(0, t - elapsed)
+
     return {
         "empireData":    empire_data,
         "statusSummary": status_summary,
