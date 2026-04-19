@@ -24,6 +24,7 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
    - `movements.json` — active fleet and army movements
 4. Appends a timestamped snapshot to `history.jsonl` (capped at ~90 days).
 5. Triggers a background thread every 3 days to collect building upgrade costs for all non-maxed buildings, writing `building_costs.json`.
+6. Triggers a background thread every 7 days to scan nearby islands for inactive or vacation players, writing `world_scan.json`.
 
 All HTTP requests to the game server use randomised delays to simulate human behaviour (anti-detection).
 
@@ -59,6 +60,7 @@ docker compose up -d
 | `IKABOT_EMAIL` | — | Your Ikariam account email |
 | `IKABOT_PASSWORD` | — | Your Ikariam account password |
 | `EMPIRE_UPDATE_INTERVAL` | `3600` | Seconds between data collection cycles |
+| `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the weekly world scan |
 
 ## API Endpoints
 
@@ -69,6 +71,10 @@ docker compose up -d
 | `/api/history` | GET | Last 7 days of hourly empire snapshots |
 | `/api/building-costs` | GET | Upgrade costs per building per level per city |
 | `/api/building-costs/refresh` | POST | Schedules an early building costs refresh |
+| `/api/world-scan` | GET | Inactive/vacation players near own cities, with marks merged |
+| `/api/world-scan/status` | GET | Current scan progress |
+| `/api/world-scan/refresh` | POST | Schedules an early world scan |
+| `/api/world-scan/mark` | POST | Save a player mark (`novo`/`visto`/`alvo`/`ignorar`) |
 
 ## Dashboard Tabs
 
@@ -80,7 +86,8 @@ docker compose up -d
 | Movimentos | Active fleet and army movements |
 | Alertas | Configurable alerts (wine, storage, etc.) |
 | Histórico | Charts of empire stats over the last 7 days |
-| Calculadoras | **Building upgrade time estimator** and **island vs city ROI comparator** |
+| Calculadoras | Building upgrade time estimator and island vs city ROI comparator |
+| Mundo | Inactive and vacation players near own cities — sortable, filterable, with per-player marks |
 
 ## Project Structure
 

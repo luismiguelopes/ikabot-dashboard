@@ -13,6 +13,10 @@ MOVEMENTS_JSON_PATH     = os.path.join(LOGS_DIR, "movements.json")
 HISTORY_JSONL_PATH      = os.path.join(LOGS_DIR, "history.jsonl")
 BUILDING_COSTS_JSON_PATH = os.path.join(LOGS_DIR, "building_costs.json")
 FORCE_COSTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_costs_update")
+WORLD_SCAN_JSON_PATH    = os.path.join(LOGS_DIR, "world_scan.json")
+WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
+PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
+FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
 
 
 def get_last_modified_date(filepath):
@@ -105,6 +109,57 @@ def api_building_costs_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)
     open(FORCE_COSTS_FLAG_PATH, "w").close()
     return jsonify({"ok": True, "message": "Extração forçada agendada para o próximo ciclo do bot."})
+
+
+@app.route("/api/world-scan")
+def api_world_scan():
+    if not os.path.exists(WORLD_SCAN_JSON_PATH):
+        return jsonify({"error": "world_scan.json não encontrado. Aguarda o primeiro scan semanal ou força um."}), 404
+    with open(WORLD_SCAN_JSON_PATH) as f:
+        scan = json.load(f)
+    marks = {}
+    if os.path.exists(PLAYER_MARKS_JSON_PATH):
+        with open(PLAYER_MARKS_JSON_PATH) as f:
+            marks = json.load(f)
+    for player in scan.get("players", []):
+        pid = player["playerId"]
+        player["mark"] = marks.get(pid, {}).get("status", "novo")
+        player["markNote"] = marks.get(pid, {}).get("note", "")
+    return jsonify(scan)
+
+
+@app.route("/api/world-scan/status")
+def api_world_scan_status():
+    if not os.path.exists(WORLD_SCAN_STATUS_PATH):
+        return jsonify({"status": "idle", "phase": "", "progress": 0, "total": 0, "message": ""})
+    with open(WORLD_SCAN_STATUS_PATH) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/world-scan/refresh", methods=["POST"])
+def api_world_scan_refresh():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_WORLD_SCAN_FLAG, "w").close()
+    return jsonify({"ok": True, "message": "Scan forçado agendado para o próximo ciclo do bot."})
+
+
+@app.route("/api/world-scan/mark", methods=["POST"])
+def api_world_scan_mark():
+    body = request.get_json(force=True)
+    player_id = str(body.get("playerId", ""))
+    status = body.get("status", "novo")
+    note = body.get("note", "")
+    if status not in ("novo", "visto", "alvo", "ignorar"):
+        return jsonify({"error": "Status inválido"}), 400
+    marks = {}
+    if os.path.exists(PLAYER_MARKS_JSON_PATH):
+        with open(PLAYER_MARKS_JSON_PATH) as f:
+            marks = json.load(f)
+    marks[player_id] = {"status": status, "note": note, "updatedAt": int(time.time())}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(PLAYER_MARKS_JSON_PATH, "w") as f:
+        json.dump(marks, f, indent=2)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

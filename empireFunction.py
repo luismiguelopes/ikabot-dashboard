@@ -10,7 +10,7 @@ import threading
 from decimal import *
 
 from ikabot.config import *
-from ikabot.helpers.getJson import getCity
+from ikabot.helpers.getJson import getCity, getIsland
 from ikabot.helpers.gui import *
 from ikabot.helpers.market import getGold
 from ikabot.helpers.naval import *
@@ -28,8 +28,11 @@ UPDATE_INTERVAL = int(os.getenv("EMPIRE_UPDATE_INTERVAL", 3600))
 MAX_HISTORY_LINES = 2160
 # Building costs are re-fetched every 3 days (costs rarely change)
 BUILDING_COSTS_UPDATE_INTERVAL = 3 * 24 * 3600
+WORLD_SCAN_UPDATE_INTERVAL = 7 * 24 * 3600
+WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 
 _costs_running = threading.Event()
+_world_scan_running = threading.Event()
 
 
 def _should_update_building_costs():
@@ -41,6 +44,165 @@ def _should_update_building_costs():
     if not os.path.exists(costs_path):
         return True
     return time.time() - os.path.getmtime(costs_path) > BUILDING_COSTS_UPDATE_INTERVAL
+
+
+def _should_update_world_scan():
+    flag = os.path.join(LOGS_DIR, ".force_world_scan")
+    if os.path.exists(flag):
+        os.remove(flag)
+        return True
+    scan_path = os.path.join(LOGS_DIR, "world_scan.json")
+    if not os.path.exists(scan_path):
+        return True
+    return time.time() - os.path.getmtime(scan_path) > WORLD_SCAN_UPDATE_INTERVAL
+
+
+def _write_scan_status(status, phase, progress, total, message):
+    path = os.path.join(LOGS_DIR, "world_scan_status.json")
+    with open(path, "w") as f:
+        json.dump({
+            "status": status,
+            "phase": phase,
+            "progress": progress,
+            "total": total,
+            "message": message,
+            "updatedAt": int(time.time()),
+        }, f)
+
+
+def _dist(x1, y1, x2, y2):
+    return ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
+
+
+def _collect_world_scan(session):
+    """Background thread: scan nearby islands for inactive/vacation players weekly."""
+    try:
+        own_cities_path = os.path.join(LOGS_DIR, "own_cities.json")
+        if not os.path.exists(own_cities_path):
+            print("[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...")
+            return
+        with open(own_cities_path) as f:
+            own_cities = json.load(f)
+        if not own_cities:
+            return
+
+        print(f"[{time.strftime('%H:%M:%S')}] World scan iniciado (raio={WORLD_SCAN_RADIUS})...")
+        _write_scan_status("running", "shallow_scan", 0, 4, "A escanear mapa...")
+
+        # Phase 1: Shallow scan — 4 API calls covering the full 100x100 map
+        shallow_islands = []
+        quadrants = [
+            ("0", "50", "0", "50"),
+            ("50", "100", "0", "50"),
+            ("0", "50", "50", "100"),
+            ("50", "100", "50", "100"),
+        ]
+        for i, (x_min, x_max, y_min, y_max) in enumerate(quadrants):
+            _write_scan_status("running", "shallow_scan", i + 1, 4,
+                f"Mapa ({x_min}-{x_max},{y_min}-{y_max})...")
+            data = session.post(
+                f"action=WorldMap&function=getJSONArea&x_min={x_min}&x_max={x_max}&y_min={y_min}&y_max={y_max}"
+            )
+            for x, val in json.loads(data)["data"].items():
+                for y, val2 in val.items():
+                    shallow_islands.append({
+                        "x": int(x), "y": int(y),
+                        "id": val2[0], "name": val2[1],
+                        "resource_type": val2[2],
+                        "players": int(val2[7]),
+                    })
+            time.sleep(random.randint(2, 5))
+
+        # Phase 2: Keep only non-empty islands within WORLD_SCAN_RADIUS of any own city
+        seen_ids = set()
+        islands_to_scan = []
+        for island in shallow_islands:
+            if not island["players"] or island["id"] in seen_ids:
+                continue
+            for city in own_cities:
+                if _dist(island["x"], island["y"], city["x"], city["y"]) <= WORLD_SCAN_RADIUS:
+                    seen_ids.add(island["id"])
+                    islands_to_scan.append(island)
+                    break
+
+        print(f"[world_scan] {len(islands_to_scan)} ilhas a escanear no raio {WORLD_SCAN_RADIUS}...")
+        _write_scan_status("running", "deep_scan", 0, len(islands_to_scan),
+            f"A escanear {len(islands_to_scan)} ilhas...")
+
+        # Phase 3: Deep scan — one getIsland request per filtered island
+        inactive_players = []
+        for i, island in enumerate(islands_to_scan):
+            pause = random.randint(15, 30)
+            print(f"      -> Pausa {pause}s | Ilha {i+1}/{len(islands_to_scan)} ({island['x']},{island['y']})...")
+            time.sleep(pause)
+
+            try:
+                html = session.get("view=island&islandId=" + str(island["id"]))
+                island_data = getIsland(html)
+
+                nearest = min(own_cities,
+                    key=lambda c: _dist(island["x"], island["y"], c["x"], c["y"]))
+                nearest_dist = _dist(island["x"], island["y"], nearest["x"], nearest["y"])
+
+                avatar_scores = island_data.get("avatarScores", {})
+                for city_slot in island_data.get("cities", []):
+                    if city_slot.get("type") == "empty":
+                        continue
+                    state = city_slot.get("state", "")
+                    if state not in ("inactive", "vacation"):
+                        continue
+                    owner_name = city_slot.get("ownerName", "")
+                    if not owner_name:
+                        continue
+
+                    owner_id = str(city_slot.get("ownerId", city_slot.get("Id", "")))
+                    scores_raw = avatar_scores.get(owner_id, {})
+                    inactive_players.append({
+                        "playerId":       owner_id,
+                        "playerName":     owner_name,
+                        "allyTag":        city_slot.get("ownerAllyTag", city_slot.get("AllyTag", "")),
+                        "state":          state,
+                        "cityName":       city_slot.get("name", ""),
+                        "islandName":     island_data.get("name", island.get("name", "")),
+                        "islandX":        island["x"],
+                        "islandY":        island["y"],
+                        "nearestOwnCity": nearest["name"],
+                        "distance":       round(nearest_dist, 1),
+                        "scores": {
+                            "building": scores_raw.get("building_score_main", "0"),
+                            "research": scores_raw.get("research_score_main", "0"),
+                            "army":     scores_raw.get("army_score_main", "0"),
+                            "trader":   scores_raw.get("trader_score_secondary", "0"),
+                            "rank":     scores_raw.get("place", ""),
+                        },
+                    })
+
+                _write_scan_status("running", "deep_scan", i + 1, len(islands_to_scan),
+                    f"Ilha {i+1}/{len(islands_to_scan)} ({island['x']},{island['y']}) processada")
+
+            except Exception as e:
+                print(f"      -> Erro na ilha {island['id']}: {e}")
+                continue
+
+        result = {
+            "lastUpdated": int(time.time()),
+            "scanRadius":  WORLD_SCAN_RADIUS,
+            "ownCities":   own_cities,
+            "players":     inactive_players,
+        }
+        with open(os.path.join(LOGS_DIR, "world_scan.json"), "w") as f:
+            json.dump(result, f, indent=2)
+
+        _write_scan_status("idle", "done", len(islands_to_scan), len(islands_to_scan),
+            f"Concluído: {len(inactive_players)} inactivos/férias encontrados")
+        print(f"[world_scan] Concluído: {len(inactive_players)} inactivos/férias encontrados.")
+
+    except Exception:
+        import traceback
+        print("Erro no world scan:", traceback.format_exc())
+        _write_scan_status("error", "error", 0, 0, "Erro durante o scan")
+    finally:
+        _world_scan_running.clear()
 
 
 def _get_costs_reduction(session, city_id):
@@ -315,6 +477,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             empire_data = {}
             resources_data = {}
             building_names = set()
+            own_cities_list = []
 
             for id in ids:
                 time.sleep(random.randint(5, 15))
@@ -361,6 +524,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 )
 
                 city_name = city_data.get("cityName", city_data.get("name", "Unknown"))
+                island_x = int(city_data.get("islandXCoord", city_data.get("x", 0)) or 0)
+                island_y = int(city_data.get("islandYCoord", city_data.get("y", 0)) or 0)
+                own_cities_list.append({"name": city_name, "x": island_x, "y": island_y})
                 print(f"      -> Sucesso: Cidade {city_name} extraída.")
 
                 # ── Resources + extra city data ──────────────────────────────
@@ -436,11 +602,22 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 for bn in building_names:
                     formatted_empire[city_name][bn] = buildings.get(bn, "")
 
+            # ── Own cities coords (for world scan proximity filter) ──────────
+            with open(os.path.join(LOGS_DIR, "own_cities.json"), "w") as f:
+                json.dump(own_cities_list, f)
+
             # ── Building costs (background, every 3 days) ────────────────────
             if not _costs_running.is_set() and _should_update_building_costs():
                 _costs_running.set()
                 threading.Thread(
                     target=_collect_building_costs, args=(session, ids), daemon=True
+                ).start()
+
+            # ── World scan (background, every 7 days) ────────────────────────
+            if not _world_scan_running.is_set() and _should_update_world_scan():
+                _world_scan_running.set()
+                threading.Thread(
+                    target=_collect_world_scan, args=(session,), daemon=True
                 ).start()
 
             # ── Ship movements ───────────────────────────────────────────────

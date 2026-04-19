@@ -113,6 +113,7 @@
             <NavItem icon="fa-triangle-exclamation" label="Alertas" active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
             <NavItem icon="fa-chart-line"   label="Histórico"    active={active === 'history'}    onClick={() => setActive('history')}    />
             <NavItem icon="fa-calculator"   label="Calculadoras" active={active === 'calc'}        onClick={() => setActive('calc')}       />
+            <NavItem icon="fa-earth-europe" label="Mundo"        active={active === 'mundo'}       onClick={() => setActive('mundo')}      />
           </nav>
 
           <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
@@ -1350,6 +1351,367 @@
       );
     }
 
+    // ─── MundoPage ───────────────────────────────────────────────────────────────
+
+    const MARK_CONFIG = {
+      novo:    { label: 'Novo',    bg: 'bg-blue-100',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
+      alvo:    { label: 'Alvo',    bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
+      visto:   { label: 'Visto',   bg: 'bg-slate-100',  text: 'text-slate-500',  ring: 'ring-slate-300'  },
+      ignorar: { label: 'Ignorar', bg: 'bg-slate-50',   text: 'text-slate-400',  ring: 'ring-slate-200'  },
+    };
+
+    function MarkBadge({ status }) {
+      const cfg = MARK_CONFIG[status] || MARK_CONFIG.novo;
+      return (
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}>
+          {cfg.label}
+        </span>
+      );
+    }
+
+    function MarkSelect({ playerId, current, onChange }) {
+      return (
+        <select
+          value={current}
+          onChange={e => onChange(playerId, e.target.value)}
+          className={`text-xs rounded-full px-2 py-0.5 border font-medium cursor-pointer focus:outline-none
+            ${MARK_CONFIG[current]?.bg || ''} ${MARK_CONFIG[current]?.text || ''} border-transparent`}
+        >
+          {Object.entries(MARK_CONFIG).map(([k, v]) => (
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+      );
+    }
+
+    function parseScore(s) {
+      if (!s) return 0;
+      return parseInt(String(s).replace(/[,.\s\u00a0]/g, ''), 10) || 0;
+    }
+
+    function fmtScore(s) {
+      const n = parseScore(s);
+      if (!n) return '—';
+      return n.toLocaleString('pt-PT');
+    }
+
+    function StatePill({ state }) {
+      if (state === 'inactive') return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" /> Inactivo
+        </span>
+      );
+      if (state === 'vacation') return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" /> Férias
+        </span>
+      );
+      return <span className="text-slate-400 text-xs">{state}</span>;
+    }
+
+    function MundoPage() {
+      const [scanData, setScanData]     = useState(null);
+      const [scanStatus, setScanStatus] = useState(null);
+      const [loading, setLoading]       = useState(true);
+      const [error, setError]           = useState(null);
+      const [marks, setMarks]           = useState({});
+
+      const [filterDist, setFilterDist]   = useState(20);
+      const [filterState, setFilterState] = useState('all');
+      const [filterMark, setFilterMark]   = useState('excl_ignorar');
+      const [search, setSearch]           = useState('');
+      const [sortKey, setSortKey]         = useState('distance');
+      const [sortAsc, setSortAsc]         = useState(true);
+
+      const fetchScan = useCallback(() => {
+        fetch('/api/world-scan')
+          .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.error)))
+          .then(d => {
+            setScanData(d);
+            const m = {};
+            (d.players || []).forEach(p => { m[p.playerId] = p.mark || 'novo'; });
+            setMarks(m);
+            setLoading(false);
+          })
+          .catch(e => { setError(typeof e === 'string' ? e : 'Erro ao carregar dados do scan'); setLoading(false); });
+      }, []);
+
+      const fetchStatus = useCallback(() => {
+        fetch('/api/world-scan/status').then(r => r.json()).then(setScanStatus).catch(() => {});
+      }, []);
+
+      useEffect(() => { fetchScan(); fetchStatus(); }, []);
+
+      // Poll status when scan is running
+      useEffect(() => {
+        if (scanStatus?.status !== 'running') return;
+        const t = setInterval(() => {
+          fetchStatus();
+          if (scanStatus?.status !== 'running') fetchScan();
+        }, 5000);
+        return () => clearInterval(t);
+      }, [scanStatus?.status]);
+
+      const handleMark = useCallback((playerId, status) => {
+        setMarks(prev => ({ ...prev, [playerId]: status }));
+        fetch('/api/world-scan/mark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId, status }),
+        }).catch(() => {});
+      }, []);
+
+      const handleForceRefresh = () => {
+        fetch('/api/world-scan/refresh', { method: 'POST' })
+          .then(() => alert('Scan forçado agendado. Será executado no próximo ciclo do bot (~5-15 min).'));
+      };
+
+      const players = useMemo(() => {
+        if (!scanData?.players) return [];
+        let list = scanData.players.map(p => ({ ...p, mark: marks[p.playerId] || p.mark || 'novo' }));
+
+        if (filterState !== 'all')
+          list = list.filter(p => p.state === filterState);
+        if (filterMark === 'excl_ignorar')
+          list = list.filter(p => p.mark !== 'ignorar');
+        else if (filterMark !== 'all')
+          list = list.filter(p => p.mark === filterMark);
+        if (filterDist > 0)
+          list = list.filter(p => p.distance <= filterDist);
+        if (search.trim())
+          list = list.filter(p => p.playerName.toLowerCase().includes(search.toLowerCase()));
+
+        list.sort((a, b) => {
+          let va, vb;
+          if (sortKey === 'distance')    { va = a.distance; vb = b.distance; }
+          else if (sortKey === 'army')   { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army); }
+          else if (sortKey === 'player') { va = a.playerName.toLowerCase(); vb = b.playerName.toLowerCase(); }
+          else                           { va = a[sortKey]; vb = b[sortKey]; }
+          if (va < vb) return sortAsc ? -1 : 1;
+          if (va > vb) return sortAsc ? 1 : -1;
+          return 0;
+        });
+        return list;
+      }, [scanData, marks, filterState, filterMark, filterDist, search, sortKey, sortAsc]);
+
+      const handleSort = (key) => {
+        if (sortKey === key) setSortAsc(a => !a);
+        else { setSortKey(key); setSortAsc(true); }
+      };
+
+      const SortTh = ({ colKey, children, align = 'text-center' }) => (
+        <th
+          className={`px-3 py-3 font-semibold ${align} whitespace-nowrap cursor-pointer select-none hover:bg-slate-700 transition-colors`}
+          onClick={() => handleSort(colKey)}
+        >
+          {children}
+          {sortKey === colKey && <span className="ml-1 opacity-70">{sortAsc ? '↑' : '↓'}</span>}
+        </th>
+      );
+
+      const handleExportCsv = () => {
+        const header = ['Jogador', 'Aliança', 'Estado', 'Ilha', 'Coord', 'Cidade próxima', 'Dist.', 'Score Militar', 'Marcação'];
+        const rows = [header, ...players.map(p => [
+          p.playerName, p.allyTag || '—', p.state,
+          p.islandName, `(${p.islandX},${p.islandY})`,
+          p.nearestOwnCity, p.distance,
+          fmtScore(p.scores?.army), marks[p.playerId] || 'novo',
+        ])];
+        exportCsv(`inactivos_${new Date().toISOString().slice(0,10)}.csv`, rows);
+      };
+
+      const isRunning = scanStatus?.status === 'running';
+      const lastUpdated = scanData?.lastUpdated
+        ? new Date(scanData.lastUpdated * 1000).toLocaleString('pt-PT')
+        : null;
+      const nextScan = scanData?.lastUpdated
+        ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString('pt-PT')
+        : null;
+
+      return (
+        <div>
+          <PageHeader icon="fa-earth-europe" title="Mundo — Inactivos Próximos" />
+
+          {/* Status card */}
+          <Card className="mb-4">
+            <div className="px-5 py-4 flex flex-wrap items-center gap-4">
+              <div className="flex-1 min-w-0 space-y-1">
+                {lastUpdated ? (
+                  <p className="text-sm text-slate-600">
+                    <i className="fa-regular fa-clock mr-1.5 text-slate-400" />
+                    Último scan: <span className="font-medium text-slate-800">{lastUpdated}</span>
+                    {nextScan && <span className="ml-3 text-slate-400 text-xs">próximo: {nextScan}</span>}
+                  </p>
+                ) : (
+                  <p className="text-sm text-slate-500">Nenhum scan realizado ainda.</p>
+                )}
+                {scanData && (
+                  <p className="text-xs text-slate-400">
+                    Raio: {scanData.scanRadius} · Inactivos encontrados: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
+                  </p>
+                )}
+                {isRunning && (
+                  <div className="mt-2">
+                    <p className="text-xs text-indigo-600 mb-1 flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full border-2 border-indigo-300 border-t-indigo-600 animate-spin inline-block" />
+                      {scanStatus.message}
+                    </p>
+                    {scanStatus.total > 0 && (
+                      <div className="w-full max-w-xs h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 rounded-full transition-all"
+                          style={{ width: `${Math.round((scanStatus.progress / scanStatus.total) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={handleForceRefresh}
+                disabled={isRunning}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                <i className="fa-solid fa-rotate" />
+                {isRunning ? 'A escanear…' : 'Forçar Scan'}
+              </button>
+            </div>
+          </Card>
+
+          {/* Filters */}
+          <Card className="mb-4">
+            <div className="px-5 py-3 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
+                <select
+                  value={filterDist}
+                  onChange={e => setFilterDist(Number(e.target.value))}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  {[5, 8, 10, 15, 20, 30, 0].map(v => (
+                    <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">Estado</label>
+                <select
+                  value={filterState}
+                  onChange={e => setFilterState(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="all">Todos</option>
+                  <option value="inactive">Inactivos</option>
+                  <option value="vacation">Férias</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-500">Marcação</label>
+                <select
+                  value={filterMark}
+                  onChange={e => setFilterMark(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  <option value="excl_ignorar">Excluir Ignorados</option>
+                  <option value="all">Todos</option>
+                  <option value="novo">Apenas Novos</option>
+                  <option value="alvo">Apenas Alvos</option>
+                  <option value="visto">Apenas Vistos</option>
+                </select>
+              </div>
+              <input
+                type="text"
+                placeholder="Pesquisar jogador…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-1 min-w-[160px]"
+              />
+              <button
+                onClick={handleExportCsv}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <i className="fa-solid fa-download" /> CSV
+              </button>
+            </div>
+          </Card>
+
+          {/* Table */}
+          {loading ? (
+            <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>
+          ) : error ? (
+            <Card className="p-8 text-center">
+              <p className="text-slate-500 text-sm mb-3">{error}</p>
+              <button onClick={handleForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">
+                Forçar primeiro scan
+              </button>
+            </Card>
+          ) : players.length === 0 ? (
+            <Card className="p-8 text-center text-slate-400 text-sm">Nenhum jogador encontrado com os filtros actuais.</Card>
+          ) : (
+            <Card>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                      <SortTh colKey="player" align="text-left" >Jogador</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Aliança</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Estado</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Ilha</th>
+                      <SortTh colKey="distance">Dist.</SortTh>
+                      <SortTh colKey="army">Score Militar</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Marcação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {players.map((p, idx) => (
+                      <tr
+                        key={`${p.playerId}-${p.islandX}-${p.islandY}`}
+                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                          marks[p.playerId] === 'ignorar' ? 'opacity-40' : ''
+                        } ${idx % 2 ? 'bg-slate-50/40' : ''}`}
+                      >
+                        <Td className="font-medium text-slate-800">{p.playerName}</Td>
+                        <Td className="text-center">
+                          {p.allyTag
+                            ? <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-mono">{p.allyTag}</span>
+                            : <span className="text-slate-300">—</span>}
+                        </Td>
+                        <Td className="text-center"><StatePill state={p.state} /></Td>
+                        <Td className="text-center">
+                          <span className="text-slate-700 font-medium">{p.islandName}</span>
+                          <span className="text-slate-400 text-xs ml-1">({p.islandX},{p.islandY})</span>
+                          <br />
+                          <span className="text-slate-400 text-xs">{p.cityName}</span>
+                        </Td>
+                        <Td className="text-center">
+                          <span className="font-mono text-slate-700 text-sm font-semibold">{p.distance}</span>
+                          <br />
+                          <span className="text-slate-400 text-xs">{p.nearestOwnCity}</span>
+                        </Td>
+                        <Td className="text-center font-mono text-slate-700">
+                          {fmtScore(p.scores?.army)}
+                        </Td>
+                        <Td className="text-center">
+                          <MarkSelect
+                            playerId={p.playerId}
+                            current={marks[p.playerId] || 'novo'}
+                            onChange={handleMark}
+                          />
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
+                {players.length} jogador{players.length !== 1 ? 'es' : ''} · ordenado por {sortKey === 'distance' ? 'distância' : sortKey === 'army' ? 'score militar' : 'nome'}
+              </div>
+            </Card>
+          )}
+        </div>
+      );
+    }
+
     // ─── Loading / Error screens ─────────────────────────────────────────────────
 
     function LoadingScreen() {
@@ -1451,6 +1813,7 @@
             {page === 'alerts'    && <AlertsPage    data={data} />}
             {page === 'history'   && <HistoryPage />}
             {page === 'calc'      && <CalculadorasPage data={data} />}
+            {page === 'mundo'     && <MundoPage />}
           </main>
         </div>
       );
