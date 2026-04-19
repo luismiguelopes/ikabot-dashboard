@@ -6,7 +6,6 @@ import os
 import random
 import re
 import json
-import threading
 from decimal import *
 
 from ikabot.config import *
@@ -31,8 +30,6 @@ BUILDING_COSTS_UPDATE_INTERVAL = 3 * 24 * 3600
 WORLD_SCAN_UPDATE_INTERVAL = 7 * 24 * 3600
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 
-_costs_running = threading.Event()
-_world_scan_running = threading.Event()
 
 
 def _should_update_building_costs():
@@ -231,8 +228,6 @@ def _collect_world_scan(session):
         import traceback
         print("Erro no world scan:", traceback.format_exc())
         _write_scan_status("error", "error", 0, 0, "Erro durante o scan")
-    finally:
-        _world_scan_running.clear()
 
 
 def _get_costs_reduction(session, city_id):
@@ -394,8 +389,10 @@ def _collect_building_costs(session, ids):
             json.dump({"lastUpdated": int(time.time()), "cities": all_costs}, f, indent=4)
 
         print(f"[{time.strftime('%H:%M:%S')}] Extração de custos de edificios concluída!")
-    finally:
-        _costs_running.clear()
+
+    except Exception:
+        import traceback
+        print("Erro na extração de custos:", traceback.format_exc())
 
 
 def _collect_movements(session, city_id):
@@ -636,25 +633,13 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             with open(os.path.join(LOGS_DIR, "own_cities.json"), "w") as f:
                 json.dump(own_cities_list, f)
 
-            # ── Building costs (background, every 3 days) ────────────────────
-            # Don't start if world scan is running — never share the session across 3 threads
-            if (not _costs_running.is_set()
-                    and not _world_scan_running.is_set()
-                    and _should_update_building_costs()):
-                _costs_running.set()
-                threading.Thread(
-                    target=_collect_building_costs, args=(session, ids), daemon=True
-                ).start()
+            # ── Building costs (sequential, every 3 days) ────────────────────
+            if _should_update_building_costs():
+                _collect_building_costs(session, ids)
 
-            # ── World scan (background, every 7 days) ────────────────────────
-            # Don't start if building costs is running — never share the session across 3 threads
-            elif (not _world_scan_running.is_set()
-                    and not _costs_running.is_set()
-                    and _should_update_world_scan()):
-                _world_scan_running.set()
-                threading.Thread(
-                    target=_collect_world_scan, args=(session,), daemon=True
-                ).start()
+            # ── World scan (sequential, every 7 days) ────────────────────────
+            elif _should_update_world_scan():
+                _collect_world_scan(session)
 
             # ── Ship movements ───────────────────────────────────────────────
             time.sleep(random.randint(5, 10))
