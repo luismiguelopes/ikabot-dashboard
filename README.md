@@ -61,6 +61,7 @@ docker compose up -d
 | `IKABOT_PASSWORD` | — | Your Ikariam account password |
 | `EMPIRE_UPDATE_INTERVAL` | `3600` | Seconds between data collection cycles |
 | `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the weekly world scan |
+| `LOG_LANG` | `en` | Language for backend log messages (`en` or `pt`) |
 
 ## API Endpoints
 
@@ -78,16 +79,18 @@ docker compose up -d
 
 ## Dashboard Tabs
 
+The dashboard defaults to **English**. A language toggle button in the sidebar footer switches to Portuguese — the preference is saved in browser `localStorage`.
+
 | Tab | Description |
 |---|---|
 | Home | Empire-wide summary (gold, ships, population) |
-| Cidades | Per-city resources, production, and wine timers |
-| Edifícios | Building levels and active constructions per city |
-| Movimentos | Active fleet and army movements |
-| Alertas | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
-| Histórico | Charts of empire stats over the last 7 days |
-| Calculadoras | Building upgrade time estimator and island vs city ROI comparator |
-| Mundo | **Inactivos**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Ilhas**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
+| Cities | Per-city resources, production, and wine timers |
+| Buildings | Building levels and active constructions per city |
+| Movements | Active fleet and army movements |
+| Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
+| History | Charts of empire stats over the last 7 days |
+| Calculators | Building upgrade time estimator and island vs city ROI comparator |
+| World | **Inactive**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure
 

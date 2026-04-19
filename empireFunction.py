@@ -29,7 +29,124 @@ MAX_HISTORY_LINES = 2160
 BUILDING_COSTS_UPDATE_INTERVAL = 3 * 24 * 3600
 WORLD_SCAN_UPDATE_INTERVAL = 7 * 24 * 3600
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
+LOG_LANG = os.getenv("LOG_LANG", "en")
 
+_LM = {
+    "own_cities_missing": {
+        "en": "[world_scan] own_cities.json not found, waiting for next cycle...",
+        "pt": "[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...",
+    },
+    "world_scan_start": {
+        "en": "[{ts}] World scan started (radius={radius})...",
+        "pt": "[{ts}] World scan iniciado (raio={radius})...",
+    },
+    "scan_status_shallow": {
+        "en": "Scanning map...",
+        "pt": "A escanear mapa...",
+    },
+    "scan_status_quadrant": {
+        "en": "Map ({x_min}-{x_max},{y_min}-{y_max})...",
+        "pt": "Mapa ({x_min}-{x_max},{y_min}-{y_max})...",
+    },
+    "scan_islands_count": {
+        "en": "[world_scan] {n} islands to scan within radius {radius}...",
+        "pt": "[world_scan] {n} ilhas a escanear no raio {radius}...",
+    },
+    "scan_status_deep": {
+        "en": "Scanning {n} islands...",
+        "pt": "A escanear {n} ilhas...",
+    },
+    "scan_island_pause": {
+        "en": "      -> Pause {pause}s | Island {i}/{total} ({x},{y})...",
+        "pt": "      -> Pausa {pause}s | Ilha {i}/{total} ({x},{y})...",
+    },
+    "scan_island_done": {
+        "en": "      Island {i}/{total} ({x},{y}) processed",
+        "pt": "      Ilha {i}/{total} ({x},{y}) processada",
+    },
+    "scan_island_error": {
+        "en": "      -> Error on island {id}: {err}",
+        "pt": "      -> Erro na ilha {id}: {err}",
+    },
+    "scan_status_done": {
+        "en": "Done: {n} inactive/vacation players found",
+        "pt": "Concluído: {n} inactivos/férias encontrados",
+    },
+    "scan_done": {
+        "en": "[world_scan] Done: {n} inactive/vacation players found.",
+        "pt": "[world_scan] Concluído: {n} inactivos/férias encontrados.",
+    },
+    "scan_error": {
+        "en": "World scan error:",
+        "pt": "Erro no world scan:",
+    },
+    "scan_status_error": {
+        "en": "Error during scan",
+        "pt": "Erro durante o scan",
+    },
+    "costs_start": {
+        "en": "[{ts}] Starting building cost extraction (human mode)...",
+        "pt": "[{ts}] A iniciar extração de custos de edificios (modo humano)...",
+    },
+    "costs_city_pause": {
+        "en": "      -> Pause {pause}s before next city...",
+        "pt": "      -> Pausa de {pause}s antes de próxima cidade...",
+    },
+    "costs_city_start": {
+        "en": "      -> Costs: {city}...",
+        "pt": "      -> Custos: {city}...",
+    },
+    "costs_city_done": {
+        "en": "      -> Success: {city} — {n} buildings with costs extracted.",
+        "pt": "      -> Sucesso: {city} — {n} edificios com custos extraídos.",
+    },
+    "costs_city_error": {
+        "en": "      -> Error extracting costs for city {id}:",
+        "pt": "      -> Erro ao extrair custos de cidade {id}:",
+    },
+    "costs_done": {
+        "en": "[{ts}] Building cost extraction done!",
+        "pt": "[{ts}] Extração de custos de edificios concluída!",
+    },
+    "costs_error": {
+        "en": "Error in cost extraction:",
+        "pt": "Erro na extração de custos:",
+    },
+    "movements_error": {
+        "en": "      -> Warning: could not collect movements:",
+        "pt": "      -> Aviso: não foi possível recolher movimentos:",
+    },
+    "empire_start_1": {
+        "en": "\n[+] Empire Function started in background!",
+        "pt": "\n[+] Empire Function arrancada em Segundo Plano!",
+    },
+    "empire_start_2": {
+        "en": "[+] Silently collecting empire data every {interval} seconds...\n",
+        "pt": "[+] Extrai dados do império silenciosamente a cada {interval} segundos...\n",
+    },
+    "cycle_start": {
+        "en": "[{ts}] Updating empire JSON files...",
+        "pt": "[{ts}] A atualizar ficheiros JSON do Imperio...",
+    },
+    "city_done": {
+        "en": "      -> Success: City {city} extracted.",
+        "pt": "      -> Sucesso: Cidade {city} extraída.",
+    },
+    "cycle_done": {
+        "en": "[+] Update cycle completed successfully!",
+        "pt": "[+] Ciclo de atualização Terminado com sucesso!",
+    },
+    "cycle_error": {
+        "en": "Error during data extraction:",
+        "pt": "Erro durante extracção de dados:",
+    },
+}
+
+
+def lm(key, **kwargs):
+    """Return log message in current LOG_LANG (fallback to English)."""
+    msg = _LM[key].get(LOG_LANG, _LM[key]["en"])
+    return msg.format(**kwargs) if kwargs else msg
 
 
 def _should_update_building_costs():
@@ -76,15 +193,15 @@ def _collect_world_scan(session):
     try:
         own_cities_path = os.path.join(LOGS_DIR, "own_cities.json")
         if not os.path.exists(own_cities_path):
-            print("[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...")
+            print(lm("own_cities_missing"))
             return
         with open(own_cities_path) as f:
             own_cities = json.load(f)
         if not own_cities:
             return
 
-        print(f"[{time.strftime('%H:%M:%S')}] World scan iniciado (raio={WORLD_SCAN_RADIUS})...")
-        _write_scan_status("running", "shallow_scan", 0, 4, "A escanear mapa...")
+        print(lm("world_scan_start", ts=time.strftime('%H:%M:%S'), radius=WORLD_SCAN_RADIUS))
+        _write_scan_status("running", "shallow_scan", 0, 4, lm("scan_status_shallow"))
 
         # Phase 1: Shallow scan — 4 API calls covering the full 100x100 map
         shallow_islands = []
@@ -96,7 +213,7 @@ def _collect_world_scan(session):
         ]
         for i, (x_min, x_max, y_min, y_max) in enumerate(quadrants):
             _write_scan_status("running", "shallow_scan", i + 1, 4,
-                f"Mapa ({x_min}-{x_max},{y_min}-{y_max})...")
+                lm("scan_status_quadrant", x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max))
             data = session.post(
                 f"action=WorldMap&function=getJSONArea&x_min={x_min}&x_max={x_max}&y_min={y_min}&y_max={y_max}"
             )
@@ -122,16 +239,16 @@ def _collect_world_scan(session):
                     islands_to_scan.append(island)
                     break
 
-        print(f"[world_scan] {len(islands_to_scan)} ilhas a escanear no raio {WORLD_SCAN_RADIUS}...")
+        print(lm("scan_islands_count", n=len(islands_to_scan), radius=WORLD_SCAN_RADIUS))
         _write_scan_status("running", "deep_scan", 0, len(islands_to_scan),
-            f"A escanear {len(islands_to_scan)} ilhas...")
+            lm("scan_status_deep", n=len(islands_to_scan)))
 
         # Phase 3: Deep scan — one getIsland request per filtered island
         inactive_players = []
         islands_summary = []
         for i, island in enumerate(islands_to_scan):
             pause = random.randint(15, 30)
-            print(f"      -> Pausa {pause}s | Ilha {i+1}/{len(islands_to_scan)} ({island['x']},{island['y']})...")
+            print(lm("scan_island_pause", pause=pause, i=i+1, total=len(islands_to_scan), x=island['x'], y=island['y']))
             time.sleep(pause)
 
             try:
@@ -197,10 +314,10 @@ def _collect_world_scan(session):
                     })
 
                 _write_scan_status("running", "deep_scan", i + 1, len(islands_to_scan),
-                    f"Ilha {i+1}/{len(islands_to_scan)} ({island['x']},{island['y']}) processada")
+                    lm("scan_island_done", i=i+1, total=len(islands_to_scan), x=island['x'], y=island['y']))
 
             except Exception as e:
-                print(f"      -> Erro na ilha {island['id']}: {e}")
+                print(lm("scan_island_error", id=island['id'], err=e))
                 continue
 
         # Backup previous scan before overwriting (used for new-inactive detection)
@@ -221,13 +338,13 @@ def _collect_world_scan(session):
             json.dump(result, f, indent=2)
 
         _write_scan_status("idle", "done", len(islands_to_scan), len(islands_to_scan),
-            f"Concluído: {len(inactive_players)} inactivos/férias encontrados")
-        print(f"[world_scan] Concluído: {len(inactive_players)} inactivos/férias encontrados.")
+            lm("scan_status_done", n=len(inactive_players)))
+        print(lm("scan_done", n=len(inactive_players)))
 
     except Exception:
         import traceback
-        print("Erro no world scan:", traceback.format_exc())
-        _write_scan_status("error", "error", 0, 0, "Erro durante o scan")
+        print(lm("scan_error"), traceback.format_exc())
+        _write_scan_status("error", "error", 0, 0, lm("scan_status_error"))
 
 
 def _get_costs_reduction(session, city_id):
@@ -268,19 +385,19 @@ def _collect_building_costs(session, ids):
     try:
         from ikabot.function.constructionList import getCostsReducers, checkhash
 
-        print(f"[{time.strftime('%H:%M:%S')}] A iniciar extração de custos de edificios (modo humano)...")
+        print(lm("costs_start", ts=time.strftime('%H:%M:%S')))
         all_costs = {}
 
         for city_id in ids:
             pause = random.randint(15, 30)
-            print(f"      -> Pausa de {pause}s antes de próxima cidade...")
+            print(lm("costs_city_pause", pause=pause))
             time.sleep(pause)
 
             try:
                 html = session.get("view=city&cityId={}".format(city_id))
                 city = getCity(html)
                 city_name = city.get("cityName", city.get("name", "Unknown"))
-                print(f"      -> Custos: {city_name}...")
+                print(lm("costs_city_start", city=city_name))
 
                 # 1 request per city: shared building detail HTML for all buildings
                 detail_url = (
@@ -378,21 +495,21 @@ def _collect_building_costs(session, ids):
                         }
 
                 all_costs[city_name] = city_costs
-                print(f"      -> Sucesso: {city_name} — {len(city_costs)} edificios com custos extraídos.")
+                print(lm("costs_city_done", city=city_name, n=len(city_costs)))
 
             except Exception:
                 import traceback
-                print(f"      -> Erro ao extrair custos de cidade {city_id}:", traceback.format_exc())
+                print(lm("costs_city_error", id=city_id), traceback.format_exc())
 
         costs_path = os.path.join(LOGS_DIR, "building_costs.json")
         with open(costs_path, "w") as f:
             json.dump({"lastUpdated": int(time.time()), "cities": all_costs}, f, indent=4)
 
-        print(f"[{time.strftime('%H:%M:%S')}] Extração de custos de edificios concluída!")
+        print(lm("costs_done", ts=time.strftime('%H:%M:%S')))
 
     except Exception:
         import traceback
-        print("Erro na extração de custos:", traceback.format_exc())
+        print(lm("costs_error"), traceback.format_exc())
 
 
 def _collect_movements(session, city_id):
@@ -455,7 +572,7 @@ def _collect_movements(session, city_id):
         return movements
     except Exception:
         import traceback
-        print("      -> Aviso: não foi possível recolher movimentos:", traceback.format_exc())
+        print(lm("movements_error"), traceback.format_exc())
         return []
 
 
@@ -483,12 +600,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
     event.set()
 
-    print("\n[+] Empire Function arrancada em Segundo Plano!")
-    print("[+] Extrai dados do império silenciosamente a cada {} segundos...\n".format(UPDATE_INTERVAL))
+    print(lm("empire_start_1"))
+    print(lm("empire_start_2", interval=UPDATE_INTERVAL))
 
     while True:
         try:
-            print(f"[{time.strftime('%H:%M:%S')}] A atualizar ficheiros JSON do Imperio...")
+            print(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
             (ids, cities) = getIdsOfCities(session)
 
             total_resources = [0] * len(materials_names)
@@ -554,7 +671,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 island_x = int(city_data.get("islandXCoord", city_data.get("x", 0)) or 0)
                 island_y = int(city_data.get("islandYCoord", city_data.get("y", 0)) or 0)
                 own_cities_list.append({"name": city_name, "x": island_x, "y": island_y})
-                print(f"      -> Sucesso: Cidade {city_name} extraída.")
+                print(lm("city_done", city=city_name))
 
                 # ── Resources + extra city data ──────────────────────────────
                 storage_capacity = int(city_data.get("storageCapacity", 0))
@@ -668,10 +785,10 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 f.write(json.dumps(history_entry) + "\n")
             _trim_history(history_path)
 
-            print("[+] Ciclo de atualização Terminado com sucesso!")
+            print(lm("cycle_done"))
             time.sleep(UPDATE_INTERVAL + random.randint(-300, 300))
 
         except Exception:
             import traceback
-            print("Erro durante extracção de dados:", traceback.format_exc())
+            print(lm("cycle_error"), traceback.format_exc())
             time.sleep(180)

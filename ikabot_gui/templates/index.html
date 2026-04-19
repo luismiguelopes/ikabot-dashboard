@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -23,7 +23,315 @@
 
   {% raw %}
   <script type="text/babel">
-    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+    const { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } = React;
+
+    // ─── i18n ─────────────────────────────────────────────────────────────────────
+
+    const TRANSLATIONS = {
+      en: {
+        // Sidebar
+        nav_home:'Home', nav_cities:'Cities', nav_buildings:'Buildings',
+        nav_movements:'Movements', nav_alerts:'Alerts', nav_history:'History',
+        nav_calculators:'Calculators', nav_world:'World',
+        stale_data:'Stale data', refresh_in:'Refresh in {t}',
+        lang_other:'PT',
+        // Shared
+        all_cities:'All cities', loading:'Loading…', col_city:'City', col_dist:'Dist.',
+        col_alliance:'Alliance', col_mark:'Mark',
+        // HomePage
+        home_title:'Empire Summary',
+        ships_available:'Available Ships', ships_total:'Total Ships',
+        housing_space:'Housing Space', citizens:'Citizens',
+        gold_total:'Total Gold', gold_production:'Gold Production',
+        wine_consumption:'Wine Consumption',
+        resources_card:'Resources & Production',
+        row_available:'Available', row_production:'Production/h',
+        // CitiesPage
+        cities_title:'City Resources',
+        col_wine:'Wine', col_warehouse:'Warehouse',
+        csv_wine_prod:'Wine/h (prod)', csv_wine_cons:'Wine/h (cons)', csv_wine_ends:'Wine runs out in',
+        resources_note:'Resource bars show % of warehouse. Red = >95%, Yellow = >80%.',
+        // BuildingsPage
+        buildings_title:'Empire Buildings',
+        legend_below_avg:'Below average',
+        legend_construction:'Under construction (remaining time below name)',
+        // MovementsPage
+        movements_title:'Ship Movements', no_movements:'No active movements',
+        section_own:'My movements', section_hostile:'Enemy attacks',
+        section_allied:'Allies', section_other:'Others',
+        troops:'Troops', fleets:'Fleets', arrives_at:'arrives at',
+        // AlertsPage
+        configure:'Configure', thresholds_title:'Alert thresholds',
+        wine_group:'Wine', warning_below:'Warning below', critical_below:'Critical below',
+        storage_group:'Warehouse', warning_above:'Warning above',
+        save:'Save', reset:'Reset',
+        thresholds_note:'Values saved in browser (localStorage). Defaults: wine warning {ww}h · critical {wc}h · storage {sw}%',
+        all_good:'All good!', no_alerts:'No active alerts.',
+        alert_wine_critical:'{city}: Wine runs out in {duration}!',
+        alert_wine_warning:'{city}: Wine runs out in {duration}',
+        alert_storage:'{city}: {resource} at {pct}% of warehouse',
+        alert_gold_neg:'Negative gold production: {val}/h',
+        alert_ships_busy:'All {n} ships are busy',
+        // HistoryPage
+        history_title:'Empire History',
+        metric_gold:'Gold', metric_resources:'Resources',
+        metric_ships:'Ships', metric_citizens:'Citizens',
+        loading_history:'Loading history…',
+        no_history:'No history data yet. Wait for the next update cycle.',
+        history_note:'{n} data points — from {from} to {to}',
+        chart_gold:'Gold', chart_gold_prod:'Gold prod./h',
+        chart_ships_avail:'Available ships', chart_ships_total:'Total ships',
+        chart_citizens:'Citizens', chart_housing:'Housing space',
+        // BuildingUpgradeCalc
+        upgrade_desc:'Estimates the time to gather enough resources to upgrade any building. Select city, building and target level for auto-fill — or enter values manually. Considers total empire production, available resources and gold purchase.',
+        loading_costs:'Loading building costs…',
+        costs_unavailable:'Cost data not yet available. The bot will extract it in the next cycle.',
+        request_extraction:'Request extraction',
+        autofill_title:'Auto-fill',
+        label_city:'City', label_building:'Building',
+        select_placeholder:'— Select —',
+        current_level_label:'Current level: {n} → Upgrade to',
+        clear:'Clear',
+        last_extraction:'Last extraction: {ts}', updates_3d:'(updates every 3 days)',
+        force_update:'Force update',
+        sending_request:'Sending request…',
+        scheduled_ok:'✓ Scheduled! Extraction starts on next bot cycle (max 1h).',
+        schedule_error:'Error scheduling update.',
+        resources_needed:'Resources Needed for Next Level',
+        resources_for:'Resources: {building} (level {cur} → {target})',
+        autofilled_msg:'Values auto-filled — you can edit them manually.',
+        gold_price:'Gold price/unit',
+        resource_status:'Resource Status',
+        col_needed:'Needed', col_available:'Available', col_missing:'Missing', col_production:'Production/h',
+        upgrade_time_title:'Upgrade Time Estimate',
+        no_gold_buying:'Without buying gold',
+        have_everything:'You have everything!',
+        empire_prod_only:'Empire production only',
+        with_gold:'With available gold', saves:'Saves {t}',
+        buy_all:'Buy it all now',
+        have_enough_gold:'✓ You have enough gold!',
+        missing_gold_amount:'Missing {n} gold',
+        gold_label:'gold',
+        available_now:'Available now!',
+        // ROICalc
+        roi_desc:'Compares the return on gold invested (ROI) between upgrading the island building (benefits all cities) vs the city building (benefits only that city). Enter the production gain of the next level (visible in game) and the upgrade cost.',
+        config_title:'Configuration', resource_type:'Resource type',
+        cities_on_island:'No. of cities on island',
+        island_label:'(Island)', city_building_label:'(City)',
+        benefits_all_cities:'Benefits all {n} cities on the island. Total gain = gain/city × {n}.',
+        benefits_only_city:'Benefits only this city. Does not affect other cities on the island.',
+        gain_per_city_label:'{res}/h gain per city (next level)',
+        gain_this_city_label:'{res}/h gain in this city (next level)',
+        upgrade_cost_label:'Upgrade cost:',
+        total_gain:'Total Gain',
+        equiv_cost:'Equiv. cost: {n} gold',
+        best_option:'Best option!',
+        roi_comparison:'ROI Comparison',
+        island_better:'Upgrading {name} is better: benefits {n} cities for the same investment.',
+        city_better_roi:'Upgrading {name} is better: better return per gold invested in this configuration.',
+        wood_island_bld:'Sawmill', wood_city_bld:'Forest Warden',
+        marble_island_bld:'Quarry', marble_city_bld:'Stonemason',
+        // CalculadorasPage
+        calc_title:'Calculators',
+        tab_upgrade:'Building Evolution', tab_roi:'ROI Sawmill / Quarry',
+        // MARK labels
+        mark_novo:'New', mark_alvo:'Target', mark_visto:'Seen', mark_ignorar:'Ignore',
+        // StatePill
+        state_inactive:'Inactive', state_vacation:'Vacation',
+        // World scan resource labels
+        res_wine:'Wine', res_marble:'Marble', res_crystal:'Crystal', res_sulfur:'Sulfur',
+        // InactivosTab
+        new_this_week:'New this week',
+        max_dist:'Max dist.', filter_state:'State',
+        all:'All', filter_inactive:'Inactive', filter_vacation:'Vacation',
+        filter_mark:'Mark',
+        excl_ignored:'Exclude Ignored', only_new:'Only New',
+        only_target:'Only Targets', only_seen:'Only Seen',
+        search_player:'Search player…',
+        col_player:'Player', col_island:'Island',
+        col_military:'Military', col_buildings_score:'Buildings',
+        no_players_found:'No players found with current filters.',
+        player_count_single:'{n} player', player_count_plural:'{n} players',
+        new_count_note:'· {n} new this week',
+        force_first_scan:'Force first scan',
+        new_badge:'New',
+        // IlhasTab
+        only_free_slots:'Only with free slots',
+        include_own_islands:'Include own islands',
+        filter_resource:'Resource', col_resource:'Resource',
+        col_forest:'Forest', col_lux_level:'Lux. Level', col_wonder:'Wonder', col_free_slots:'Free Slots',
+        own_city_badge:'yours',
+        no_islands_found:'No islands found with current filters.',
+        island_count_single:'{n} island', island_count_plural:'{n} islands',
+        islands_not_available:'Island data not available. Wait for the first scan.',
+        // MundoPage
+        world_title:'World',
+        last_scan_label:'Last scan:', next_scan_label:'next:',
+        no_scan_yet:'No scan performed yet.',
+        scan_radius:'Radius', inactive_label:'Inactive',
+        new_count_world:'({n} new)', islands_count_world:'Islands',
+        scanning:'Scanning…', force_scan:'Force Scan',
+        scan_scheduled_msg:'Forced scan scheduled. Will run on next bot cycle (~5-15 min).',
+        tab_inactive:'Inactive', tab_islands:'Islands',
+        // LoadingScreen / ErrorScreen
+        loading_empire:'Loading empire data…',
+        error_loading:'Error loading data', try_again:'Try again',
+        level_label:'level {n}',
+      },
+      pt: {
+        nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
+        nav_movements:'Movimentos', nav_alerts:'Alertas', nav_history:'Histórico',
+        nav_calculators:'Calculadoras', nav_world:'Mundo',
+        stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}',
+        lang_other:'EN',
+        all_cities:'Todas as cidades', loading:'A carregar…', col_city:'Cidade', col_dist:'Dist.',
+        col_alliance:'Aliança', col_mark:'Marcação',
+        home_title:'Resumo do Império',
+        ships_available:'Navios Disponíveis', ships_total:'Navios Totais',
+        housing_space:'Espaço Habitacional', citizens:'Cidadãos',
+        gold_total:'Ouro Total', gold_production:'Produção de Ouro',
+        wine_consumption:'Consumo de Vinho',
+        resources_card:'Recursos e Produção',
+        row_available:'Disponível', row_production:'Produção/h',
+        cities_title:'Recursos das Cidades',
+        col_wine:'Vinho', col_warehouse:'Armazém',
+        csv_wine_prod:'Vinho/h (prod)', csv_wine_cons:'Vinho/h (cons)', csv_wine_ends:'Vinho acaba em',
+        resources_note:'Barras de recursos mostram % do armazém. Vermelho = >95%, Amarelo = >80%.',
+        buildings_title:'Edifícios do Império',
+        legend_below_avg:'Abaixo da média',
+        legend_construction:'Em construção (tempo restante abaixo do nome)',
+        movements_title:'Movimentos de Navios', no_movements:'Sem movimentos activos',
+        section_own:'Os meus movimentos', section_hostile:'Ataques inimigos',
+        section_allied:'Aliados', section_other:'Outros',
+        troops:'Tropas', fleets:'Frotas', arrives_at:'chega às',
+        configure:'Configurar', thresholds_title:'Thresholds de alerta',
+        wine_group:'Vinho', warning_below:'Aviso abaixo de', critical_below:'Crítico abaixo de',
+        storage_group:'Armazém', warning_above:'Aviso acima de',
+        save:'Guardar', reset:'Repor',
+        thresholds_note:'Valores guardados no browser (localStorage). Padrões: vinho aviso {ww}h · crítico {wc}h · armazém {sw}%',
+        all_good:'Tudo em ordem!', no_alerts:'Nenhum alerta activo.',
+        alert_wine_critical:'{city}: Vinho acaba em {duration}!',
+        alert_wine_warning:'{city}: Vinho acaba em {duration}',
+        alert_storage:'{city}: {resource} a {pct}% do armazém',
+        alert_gold_neg:'Produção de ouro negativa: {val}/h',
+        alert_ships_busy:'Todos os {n} navios estão ocupados',
+        history_title:'Histórico do Império',
+        metric_gold:'Ouro', metric_resources:'Recursos',
+        metric_ships:'Navios', metric_citizens:'Cidadãos',
+        loading_history:'A carregar histórico…',
+        no_history:'Sem dados de histórico ainda. Aguarda o próximo ciclo de actualização.',
+        history_note:'{n} pontos de dados — de {from} a {to}',
+        chart_gold:'Ouro', chart_gold_prod:'Prod. Ouro/h',
+        chart_ships_avail:'Navios disponíveis', chart_ships_total:'Navios totais',
+        chart_citizens:'Cidadãos', chart_housing:'Espaço habitacional',
+        upgrade_desc:'Calcula o tempo estimado para teres recursos suficientes para evoluir qualquer edifício. Seleciona cidade, edifício e nível alvo para preenchimento automático — ou introduz os valores manualmente. Considera a produção total do império, os recursos disponíveis e a compra com ouro.',
+        loading_costs:'A carregar custos de edifícios…',
+        costs_unavailable:'Dados de custos ainda não disponíveis. O bot irá extraí-los no próximo ciclo.',
+        request_extraction:'Solicitar extração',
+        autofill_title:'Preenchimento Automático',
+        label_city:'Cidade', label_building:'Edifício',
+        select_placeholder:'— Seleciona —',
+        current_level_label:'Nível atual: {n} → Evoluir até',
+        clear:'Limpar',
+        last_extraction:'Última extração: {ts}', updates_3d:'(atualiza de 3 em 3 dias)',
+        force_update:'Forçar atualização',
+        sending_request:'A enviar pedido…',
+        scheduled_ok:'✓ Agendado! A extração começa no próximo ciclo do bot (máx. 1h).',
+        schedule_error:'Erro ao agendar atualização.',
+        resources_needed:'Recursos Necessários para o Próximo Nível',
+        resources_for:'Recursos: {building} (nível {cur} → {target})',
+        autofilled_msg:'Valores preenchidos automaticamente — podes editá-los manualmente.',
+        gold_price:'Preço ouro/unidade',
+        resource_status:'Estado dos Recursos',
+        col_needed:'Necessário', col_available:'Disponível', col_missing:'Em Falta', col_production:'Produção/h',
+        upgrade_time_title:'Estimativa de Tempo para Evolução',
+        no_gold_buying:'Sem comprar com ouro',
+        have_everything:'Já tens tudo!',
+        empire_prod_only:'Apenas produção do império',
+        with_gold:'Com ouro disponível', saves:'Poupa {t}',
+        buy_all:'Comprar tudo já',
+        have_enough_gold:'✓ Tens ouro suficiente!',
+        missing_gold_amount:'Faltam {n} ouro',
+        gold_label:'ouro',
+        available_now:'Disponível agora!',
+        roi_desc:'Compara o retorno por ouro investido (ROI) entre evoluir o edifício da ilha (beneficia todas as cidades) vs o edifício da cidade (beneficia apenas essa cidade). Introduz o ganho de produção do nível seguinte (visível no jogo) e o custo de evolução.',
+        config_title:'Configuração', resource_type:'Tipo de recurso',
+        cities_on_island:'Nº de cidades na ilha',
+        island_label:'(Ilha)', city_building_label:'(Cidade)',
+        benefits_all_cities:'Beneficia todas as {n} cidades da ilha. Ganho total = ganho/cidade × {n}.',
+        benefits_only_city:'Beneficia apenas esta cidade. Não afecta as outras cidades da ilha.',
+        gain_per_city_label:'Ganho {res}/h por cidade (nível seguinte)',
+        gain_this_city_label:'Ganho {res}/h nesta cidade (nível seguinte)',
+        upgrade_cost_label:'Custo de evolução:',
+        total_gain:'Ganho Total',
+        equiv_cost:'Custo equiv.: {n} ouro',
+        best_option:'Melhor opção!',
+        roi_comparison:'Comparação de ROI',
+        island_better:'Evoluir a {name} é mais vantajoso: beneficia {n} cidades por o mesmo investimento.',
+        city_better_roi:'Evoluir o {name} é mais vantajoso: melhor retorno por ouro investido nesta configuração.',
+        wood_island_bld:'Serraria', wood_city_bld:'Guarda Florestal',
+        marble_island_bld:'Pedreira', marble_city_bld:'Pedreiro',
+        calc_title:'Calculadoras',
+        tab_upgrade:'Evolução de Edifícios', tab_roi:'ROI Serraria / Pedreira',
+        mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
+        state_inactive:'Inactivo', state_vacation:'Férias',
+        res_wine:'Vinho', res_marble:'Mármore', res_crystal:'Cristal', res_sulfur:'Enxofre',
+        new_this_week:'Novos esta semana',
+        max_dist:'Dist. máx.', filter_state:'Estado',
+        all:'Todos', filter_inactive:'Inactivos', filter_vacation:'Férias',
+        filter_mark:'Marcação',
+        excl_ignored:'Excluir Ignorados', only_new:'Apenas Novos',
+        only_target:'Apenas Alvos', only_seen:'Apenas Vistos',
+        search_player:'Pesquisar jogador…',
+        col_player:'Jogador', col_island:'Ilha',
+        col_military:'Militar', col_buildings_score:'Edifícios',
+        no_players_found:'Nenhum jogador encontrado com os filtros actuais.',
+        player_count_single:'{n} jogador', player_count_plural:'{n} jogadores',
+        new_count_note:'· {n} novos esta semana',
+        force_first_scan:'Forçar primeiro scan',
+        new_badge:'Novo',
+        only_free_slots:'Apenas com slots livres',
+        include_own_islands:'Incluir ilhas próprias',
+        filter_resource:'Recurso', col_resource:'Recurso',
+        col_forest:'Floresta', col_lux_level:'Lv Recurso', col_wonder:'Maravilha', col_free_slots:'Slots Livres',
+        own_city_badge:'tua',
+        no_islands_found:'Nenhuma ilha encontrada com os filtros actuais.',
+        island_count_single:'{n} ilha', island_count_plural:'{n} ilhas',
+        islands_not_available:'Dados de ilhas não disponíveis. Aguarda o primeiro scan.',
+        world_title:'Mundo',
+        last_scan_label:'Último scan:', next_scan_label:'próximo:',
+        no_scan_yet:'Nenhum scan realizado ainda.',
+        scan_radius:'Raio', inactive_label:'Inactivos',
+        new_count_world:'({n} novos)', islands_count_world:'Ilhas',
+        scanning:'A escanear…', force_scan:'Forçar Scan',
+        scan_scheduled_msg:'Scan forçado agendado. Será executado no próximo ciclo do bot (~5-15 min).',
+        tab_inactive:'Inactivos', tab_islands:'Ilhas',
+        loading_empire:'A carregar dados do império…',
+        error_loading:'Erro ao carregar dados', try_again:'Tentar novamente',
+        level_label:'nível {n}',
+      },
+    };
+
+    const LangContext = createContext('en');
+
+    function useLang() { return useContext(LangContext); }
+
+    function useT() {
+      const lang = useLang();
+      return (key, params) => {
+        const str = (TRANSLATIONS[lang] || TRANSLATIONS.en)[key] ?? key;
+        if (!params) return str;
+        return Object.entries(params).reduce(
+          (s, [k, v]) => s.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v)), str
+        );
+      };
+    }
+
+    function getLocale(lang) { return lang === 'pt' ? 'pt-PT' : 'en-GB'; }
+
+    function loadLang() {
+      try { return localStorage.getItem('ikabot_lang') || 'en'; } catch { return 'en'; }
+    }
 
     // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -75,10 +383,10 @@
       return `${m}:${String(s).padStart(2, '0')}`;
     }
 
-    function fmtArrival(ts) {
+    function fmtArrival(ts, lang = 'en') {
       if (!ts) return '—';
       const d = new Date(ts * 1000);
-      return d.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      return d.toLocaleTimeString(getLocale(lang), { hour: '2-digit', minute: '2-digit' });
     }
 
     // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -104,7 +412,8 @@
       );
     }
 
-    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, alertCount, movCount, countdown }) {
+    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, alertCount, movCount, countdown, lang, toggleLang }) {
+      const t = useT();
       const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60;
       return (
         <aside className="w-56 flex-shrink-0 bg-slate-900 flex flex-col h-screen">
@@ -119,21 +428,21 @@
           </div>
 
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-            <NavItem icon="fa-house"        label="Início"       active={active === 'home'}       onClick={() => setActive('home')}       />
-            <NavItem icon="fa-city"         label="Cidades"      active={active === 'cities'}     onClick={() => setActive('cities')}     />
-            <NavItem icon="fa-landmark"     label="Edifícios"    active={active === 'buildings'}  onClick={() => setActive('buildings')}  />
-            <NavItem icon="fa-ship"         label="Movimentos"   active={active === 'movements'}  onClick={() => setActive('movements')}  badge={movCount} />
-            <NavItem icon="fa-triangle-exclamation" label="Alertas" active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
-            <NavItem icon="fa-chart-line"   label="Histórico"    active={active === 'history'}    onClick={() => setActive('history')}    />
-            <NavItem icon="fa-calculator"   label="Calculadoras" active={active === 'calc'}        onClick={() => setActive('calc')}       />
-            <NavItem icon="fa-earth-europe" label="Mundo"        active={active === 'mundo'}       onClick={() => setActive('mundo')}      />
+            <NavItem icon="fa-house"        label={t('nav_home')}        active={active === 'home'}       onClick={() => setActive('home')}       />
+            <NavItem icon="fa-city"         label={t('nav_cities')}      active={active === 'cities'}     onClick={() => setActive('cities')}     />
+            <NavItem icon="fa-landmark"     label={t('nav_buildings')}   active={active === 'buildings')} onClick={() => setActive('buildings')}  />
+            <NavItem icon="fa-ship"         label={t('nav_movements')}   active={active === 'movements')} onClick={() => setActive('movements')}  badge={movCount} />
+            <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')} active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
+            <NavItem icon="fa-chart-line"   label={t('nav_history')}     active={active === 'history'}    onClick={() => setActive('history')}    />
+            <NavItem icon="fa-calculator"   label={t('nav_calculators')} active={active === 'calc'}       onClick={() => setActive('calc')}       />
+            <NavItem icon="fa-earth-europe" label={t('nav_world')}       active={active === 'mundo'}      onClick={() => setActive('mundo')}      />
           </nav>
 
           <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
             {isStale && (
               <div className="flex items-center gap-1.5 text-yellow-400 text-xs">
                 <i className="fa-solid fa-triangle-exclamation" />
-                Dados desatualizados
+                {t('stale_data')}
               </div>
             )}
             <p className={`text-xs leading-tight ${isStale ? 'text-yellow-500' : 'text-slate-600'}`}>
@@ -143,9 +452,16 @@
             {countdown !== null && (
               <p className="text-slate-600 text-xs">
                 <i className="fa-solid fa-arrows-rotate mr-1" />
-                Refresh em {fmtCountdown(countdown)}
+                {t('refresh_in', { t: fmtCountdown(countdown) })}
               </p>
             )}
+            <button
+              onClick={toggleLang}
+              className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white text-xs font-semibold transition-colors"
+              title="Switch language"
+            >
+              <i className="fa-solid fa-language" /> {t('lang_other')}
+            </button>
           </div>
         </aside>
       );
@@ -191,13 +507,14 @@
     }
 
     function CitySelect({ cities, value, onChange }) {
+      const t = useT();
       return (
         <select
           value={value}
           onChange={e => onChange(e.target.value)}
           className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
         >
-          <option value="all">Todas as cidades</option>
+          <option value="all">{t('all_cities')}</option>
           {cities.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
       );
@@ -231,6 +548,8 @@
     }
 
     function HomePage({ data }) {
+      const t = useT();
+      const lang = useLang();
       const { statusSummary: s } = data;
       const res = s.resources;
       const totalAvail = res.available.reduce((a, b) => a + b, 0);
@@ -238,28 +557,28 @@
 
       return (
         <div>
-          <PageHeader icon="fa-crown" title="Resumo do Império" />
+          <PageHeader icon="fa-crown" title={t('home_title')} />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
-            <StatBadge icon="fa-anchor"       iconColor="text-blue-500"    label="Navios Disponíveis"  value={fmt(s.ships.available)}    />
-            <StatBadge icon="fa-ship"         iconColor="text-blue-600"    label="Navios Totais"        value={fmt(s.ships.total)}        />
-            <StatBadge icon="fa-house"        iconColor="text-emerald-500" label="Espaço Habitacional" value={fmt(s.housing.space)}      />
-            <StatBadge icon="fa-people-group" iconColor="text-purple-500"  label="Cidadãos"             value={fmt(s.housing.citizens)}   />
-            <StatBadge icon="fa-coins"        iconColor="text-yellow-500"  label="Ouro Total"           value={fmt(s.gold.total)}         />
-            <StatBadge icon="fa-chart-line"   iconColor="text-yellow-600"  label="Produção de Ouro"     value={fmt(s.gold.production)}    />
-            <StatBadge icon="fa-wine-glass"   iconColor="text-red-400"     label="Consumo de Vinho"     value={fmt(s.wine_consumption)}   />
+            <StatBadge icon="fa-anchor"       iconColor="text-blue-500"    label={t('ships_available')}  value={fmt(s.ships.available)}    />
+            <StatBadge icon="fa-ship"         iconColor="text-blue-600"    label={t('ships_total')}      value={fmt(s.ships.total)}        />
+            <StatBadge icon="fa-house"        iconColor="text-emerald-500" label={t('housing_space')}    value={fmt(s.housing.space)}      />
+            <StatBadge icon="fa-people-group" iconColor="text-purple-500"  label={t('citizens')}         value={fmt(s.housing.citizens)}   />
+            <StatBadge icon="fa-coins"        iconColor="text-yellow-500"  label={t('gold_total')}       value={fmt(s.gold.total)}         />
+            <StatBadge icon="fa-chart-line"   iconColor="text-yellow-600"  label={t('gold_production')}  value={fmt(s.gold.production)}    />
+            <StatBadge icon="fa-wine-glass"   iconColor="text-red-400"     label={t('wine_consumption')} value={fmt(s.wine_consumption)}   />
           </div>
 
           <Card>
-            <CardHeader icon="fa-boxes-stacked" title="Recursos e Produção" />
+            <CardHeader icon="fa-boxes-stacked" title={t('resources_card')} />
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                    <Th align="text-left" className="px-5">Tipo</Th>
+                    <Th align="text-left" className="px-5">Type</Th>
                     {MATERIALS.map(m => (
                       <Th key={m.en}>
-                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m.pt}
+                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m[lang]}
                       </Th>
                     ))}
                     <Th className="text-indigo-300">Total</Th>
@@ -267,8 +586,8 @@
                 </thead>
                 <tbody>
                   {[
-                    { label: 'Disponível', values: res.available,  total: totalAvail },
-                    { label: 'Produção/h', values: res.production, total: totalProd  },
+                    { label: t('row_available'), values: res.available,  total: totalAvail },
+                    { label: t('row_production'), values: res.production, total: totalProd  },
                   ].map((row, ri) => (
                     <tr key={ri} className={`border-b border-slate-100 hover:bg-slate-50 ${ri % 2 ? 'bg-slate-50/40' : ''}`}>
                       <Td className="px-5 font-semibold text-slate-600">{row.label}</Td>
@@ -306,13 +625,15 @@
     // ─── CitiesPage ──────────────────────────────────────────────────────────────
 
     function CitiesPage({ data }) {
+      const t = useT();
+      const lang = useLang();
       const { resourcesData } = data;
       const cities = Object.keys(resourcesData);
       const [filter, setFilter] = useState('all');
       const visible = filter === 'all' ? cities : cities.filter(c => c === filter);
 
       const handleExport = () => {
-        const header = ['Cidade', ...MATERIALS.map(m => m.pt), 'Armazém', 'Vinho/h (prod)', 'Vinho/h (cons)', 'Vinho acaba em'];
+        const header = [t('col_city'), ...MATERIALS.map(m => m[lang]), t('col_warehouse'), t('csv_wine_prod'), t('csv_wine_cons'), t('csv_wine_ends')];
         const rows = [header, ...visible.map(city => {
           const d = resourcesData[city];
           const wineRunsOut = d.wineRunsOutIn === -1 ? '∞' : fmtDuration(d.wineRunsOutIn);
@@ -325,12 +646,12 @@
             wineRunsOut,
           ];
         })];
-        exportCsv(`recursos_${new Date().toISOString().slice(0,10)}.csv`, rows);
+        exportCsv(`resources_${new Date().toISOString().slice(0,10)}.csv`, rows);
       };
 
       return (
         <div>
-          <PageHeader icon="fa-city" title="Recursos das Cidades">
+          <PageHeader icon="fa-city" title={t('cities_title')}>
             <div className="flex items-center gap-2">
               <CitySelect cities={cities} value={filter} onChange={setFilter} />
               <button
@@ -347,14 +668,14 @@
               <table className="w-full">
                 <thead>
                   <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                    <Th align="text-left" className="px-5">Cidade</Th>
+                    <Th align="text-left" className="px-5">{t('col_city')}</Th>
                     {MATERIALS.map(m => (
                       <Th key={m.en}>
-                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m.pt}
+                        <i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m[lang]}
                       </Th>
                     ))}
-                    <Th><i className="fa-solid fa-wine-glass mr-1 text-red-400" /> Vinho</Th>
-                    <Th>Armazém</Th>
+                    <Th><i className="fa-solid fa-wine-glass mr-1 text-red-400" /> {t('col_wine')}</Th>
+                    <Th>{t('col_warehouse')}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -390,7 +711,7 @@
               </table>
             </div>
           </Card>
-          <p className="text-xs text-slate-400 mt-2">Barras de recursos mostram % do armazém. Vermelho = &gt;95%, Amarelo = &gt;80%.</p>
+          <p className="text-xs text-slate-400 mt-2">{t('resources_note')}</p>
         </div>
       );
     }
@@ -398,6 +719,7 @@
     // ─── BuildingsPage ───────────────────────────────────────────────────────────
 
     function BuildingsPage({ data }) {
+      const t = useT();
       const { empireData } = data;
       const cities = Object.keys(empireData);
       const [filter, setFilter] = useState('all');
@@ -422,7 +744,7 @@
 
       return (
         <div>
-          <PageHeader icon="fa-landmark" title="Edifícios do Império">
+          <PageHeader icon="fa-landmark" title={t('buildings_title')}>
             <CitySelect cities={cities} value={filter} onChange={setFilter} />
           </PageHeader>
 
@@ -432,7 +754,7 @@
                 <thead>
                   <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
                     <th className="px-5 py-3 font-semibold text-left whitespace-nowrap sticky left-0 z-20 bg-slate-800 border-r border-slate-700">
-                      Cidade
+                      {t('col_city')}
                     </th>
                     {buildingNames.map(b => <Th key={b} className="text-xs">{b}</Th>)}
                   </tr>
@@ -479,8 +801,8 @@
           </Card>
 
           <div className="flex gap-5 mt-4 text-xs text-slate-500">
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-500 inline-block" />Abaixo da média</span>
-            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-orange-400 inline-block" />Em construção (tempo restante abaixo do nome)</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-500 inline-block" />{t('legend_below_avg')}</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-orange-400 inline-block" />{t('legend_construction')}</span>
           </div>
         </div>
       );
@@ -499,8 +821,11 @@
           .catch(e => setError(e.message));
       }, []);
 
+      const t = useT();
+      const lang = useLang();
+
       if (error) return <p className="text-red-500 text-sm">{error}</p>;
-      if (!movements) return <p className="text-slate-400 text-sm">A carregar…</p>;
+      if (!movements) return <p className="text-slate-400 text-sm">{t('loading')}</p>;
 
       const own       = movements.filter(m => m.isOwn);
       const hostile   = movements.filter(m => m.isHostile);
@@ -526,12 +851,12 @@
                       </div>
                     )}
                     {m.troops != null && (
-                      <div className="text-xs text-red-400 mt-1">Tropas: {fmt(m.troops)} | Frotas: {fmt(m.fleets)}</div>
+                      <div className="text-xs text-red-400 mt-1">{t('troops')}: {fmt(m.troops)} | {t('fleets')}: {fmt(m.fleets)}</div>
                     )}
                   </div>
                   <div className="text-right flex-shrink-0">
                     <div className="text-sm font-mono font-semibold text-slate-700">{fmtDuration(m.timeLeft)}</div>
-                    <div className="text-xs text-slate-400">chega às {fmtArrival(m.arrivalTime)}</div>
+                    <div className="text-xs text-slate-400">{t('arrives_at')} {fmtArrival(m.arrivalTime, lang)}</div>
                   </div>
                 </div>
               ))}
@@ -542,18 +867,18 @@
 
       return (
         <div>
-          <PageHeader icon="fa-ship" title="Movimentos de Navios" />
+          <PageHeader icon="fa-ship" title={t('movements_title')} />
           {movements.length === 0 ? (
             <Card className="p-8 text-center text-slate-400">
               <i className="fa-solid fa-anchor text-3xl mb-2 block" />
-              Sem movimentos activos
+              {t('no_movements')}
             </Card>
           ) : (
             <>
-              <Section title="Os meus movimentos" items={own}     color="text-indigo-600" icon="fa-flag"              />
-              <Section title="Ataques inimigos"   items={hostile} color="text-red-600"    icon="fa-skull-crossbones"  />
-              <Section title="Aliados"            items={allied}  color="text-green-600"  icon="fa-handshake"         />
-              <Section title="Outros"             items={other}   color="text-slate-600"  icon="fa-circle-info"       />
+              <Section title={t('section_own')}     items={own}     color="text-indigo-600" icon="fa-flag"              />
+              <Section title={t('section_hostile')} items={hostile} color="text-red-600"    icon="fa-skull-crossbones"  />
+              <Section title={t('section_allied')}  items={allied}  color="text-green-600"  icon="fa-handshake"         />
+              <Section title={t('section_other')}   items={other}   color="text-slate-600"  icon="fa-circle-info"       />
             </>
           )}
         </div>
@@ -579,6 +904,8 @@
     }
 
     function AlertsPage({ data, thresholds, onSaveThresholds }) {
+      const t = useT();
+      const lang = useLang();
       const { resourcesData, statusSummary: s } = data;
       const [draft, setDraft] = useState(thresholds);
       const [settingsOpen, setSettingsOpen] = useState(false);
@@ -591,12 +918,12 @@
       const alerts = [];
 
       Object.entries(resourcesData).forEach(([city, d]) => {
-        const t = d.wineRunsOutIn;
-        if (t !== -1 && t !== undefined) {
-          if (t < thresholds.wineCritical * 3600)
-            alerts.push({ level: 'critical', icon: 'fa-wine-bottle', color: 'text-red-600 bg-red-50 border-red-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}!` });
-          else if (t < thresholds.wineWarning * 3600)
-            alerts.push({ level: 'warning', icon: 'fa-wine-bottle', color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}` });
+        const wine = d.wineRunsOutIn;
+        if (wine !== -1 && wine !== undefined) {
+          if (wine < thresholds.wineCritical * 3600)
+            alerts.push({ level: 'critical', icon: 'fa-wine-bottle', color: 'text-red-600 bg-red-50 border-red-200', msg: t('alert_wine_critical', { city, duration: fmtDuration(wine) }) });
+          else if (wine < thresholds.wineWarning * 3600)
+            alerts.push({ level: 'warning', icon: 'fa-wine-bottle', color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: t('alert_wine_warning', { city, duration: fmtDuration(wine) }) });
         }
       });
 
@@ -606,15 +933,15 @@
         MATERIALS.forEach(m => {
           const val = d[m.en];
           if (val != null && val / cap >= thresholds.storageWarning / 100)
-            alerts.push({ level: 'warning', icon: m.icon, color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: ${m.pt} a ${Math.round(val/cap*100)}% do armazém` });
+            alerts.push({ level: 'warning', icon: m.icon, color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: t('alert_storage', { city, resource: m[lang], pct: Math.round(val/cap*100) }) });
         });
       });
 
       if (s.gold.production < 0)
-        alerts.push({ level: 'critical', icon: 'fa-coins', color: 'text-red-600 bg-red-50 border-red-200', msg: `Produção de ouro negativa: ${fmt(s.gold.production)}/h` });
+        alerts.push({ level: 'critical', icon: 'fa-coins', color: 'text-red-600 bg-red-50 border-red-200', msg: t('alert_gold_neg', { val: fmt(s.gold.production) }) });
 
       if (s.ships.available === 0 && s.ships.total > 0)
-        alerts.push({ level: 'info', icon: 'fa-ship', color: 'text-blue-600 bg-blue-50 border-blue-200', msg: `Todos os ${s.ships.total} navios estão ocupados` });
+        alerts.push({ level: 'info', icon: 'fa-ship', color: 'text-blue-600 bg-blue-50 border-blue-200', msg: t('alert_ships_busy', { n: s.ships.total }) });
 
       const critical = alerts.filter(a => a.level === 'critical');
       const warning  = alerts.filter(a => a.level === 'warning');
@@ -622,49 +949,49 @@
 
       return (
         <div>
-          <PageHeader icon="fa-triangle-exclamation" title={`Alertas (${alerts.length})`}>
+          <PageHeader icon="fa-triangle-exclamation" title={`${t('nav_alerts')} (${alerts.length})`}>
             <button
               onClick={() => { setDraft(thresholds); setSettingsOpen(v => !v); }}
               className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
                 settingsOpen ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               }`}
             >
-              <i className="fa-solid fa-sliders" /> Configurar
+              <i className="fa-solid fa-sliders" /> {t('configure')}
             </button>
           </PageHeader>
 
           {settingsOpen && (
             <Card className="mb-4">
               <div className="px-5 py-4">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Thresholds de alerta</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">{t('thresholds_title')}</p>
                 <div className="flex flex-wrap gap-6 items-end">
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
-                      <i className="fa-solid fa-wine-bottle text-red-400" /> Vinho
+                      <i className="fa-solid fa-wine-bottle text-red-400" /> {t('wine_group')}
                     </p>
-                    <ThresholdInput label="Aviso abaixo de" value={draft.wineWarning}  onChange={v => setDraft(d => ({ ...d, wineWarning: v }))}  min={1} max={72} unit="h" />
-                    <ThresholdInput label="Crítico abaixo de" value={draft.wineCritical} onChange={v => setDraft(d => ({ ...d, wineCritical: v }))} min={1} max={24} unit="h" />
+                    <ThresholdInput label={t('warning_below')}  value={draft.wineWarning}  onChange={v => setDraft(d => ({ ...d, wineWarning: v }))}  min={1} max={72} unit="h" />
+                    <ThresholdInput label={t('critical_below')} value={draft.wineCritical} onChange={v => setDraft(d => ({ ...d, wineCritical: v }))} min={1} max={24} unit="h" />
                   </div>
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
-                      <i className="fa-solid fa-warehouse text-slate-400" /> Armazém
+                      <i className="fa-solid fa-warehouse text-slate-400" /> {t('storage_group')}
                     </p>
-                    <ThresholdInput label="Aviso acima de" value={draft.storageWarning} onChange={v => setDraft(d => ({ ...d, storageWarning: v }))} min={50} max={99} unit="%" />
+                    <ThresholdInput label={t('warning_above')} value={draft.storageWarning} onChange={v => setDraft(d => ({ ...d, storageWarning: v }))} min={50} max={99} unit="%" />
                   </div>
                   <div className="flex items-center gap-2 pb-0.5">
                     <button onClick={handleSave}
                       className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors">
-                      Guardar
+                      {t('save')}
                     </button>
                     <button onClick={handleReset}
                       className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
-                      Repor
+                      {t('reset')}
                     </button>
                     {!isDirty && !settingsOpen && null}
                   </div>
                 </div>
                 <p className="mt-3 text-[11px] text-slate-400">
-                  Valores guardados no browser (localStorage). Padrões: vinho aviso {ALERT_DEFAULTS.wineWarning}h · crítico {ALERT_DEFAULTS.wineCritical}h · armazém {ALERT_DEFAULTS.storageWarning}%
+                  {t('thresholds_note', { ww: ALERT_DEFAULTS.wineWarning, wc: ALERT_DEFAULTS.wineCritical, sw: ALERT_DEFAULTS.storageWarning })}
                 </p>
               </div>
             </Card>
@@ -673,8 +1000,8 @@
           {alerts.length === 0 ? (
             <Card className="p-10 text-center">
               <i className="fa-solid fa-circle-check text-4xl text-emerald-400 mb-3 block" />
-              <p className="text-slate-600 font-semibold">Tudo em ordem!</p>
-              <p className="text-slate-400 text-sm mt-1">Nenhum alerta activo.</p>
+              <p className="text-slate-600 font-semibold">{t('all_good')}</p>
+              <p className="text-slate-400 text-sm mt-1">{t('no_alerts')}</p>
             </Card>
           ) : (
             <div className="space-y-3">
@@ -693,6 +1020,8 @@
     // ─── HistoryPage ─────────────────────────────────────────────────────────────
 
     function HistoryPage() {
+      const t = useT();
+      const lang = useLang();
       const [history, setHistory] = useState(null);
       const [metric, setMetric]   = useState('gold');
       const chartRef = useRef(null);
@@ -711,25 +1040,25 @@
 
         const labels = history.map(h => {
           const d = new Date(h.timestamp * 1000);
-          return d.toLocaleString('pt-PT', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          return d.toLocaleString(getLocale(lang), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         });
 
         const datasets = [];
         const colors = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7'];
 
         if (metric === 'gold') {
-          datasets.push({ label: 'Ouro', data: history.map(h => h.gold.total), borderColor: colors[0], backgroundColor: colors[0]+'22', tension: 0.3, fill: true });
-          datasets.push({ label: 'Prod. Ouro/h', data: history.map(h => h.gold.production), borderColor: colors[1], backgroundColor: colors[1]+'22', tension: 0.3, fill: false, yAxisID: 'y2' });
+          datasets.push({ label: t('chart_gold'), data: history.map(h => h.gold.total), borderColor: colors[0], backgroundColor: colors[0]+'22', tension: 0.3, fill: true });
+          datasets.push({ label: t('chart_gold_prod'), data: history.map(h => h.gold.production), borderColor: colors[1], backgroundColor: colors[1]+'22', tension: 0.3, fill: false, yAxisID: 'y2' });
         } else if (metric === 'resources') {
           MATERIALS.forEach((m, i) => {
-            datasets.push({ label: m.pt, data: history.map(h => h.resources.available[i]), borderColor: colors[i % colors.length], tension: 0.3, fill: false });
+            datasets.push({ label: m[lang], data: history.map(h => h.resources.available[i]), borderColor: colors[i % colors.length], tension: 0.3, fill: false });
           });
         } else if (metric === 'ships') {
-          datasets.push({ label: 'Navios disponíveis', data: history.map(h => h.ships.available), borderColor: colors[0], tension: 0.3, fill: false });
-          datasets.push({ label: 'Navios totais',      data: history.map(h => h.ships.total),     borderColor: colors[1], tension: 0.3, fill: false });
+          datasets.push({ label: t('chart_ships_avail'), data: history.map(h => h.ships.available), borderColor: colors[0], tension: 0.3, fill: false });
+          datasets.push({ label: t('chart_ships_total'), data: history.map(h => h.ships.total),     borderColor: colors[1], tension: 0.3, fill: false });
         } else if (metric === 'citizens') {
-          datasets.push({ label: 'Cidadãos',            data: history.map(h => h.housing.citizens), borderColor: colors[2], tension: 0.3, fill: false });
-          datasets.push({ label: 'Espaço habitacional', data: history.map(h => h.housing.space),    borderColor: colors[0], tension: 0.3, fill: false });
+          datasets.push({ label: t('chart_citizens'), data: history.map(h => h.housing.citizens), borderColor: colors[2], tension: 0.3, fill: false });
+          datasets.push({ label: t('chart_housing'),  data: history.map(h => h.housing.space),    borderColor: colors[0], tension: 0.3, fill: false });
         }
 
         const scales = {
@@ -749,18 +1078,18 @@
             scales,
           },
         });
-      }, [history, metric]);
+      }, [history, metric, lang]);
 
       const METRICS = [
-        { key: 'gold',      label: 'Ouro'       },
-        { key: 'resources', label: 'Recursos'    },
-        { key: 'ships',     label: 'Navios'      },
-        { key: 'citizens',  label: 'Cidadãos'    },
+        { key: 'gold',      label: t('metric_gold')      },
+        { key: 'resources', label: t('metric_resources') },
+        { key: 'ships',     label: t('metric_ships')     },
+        { key: 'citizens',  label: t('metric_citizens')  },
       ];
 
       return (
         <div>
-          <PageHeader icon="fa-chart-line" title="Histórico do Império">
+          <PageHeader icon="fa-chart-line" title={t('history_title')}>
             <div className="flex gap-1">
               {METRICS.map(m => (
                 <button
@@ -777,10 +1106,10 @@
           <Card>
             <div className="bg-slate-800 rounded-xl p-4" style={{ height: '360px' }}>
               {!history ? (
-                <div className="flex items-center justify-center h-full text-slate-400 text-sm">A carregar histórico…</div>
+                <div className="flex items-center justify-center h-full text-slate-400 text-sm">{t('loading_history')}</div>
               ) : history.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-slate-400 text-sm">
-                  Sem dados de histórico ainda. Aguarda o próximo ciclo de actualização.
+                  {t('no_history')}
                 </div>
               ) : (
                 <canvas ref={chartRef} />
@@ -790,7 +1119,11 @@
 
           {history && history.length > 0 && (
             <p className="text-xs text-slate-400 mt-2">
-              {history.length} pontos de dados — de {new Date(history[0].timestamp * 1000).toLocaleDateString('pt-PT')} a {new Date(history[history.length-1].timestamp * 1000).toLocaleDateString('pt-PT')}
+              {t('history_note', {
+                n: history.length,
+                from: new Date(history[0].timestamp * 1000).toLocaleDateString(getLocale(lang)),
+                to: new Date(history[history.length-1].timestamp * 1000).toLocaleDateString(getLocale(lang)),
+              })}
             </p>
           )}
         </div>
@@ -816,9 +1149,9 @@
       );
     }
 
-    function fmtHours(hours) {
+    function fmtHours(hours, t) {
       if (!isFinite(hours) || hours > 1e9) return '∞';
-      if (hours <= 0) return 'Disponível agora!';
+      if (hours <= 0) return t ? t('available_now') : 'Available now!';
       const totalMins = Math.round(hours * 60);
       const d = Math.floor(totalMins / 1440);
       const h = Math.floor((totalMins % 1440) / 60);
@@ -857,14 +1190,22 @@
     // cost keys from empireFunction match materials_names_tec order
     const COST_KEYS = ['wood', 'wine', 'marble', 'glass', 'sulfur'];
 
-    function fmtTs(ts) {
+    function fmtTs(ts, lang = 'en') {
       if (!ts) return '—';
-      return new Date(ts * 1000).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return new Date(ts * 1000).toLocaleString(getLocale(lang), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function fmtScore(s, lang = 'en') {
+      const n = parseInt(String(s || '').replace(/[,.\s\u00a0]/g, ''), 10) || 0;
+      if (!n) return '—';
+      return n.toLocaleString(getLocale(lang));
     }
 
     // ─── BuildingUpgradeCalc ──────────────────────────────────────────────────────
 
     function BuildingUpgradeCalc({ data }) {
+      const t = useT();
+      const lang = useLang();
       const { statusSummary } = data;
       const gold       = statusSummary.gold.total;
       const available  = statusSummary.resources.available;
@@ -888,7 +1229,7 @@
         fetch('/api/building-costs')
           .then(r => r.ok ? r.json() : Promise.reject())
           .then(d => { setCostsData(d); setCostsLoading(false); })
-          .catch(() => { setCostsLoading(false); setCostsError('Dados de custos ainda não disponíveis. O bot irá extraí-los no próximo ciclo.'); });
+          .catch(() => { setCostsLoading(false); setCostsError(true); });
       }, []);
 
       // Reset building+level when city changes
@@ -912,11 +1253,11 @@
       }, [selCity, selBuilding, selTargetLevel, costsData]);
 
       const handleForceRefresh = () => {
-        setRefreshMsg('A enviar pedido…');
+        setRefreshMsg('sending');
         fetch('/api/building-costs/refresh', { method: 'POST' })
           .then(r => r.json())
-          .then(() => setRefreshMsg('✓ Agendado! A extração começa no próximo ciclo do bot (máx. 1h).'))
-          .catch(() => setRefreshMsg('Erro ao agendar atualização.'));
+          .then(() => setRefreshMsg('ok'))
+          .catch(() => setRefreshMsg('error'));
       };
 
       const handleClear = () => { setSelCity(''); setSelBuilding(''); setSelTargetLevel(''); setNeeded([0, 0, 0, 0, 0]); };
@@ -937,18 +1278,14 @@
         <div className="space-y-5">
           <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-5 py-4 text-sm text-indigo-700 flex items-start gap-3">
             <i className="fa-solid fa-circle-info mt-0.5 flex-shrink-0" />
-            <span>
-              Calcula o tempo estimado para teres recursos suficientes para evoluir qualquer edifício.
-              Seleciona cidade, edifício e nível alvo para preenchimento automático — ou introduz os valores manualmente.
-              Considera a produção total do império, os recursos disponíveis e a compra com ouro.
-            </span>
+            <span>{t('upgrade_desc')}</span>
           </div>
 
           {/* ── Auto-fill panel ── */}
           {costsLoading && (
             <div className="flex items-center gap-2 text-slate-400 text-sm px-1">
               <div className="w-4 h-4 rounded-full border-2 border-slate-300 border-t-indigo-400 animate-spin" />
-              A carregar custos de edifícios…
+              {t('loading_costs')}
             </div>
           )}
 
@@ -956,37 +1293,37 @@
             <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 flex items-start justify-between gap-4">
               <div className="flex items-start gap-3 text-sm text-amber-700">
                 <i className="fa-solid fa-triangle-exclamation mt-0.5 flex-shrink-0" />
-                <span>{costsError}</span>
+                <span>{t('costs_unavailable')}</span>
               </div>
               <button
                 onClick={handleForceRefresh}
                 className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg transition-colors"
               >
-                <i className="fa-solid fa-rotate" /> Solicitar extração
+                <i className="fa-solid fa-rotate" /> {t('request_extraction')}
               </button>
             </div>
           )}
 
           {!costsLoading && costsData && (
             <Card>
-              <CardHeader icon="fa-wand-magic-sparkles" title="Preenchimento Automático" />
+              <CardHeader icon="fa-wand-magic-sparkles" title={t('autofill_title')} />
               <div className="p-5">
                 <div className="flex flex-wrap gap-4 items-end mb-4">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-500">Cidade</label>
+                    <label className="text-xs font-medium text-slate-500">{t('label_city')}</label>
                     <select className={selectCls} value={selCity} onChange={e => setSelCity(e.target.value)}>
-                      <option value="">— Seleciona —</option>
+                      <option value="">{t('select_placeholder')}</option>
                       {citiesWithData.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-500">Edifício</label>
+                    <label className="text-xs font-medium text-slate-500">{t('label_building')}</label>
                     <select className={selectCls} value={selBuilding} onChange={e => setSelBuilding(e.target.value)} disabled={!selCity}>
-                      <option value="">— Seleciona —</option>
+                      <option value="">{t('select_placeholder')}</option>
                       {buildingsForCity.map(b => {
                         const lvl = costsData.cities[selCity][b].currentLevel;
-                        return <option key={b} value={b}>{b} (nível {lvl})</option>;
+                        return <option key={b} value={b}>{b} ({t('level_label', { n: lvl })})</option>;
                       })}
                     </select>
                   </div>
@@ -994,10 +1331,10 @@
                   {selBuildingData && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs font-medium text-slate-500">
-                        Nível atual: <strong>{selBuildingData.currentLevel}</strong> → Evoluir até
+                        {t('current_level_label', { n: selBuildingData.currentLevel })}
                       </label>
                       <select className={selectCls} value={selTargetLevel} onChange={e => setSelTargetLevel(e.target.value)}>
-                        <option value="">— Seleciona —</option>
+                        <option value="">{t('select_placeholder')}</option>
                         {availableLevels.map(lv => <option key={lv} value={lv}>{lv}</option>)}
                       </select>
                     </div>
@@ -1008,7 +1345,7 @@
                       onClick={handleClear}
                       className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-medium rounded-lg transition-colors"
                     >
-                      <i className="fa-solid fa-xmark" /> Limpar
+                      <i className="fa-solid fa-xmark" /> {t('clear')}
                     </button>
                   )}
                 </div>
@@ -1016,16 +1353,18 @@
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
                   <p className="text-xs text-slate-400">
                     <i className="fa-regular fa-clock mr-1" />
-                    Última extração: <span className="font-medium">{fmtTs(costsData.lastUpdated)}</span>
-                    <span className="ml-2 text-slate-300">(atualiza de 3 em 3 dias)</span>
+                    {t('last_extraction', { ts: fmtTs(costsData.lastUpdated, lang) })}
+                    <span className="ml-2 text-slate-300">{t('updates_3d')}</span>
                   </p>
                   <div className="flex items-center gap-3">
-                    {refreshMsg && <span className="text-xs text-emerald-600 font-medium">{refreshMsg}</span>}
+                    {refreshMsg === 'sending' && <span className="text-xs text-slate-400">{t('sending_request')}</span>}
+                    {refreshMsg === 'ok'      && <span className="text-xs text-emerald-600 font-medium">{t('scheduled_ok')}</span>}
+                    {refreshMsg === 'error'   && <span className="text-xs text-red-500">{t('schedule_error')}</span>}
                     <button
                       onClick={handleForceRefresh}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium rounded-lg transition-colors"
                     >
-                      <i className="fa-solid fa-rotate" /> Forçar atualização
+                      <i className="fa-solid fa-rotate" /> {t('force_update')}
                     </button>
                   </div>
                 </div>
@@ -1036,21 +1375,21 @@
           {/* ── Resource inputs ── */}
           <Card>
             <CardHeader icon="fa-boxes-stacked" title={autoFilled
-              ? `Recursos: ${selBuilding} (nível ${selBuildingData?.currentLevel} → ${selTargetLevel})`
-              : 'Recursos Necessários para o Próximo Nível'
+              ? t('resources_for', { building: selBuilding, cur: selBuildingData?.currentLevel, target: selTargetLevel })
+              : t('resources_needed')
             } />
             <div className="p-5">
               {autoFilled && (
                 <div className="mb-4 flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
                   <i className="fa-solid fa-circle-check" />
-                  Valores preenchidos automaticamente — podes editá-los manualmente.
+                  {t('autofilled_msg')}
                 </div>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4 mb-5">
                 {MATERIALS.map((m, i) => (
                   <NumInput
                     key={m.en}
-                    label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m.pt}</>}
+                    label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}</>}
                     value={needed[i]}
                     onChange={v => setRes(i, v)}
                   />
@@ -1058,7 +1397,7 @@
               </div>
               <div className="w-44">
                 <NumInput
-                  label={<><i className="fa-solid fa-coins text-yellow-500" /> Preço ouro/unidade</>}
+                  label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
                   value={goldPrice}
                   onChange={setGoldPrice}
                   min={1}
@@ -1069,16 +1408,16 @@
 
           {hasInput && (
             <Card>
-              <CardHeader icon="fa-table-list" title="Estado dos Recursos" />
+              <CardHeader icon="fa-table-list" title={t('resource_status')} />
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                      <Th align="text-left" className="px-5">Recurso</Th>
-                      <Th>Necessário</Th>
-                      <Th>Disponível</Th>
-                      <Th>Em Falta</Th>
-                      <Th>Produção/h</Th>
+                      <Th align="text-left" className="px-5">Resource</Th>
+                      <Th>{t('col_needed')}</Th>
+                      <Th>{t('col_available')}</Th>
+                      <Th>{t('col_missing')}</Th>
+                      <Th>{t('col_production')}</Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1087,7 +1426,7 @@
                       return (
                         <tr key={m.en} className="border-b border-slate-100 hover:bg-slate-50">
                           <Td className="px-5 font-semibold text-slate-700">
-                            <i className={`fa-solid ${m.icon} mr-1.5 ${m.color}`} />{m.pt}
+                            <i className={`fa-solid ${m.icon} mr-1.5 ${m.color}`} />{m[lang]}
                           </Td>
                           <Td className="text-center font-mono">{fmt(needed[i])}</Td>
                           <Td className="text-center font-mono">{fmt(available[i])}</Td>
@@ -1115,43 +1454,43 @@
 
           {hasInput && (
             <Card>
-              <CardHeader icon="fa-clock" title="Estimativa de Tempo para Evolução" />
+              <CardHeader icon="fa-clock" title={t('upgrade_time_title')} />
               <div className="p-5">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className={`rounded-xl border-2 p-4 text-center ${r.timeNoGold === 0 ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                     <div className="text-xs text-slate-500 mb-1 font-medium">
-                      <i className="fa-solid fa-ban mr-1 text-slate-400" />Sem comprar com ouro
+                      <i className="fa-solid fa-ban mr-1 text-slate-400" />{t('no_gold_buying')}
                     </div>
                     <div className={`text-2xl font-bold mt-2 ${r.timeNoGold === 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
-                      {r.timeNoGold === 0 ? 'Já tens tudo!' : fmtHours(r.timeNoGold)}
+                      {r.timeNoGold === 0 ? t('have_everything') : fmtHours(r.timeNoGold, t)}
                     </div>
-                    <div className="text-xs text-slate-400 mt-2">Apenas produção do império</div>
+                    <div className="text-xs text-slate-400 mt-2">{t('empire_prod_only')}</div>
                   </div>
 
                   <div className={`rounded-xl border-2 p-4 text-center ${r.canBuyAll ? 'border-emerald-400 bg-emerald-50' : 'border-indigo-300 bg-indigo-50'}`}>
                     <div className="text-xs text-slate-500 mb-1 font-medium">
-                      <i className="fa-solid fa-coins mr-1 text-yellow-500" />Com ouro disponível
+                      <i className="fa-solid fa-coins mr-1 text-yellow-500" />{t('with_gold')}
                     </div>
-                    <div className="text-xs text-yellow-700 font-semibold mb-2">{fmt(gold)} ouro</div>
+                    <div className="text-xs text-yellow-700 font-semibold mb-2">{fmt(gold)} gold</div>
                     <div className={`text-2xl font-bold ${r.canBuyAll ? 'text-emerald-600' : 'text-indigo-600'}`}>
-                      {r.canBuyAll ? 'Já tens tudo!' : fmtHours(r.timeWithGold)}
+                      {r.canBuyAll ? t('have_everything') : fmtHours(r.timeWithGold, t)}
                     </div>
                     {!r.canBuyAll && r.timeWithGold < r.timeNoGold && (
                       <div className="text-xs text-indigo-500 mt-2 font-semibold">
-                        Poupa {fmtHours(r.timeNoGold - r.timeWithGold)}
+                        {t('saves', { t: fmtHours(r.timeNoGold - r.timeWithGold, t) })}
                       </div>
                     )}
                   </div>
 
                   <div className={`rounded-xl border-2 p-4 text-center ${r.canBuyAll ? 'border-emerald-400 bg-emerald-50' : 'border-yellow-300 bg-yellow-50'}`}>
                     <div className="text-xs text-slate-500 mb-1 font-medium">
-                      <i className="fa-solid fa-bag-shopping mr-1" />Comprar tudo já
+                      <i className="fa-solid fa-bag-shopping mr-1" />{t('buy_all')}
                     </div>
                     <div className={`text-2xl font-bold mt-2 ${r.canBuyAll ? 'text-emerald-600' : 'text-yellow-700'}`}>
-                      {fmt(r.goldNeededAll)} ouro
+                      {fmt(r.goldNeededAll)} gold
                     </div>
                     <div className={`text-xs mt-2 font-semibold ${r.canBuyAll ? 'text-emerald-500' : 'text-red-500'}`}>
-                      {r.canBuyAll ? '✓ Tens ouro suficiente!' : `Faltam ${fmt(Math.round(r.goldNeededAll - gold))} ouro`}
+                      {r.canBuyAll ? t('have_enough_gold') : t('missing_gold_amount', { n: fmt(Math.round(r.goldNeededAll - gold)) })}
                     </div>
                   </div>
                 </div>
@@ -1165,6 +1504,8 @@
     // ─── ROICalc ──────────────────────────────────────────────────────────────────
 
     function ROICalc({ data }) {
+      const t = useT();
+      const lang = useLang();
       const [resType,    setResType]    = useState('wood');
       const [numCities,  setNumCities]  = useState(2);
       const [gainIsland, setGainIsland] = useState(0);
@@ -1177,11 +1518,11 @@
       const setCostC = (i, v) => setCostCity(p => { const c = [...p]; c[i] = v; return c; });
 
       const isWood        = resType === 'wood';
-      const islandBldName = isWood ? 'Serraria' : 'Pedreira';
-      const cityBldName   = isWood ? 'Guarda Florestal' : 'Pedreiro';
+      const islandBldName = isWood ? t('wood_island_bld') : t('marble_island_bld');
+      const cityBldName   = isWood ? t('wood_city_bld')   : t('marble_city_bld');
       const resIcon       = isWood ? 'fa-tree' : 'fa-mountain';
       const resColorCls   = isWood ? 'text-green-500' : 'text-slate-400';
-      const resPt         = isWood ? 'Madeira' : 'Mármore';
+      const resName       = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
 
       const totalIslandGain = gainIsland * numCities;
       const totalCityGain   = gainCity;
@@ -1201,39 +1542,35 @@
         <div className="space-y-5">
           <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-5 py-4 text-sm text-indigo-700 flex items-start gap-3">
             <i className="fa-solid fa-circle-info mt-0.5 flex-shrink-0" />
-            <span>
-              Compara o retorno por ouro investido (ROI) entre evoluir o edifício da <strong>ilha</strong> (beneficia todas as cidades)
-              vs o edifício da <strong>cidade</strong> (beneficia apenas essa cidade).
-              Introduz o ganho de produção do nível seguinte (visível no jogo) e o custo de evolução.
-            </span>
+            <span>{t('roi_desc')}</span>
           </div>
 
           <Card>
-            <CardHeader icon="fa-sliders" title="Configuração" />
+            <CardHeader icon="fa-sliders" title={t('config_title')} />
             <div className="p-5 flex flex-wrap gap-5 items-end">
               <div>
-                <p className="text-xs font-medium text-slate-500 mb-2">Tipo de recurso</p>
+                <p className="text-xs font-medium text-slate-500 mb-2">{t('resource_type')}</p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setResType('wood')}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${resType === 'wood' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                   >
-                    <i className="fa-solid fa-tree" /> Madeira
+                    <i className="fa-solid fa-tree" /> {MATERIALS[0][lang]}
                   </button>
                   <button
                     onClick={() => setResType('marble')}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${resType === 'marble' ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                   >
-                    <i className="fa-solid fa-mountain" /> Mármore
+                    <i className="fa-solid fa-mountain" /> {MATERIALS[2][lang]}
                   </button>
                 </div>
               </div>
               <div className="w-36">
-                <NumInput label="Nº de cidades na ilha" value={numCities} onChange={setNumCities} min={1} />
+                <NumInput label={t('cities_on_island')} value={numCities} onChange={setNumCities} min={1} />
               </div>
               <div className="w-44">
                 <NumInput
-                  label={<><i className="fa-solid fa-coins text-yellow-500" /> Preço ouro/unidade</>}
+                  label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
                   value={goldPrice}
                   onChange={setGoldPrice}
                   min={1}
@@ -1245,26 +1582,25 @@
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
             {/* Island building panel */}
             <Card className={islandWins ? 'ring-2 ring-emerald-400' : ''}>
-              <CardHeader icon="fa-globe" title={`${islandBldName} (Ilha)`} />
+              <CardHeader icon="fa-globe" title={`${islandBldName} ${t('island_label')}`} />
               <div className="p-5 space-y-4">
                 <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
                   <i className="fa-solid fa-city mr-1" />
-                  Beneficia <strong>todas as {numCities} cidades</strong> da ilha.
-                  Ganho total = ganho/cidade × {numCities}.
+                  {t('benefits_all_cities', { n: numCities })}
                 </div>
                 <NumInput
-                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> Ganho {resPt}/h por cidade (nível seguinte)</>}
+                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> {t('gain_per_city_label', { res: resName })}</>}
                   value={gainIsland}
                   onChange={setGainIsland}
                   min={0}
                 />
                 <div>
-                  <p className="text-xs font-medium text-slate-500 mb-2">Custo de evolução:</p>
+                  <p className="text-xs font-medium text-slate-500 mb-2">{t('upgrade_cost_label')}</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {MATERIALS.map((m, i) => (
                       <NumInput
                         key={m.en}
-                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m.pt}</>}
+                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}</>}
                         value={costIsland[i]}
                         onChange={v => setCostI(i, v)}
                       />
@@ -1274,22 +1610,22 @@
                 <div className={`rounded-xl border-2 p-4 ${islandWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs text-slate-500 mb-1">Ganho Total</div>
+                      <div className="text-xs text-slate-500 mb-1">{t('total_gain')}</div>
                       <div className="text-2xl font-bold text-slate-800">
-                        {fmt(totalIslandGain)} <span className="text-sm font-normal text-slate-400">{resPt}/h</span>
+                        {fmt(totalIslandGain)} <span className="text-sm font-normal text-slate-400">{resName}/h</span>
                       </div>
                     </div>
                     {islandWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
-                  <div className="text-xs text-slate-500 mt-2">Custo equiv.: {fmt(costIslandGold)} ouro</div>
+                  <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(costIslandGold) })}</div>
                   {roiIsland !== null && (
                     <div className="text-xs font-semibold text-indigo-600 mt-1">
-                      ROI: {roiIsland.toFixed(5)} {resPt}/ouro
+                      ROI: {roiIsland.toFixed(5)} {resName}/gold
                     </div>
                   )}
                   {islandWins && (
                     <div className="text-xs text-emerald-600 font-bold mt-2">
-                      <i className="fa-solid fa-check-circle mr-1" />Melhor opção!
+                      <i className="fa-solid fa-check-circle mr-1" />{t('best_option')}
                     </div>
                   )}
                 </div>
@@ -1298,25 +1634,25 @@
 
             {/* City building panel */}
             <Card className={cityWins ? 'ring-2 ring-emerald-400' : ''}>
-              <CardHeader icon="fa-house" title={`${cityBldName} (Cidade)`} />
+              <CardHeader icon="fa-house" title={`${cityBldName} ${t('city_building_label')}`} />
               <div className="p-5 space-y-4">
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
                   <i className="fa-solid fa-house mr-1" />
-                  Beneficia <strong>apenas esta cidade</strong>. Não afecta as outras cidades da ilha.
+                  {t('benefits_only_city')}
                 </div>
                 <NumInput
-                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> Ganho {resPt}/h nesta cidade (nível seguinte)</>}
+                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> {t('gain_this_city_label', { res: resName })}</>}
                   value={gainCity}
                   onChange={setGainCity}
                   min={0}
                 />
                 <div>
-                  <p className="text-xs font-medium text-slate-500 mb-2">Custo de evolução:</p>
+                  <p className="text-xs font-medium text-slate-500 mb-2">{t('upgrade_cost_label')}</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {MATERIALS.map((m, i) => (
                       <NumInput
                         key={m.en}
-                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m.pt}</>}
+                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}</>}
                         value={costCity[i]}
                         onChange={v => setCostC(i, v)}
                       />
@@ -1326,22 +1662,22 @@
                 <div className={`rounded-xl border-2 p-4 ${cityWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs text-slate-500 mb-1">Ganho Total</div>
+                      <div className="text-xs text-slate-500 mb-1">{t('total_gain')}</div>
                       <div className="text-2xl font-bold text-slate-800">
-                        {fmt(totalCityGain)} <span className="text-sm font-normal text-slate-400">{resPt}/h</span>
+                        {fmt(totalCityGain)} <span className="text-sm font-normal text-slate-400">{resName}/h</span>
                       </div>
                     </div>
                     {cityWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
-                  <div className="text-xs text-slate-500 mt-2">Custo equiv.: {fmt(costCityGold)} ouro</div>
+                  <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(costCityGold) })}</div>
                   {roiCity !== null && (
                     <div className="text-xs font-semibold text-indigo-600 mt-1">
-                      ROI: {roiCity.toFixed(5)} {resPt}/ouro
+                      ROI: {roiCity.toFixed(5)} {resName}/gold
                     </div>
                   )}
                   {cityWins && (
                     <div className="text-xs text-emerald-600 font-bold mt-2">
-                      <i className="fa-solid fa-check-circle mr-1" />Melhor opção!
+                      <i className="fa-solid fa-check-circle mr-1" />{t('best_option')}
                     </div>
                   )}
                 </div>
@@ -1351,11 +1687,11 @@
 
           {showCompare && (
             <Card>
-              <CardHeader icon="fa-scale-balanced" title="Comparação de ROI" />
+              <CardHeader icon="fa-scale-balanced" title={t('roi_comparison')} />
               <div className="p-5 space-y-4">
                 {[
-                  { label: `${islandBldName} (Ilha)`,    gain: totalIslandGain, costGold: costIslandGold, roi: roiIsland, wins: islandWins },
-                  { label: `${cityBldName} (Cidade)`,    gain: totalCityGain,   costGold: costCityGold,   roi: roiCity,   wins: cityWins   },
+                  { label: `${islandBldName} ${t('island_label')}`,       gain: totalIslandGain, costGold: costIslandGold, roi: roiIsland, wins: islandWins },
+                  { label: `${cityBldName} ${t('city_building_label')}`,   gain: totalCityGain,   costGold: costCityGold,   roi: roiCity,   wins: cityWins   },
                 ].map((opt, i) => {
                   const barPct = maxRoi > 0 && opt.roi !== null ? Math.round((opt.roi / maxRoi) * 100) : 0;
                   return (
@@ -1366,7 +1702,7 @@
                           {opt.label}
                         </span>
                         <div className="text-xs text-slate-500 text-right">
-                          +{fmt(opt.gain)} {resPt}/h &nbsp;|&nbsp; {fmt(opt.costGold)} ouro
+                          +{fmt(opt.gain)} {resName}/h &nbsp;|&nbsp; {fmt(opt.costGold)} {t('gold_label')}
                           {opt.roi !== null && <span className="ml-2 font-semibold text-indigo-600">ROI: {opt.roi.toFixed(5)}</span>}
                         </div>
                       </div>
@@ -1385,8 +1721,8 @@
                   <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm text-emerald-800 font-medium">
                     <i className="fa-solid fa-lightbulb mr-2 text-yellow-500" />
                     {islandWins
-                      ? `Evoluir a ${islandBldName} é mais vantajoso: beneficia ${numCities} cidades por o mesmo investimento.`
-                      : `Evoluir o ${cityBldName} é mais vantajoso: melhor retorno por ouro investido nesta configuração.`
+                      ? t('island_better', { name: islandBldName, n: numCities })
+                      : t('city_better_roi', { name: cityBldName })
                     }
                   </div>
                 )}
@@ -1400,14 +1736,15 @@
     // ─── CalculadorasPage ─────────────────────────────────────────────────────────
 
     function CalculadorasPage({ data }) {
+      const t = useT();
       const [tab, setTab] = useState('upgrade');
       const tabs = [
-        { key: 'upgrade', label: 'Evolução de Edifícios',    icon: 'fa-building-columns' },
-        { key: 'roi',     label: 'ROI Serraria / Pedreira',  icon: 'fa-scale-balanced'   },
+        { key: 'upgrade', label: t('tab_upgrade'), icon: 'fa-building-columns' },
+        { key: 'roi',     label: t('tab_roi'),     icon: 'fa-scale-balanced'   },
       ];
       return (
         <div>
-          <PageHeader icon="fa-calculator" title="Calculadoras" />
+          <PageHeader icon="fa-calculator" title={t('calc_title')} />
           <div className="flex gap-2 mb-6 flex-wrap">
             {tabs.map(t => (
               <button
@@ -1432,14 +1769,8 @@
 
     // ─── MundoPage ───────────────────────────────────────────────────────────────
 
-    const MARK_CONFIG = {
-      novo:    { label: 'Novo',    bg: 'bg-blue-100',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
-      alvo:    { label: 'Alvo',    bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
-      visto:   { label: 'Visto',   bg: 'bg-slate-100',  text: 'text-slate-500',  ring: 'ring-slate-300'  },
-      ignorar: { label: 'Ignorar', bg: 'bg-slate-50',   text: 'text-slate-400',  ring: 'ring-slate-200'  },
-    };
-
     function MarkBadge({ status }) {
+      const MARK_CONFIG = useMarkConfig();
       const cfg = MARK_CONFIG[status] || MARK_CONFIG.novo;
       return (
         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}>
@@ -1449,6 +1780,7 @@
     }
 
     function MarkSelect({ playerId, current, onChange }) {
+      const MARK_CONFIG = useMarkConfig();
       return (
         <select
           value={current}
@@ -1468,33 +1800,44 @@
       return parseInt(String(s).replace(/[,.\s\u00a0]/g, ''), 10) || 0;
     }
 
-    function fmtScore(s) {
-      const n = parseScore(s);
-      if (!n) return '—';
-      return n.toLocaleString('pt-PT');
-    }
-
     function StatePill({ state }) {
+      const t = useT();
       if (state === 'inactive') return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" /> Inactivo
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" /> {t('state_inactive')}
         </span>
       );
       if (state === 'vacation') return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
-          <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" /> Férias
+          <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" /> {t('state_vacation')}
         </span>
       );
       return <span className="text-slate-400 text-xs">{state}</span>;
     }
 
-    const RESOURCE_LABELS = ['', 'Vinho', 'Mármore', 'Cristal', 'Enxofre'];
     const RESOURCE_ICONS  = ['', 'fa-wine-bottle', 'fa-mountain', 'fa-gem', 'fa-flask'];
     const RESOURCE_COLORS = ['', 'text-red-400', 'text-slate-400', 'text-cyan-400', 'text-yellow-400'];
+
+    function useResourceLabels() {
+      const t = useT();
+      return ['', t('res_wine'), t('res_marble'), t('res_crystal'), t('res_sulfur')];
+    }
+
+    function useMarkConfig() {
+      const t = useT();
+      return {
+        novo:    { label: t('mark_novo'),    bg: 'bg-blue-100',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
+        alvo:    { label: t('mark_alvo'),    bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
+        visto:   { label: t('mark_visto'),   bg: 'bg-slate-100',  text: 'text-slate-500',  ring: 'ring-slate-300'  },
+        ignorar: { label: t('mark_ignorar'), bg: 'bg-slate-50',   text: 'text-slate-400',  ring: 'ring-slate-200'  },
+      };
+    }
 
     // ─── Inactivos sub-tab ───────────────────────────────────────────────────────
 
     function InactivosTab({ scanData, scanStatus, loading, error, marks, setMarks, onForceRefresh }) {
+      const t = useT();
+      const lang = useLang();
       const [filterDist, setFilterDist]   = useState(20);
       const [filterState, setFilterState] = useState('all');
       const [filterMark, setFilterMark]   = useState('excl_ignorar');
@@ -1556,24 +1899,24 @@
       );
 
       const handleExportCsv = () => {
-        const header = ['Jogador', 'Aliança', 'Estado', 'Novo?', 'Ilha', 'Coord', 'Cidade próxima', 'Dist.',
-                        'Score Militar', 'Score Edifícios', 'Rank', 'Marcação'];
+        const header = [t('col_player'), t('col_alliance'), t('filter_state'), 'New?', t('col_island'), 'Coord', 'Nearest city', t('col_dist'),
+                        'Military score', 'Building score', 'Rank', t('col_mark')];
         const rows = [header, ...players.map(p => [
-          p.playerName, p.allyTag || '—', p.state, p.isNew ? 'Sim' : 'Não',
+          p.playerName, p.allyTag || '—', p.state, p.isNew ? 'Yes' : 'No',
           p.islandName, `(${p.islandX},${p.islandY})`,
           p.nearestOwnCity, p.distance,
-          fmtScore(p.scores?.army), fmtScore(p.scores?.building), p.scores?.rank || '—',
+          fmtScore(p.scores?.army, lang), fmtScore(p.scores?.building, lang), p.scores?.rank || '—',
           marks[p.playerId] || 'novo',
         ])];
-        exportCsv(`inactivos_${new Date().toISOString().slice(0,10)}.csv`, rows);
+        exportCsv(`inactive_${new Date().toISOString().slice(0,10)}.csv`, rows);
       };
 
-      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>;
+      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>;
       if (error)   return (
         <Card className="p-8 text-center">
           <p className="text-slate-500 text-sm mb-3">{error}</p>
           <button onClick={onForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">
-            Forçar primeiro scan
+            {t('force_first_scan')}
           </button>
         </Card>
       );
@@ -1592,36 +1935,36 @@
                 }`}
               >
                 <i className="fa-solid fa-star" />
-                Novos esta semana {newCount > 0 && <span className={`ml-1 px-1.5 rounded-full text-[10px] font-bold ${filterNew ? 'bg-emerald-400 text-white' : 'bg-emerald-100 text-emerald-700'}`}>{newCount}</span>}
+                {t('new_this_week')} {newCount > 0 && <span className={`ml-1 px-1.5 rounded-full text-[10px] font-bold ${filterNew ? 'bg-emerald-400 text-white' : 'bg-emerald-100 text-emerald-700'}`}>{newCount}</span>}
               </button>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
+                <label className="text-xs text-slate-500 whitespace-nowrap">{t('max_dist')}</label>
                 <select value={filterDist} onChange={e => setFilterDist(Number(e.target.value))}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  {[5, 8, 10, 15, 20, 30, 0].map(v => <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>)}
+                  {[5, 8, 10, 15, 20, 30, 0].map(v => <option key={v} value={v}>{v === 0 ? t('all') : `≤ ${v}`}</option>)}
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Estado</label>
+                <label className="text-xs text-slate-500">{t('filter_state')}</label>
                 <select value={filterState} onChange={e => setFilterState(e.target.value)}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  <option value="all">Todos</option>
-                  <option value="inactive">Inactivos</option>
-                  <option value="vacation">Férias</option>
+                  <option value="all">{t('all')}</option>
+                  <option value="inactive">{t('filter_inactive')}</option>
+                  <option value="vacation">{t('filter_vacation')}</option>
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Marcação</label>
+                <label className="text-xs text-slate-500">{t('filter_mark')}</label>
                 <select value={filterMark} onChange={e => setFilterMark(e.target.value)}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  <option value="excl_ignorar">Excluir Ignorados</option>
-                  <option value="all">Todos</option>
-                  <option value="novo">Apenas Novos</option>
-                  <option value="alvo">Apenas Alvos</option>
-                  <option value="visto">Apenas Vistos</option>
+                  <option value="excl_ignorar">{t('excl_ignored')}</option>
+                  <option value="all">{t('all')}</option>
+                  <option value="novo">{t('only_new')}</option>
+                  <option value="alvo">{t('only_target')}</option>
+                  <option value="visto">{t('only_seen')}</option>
                 </select>
               </div>
-              <input type="text" placeholder="Pesquisar jogador…" value={search} onChange={e => setSearch(e.target.value)}
+              <input type="text" placeholder={t('search_player')} value={search} onChange={e => setSearch(e.target.value)}
                 className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-1 min-w-[160px]" />
               <button onClick={handleExportCsv}
                 className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
@@ -1631,21 +1974,21 @@
           </Card>
 
           {players.length === 0 ? (
-            <Card className="p-8 text-center text-slate-400 text-sm">Nenhum jogador encontrado com os filtros actuais.</Card>
+            <Card className="p-8 text-center text-slate-400 text-sm">{t('no_players_found')}</Card>
           ) : (
             <Card>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                      <SortTh colKey="player" align="text-left">Jogador</SortTh>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Aliança</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Estado</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Ilha</th>
-                      <SortTh colKey="distance">Dist.</SortTh>
-                      <SortTh colKey="army">Militar</SortTh>
-                      <SortTh colKey="building">Edifícios</SortTh>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Marcação</th>
+                      <SortTh colKey="player" align="text-left">{t('col_player')}</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_alliance')}</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('filter_state')}</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_island')}</th>
+                      <SortTh colKey="distance">{t('col_dist')}</SortTh>
+                      <SortTh colKey="army">{t('col_military')}</SortTh>
+                      <SortTh colKey="building">{t('col_buildings_score')}</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_mark')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1657,7 +2000,7 @@
                             {p.playerName}
                             {p.isNew && (
                               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
-                                <i className="fa-solid fa-star text-[8px]" /> Novo
+                                <i className="fa-solid fa-star text-[8px]" /> {t('new_badge')}
                               </span>
                             )}
                           </div>
@@ -1678,11 +2021,11 @@
                           <br /><span className="text-slate-400 text-xs">{p.nearestOwnCity}</span>
                         </Td>
                         <Td className="text-center font-mono text-slate-700">
-                          {fmtScore(p.scores?.army)}
+                          {fmtScore(p.scores?.army, lang)}
                           {p.scores?.rank && <div className="text-slate-400 text-[10px]">#{p.scores.rank}</div>}
                         </Td>
                         <Td className="text-center font-mono text-slate-600 text-xs">
-                          {fmtScore(p.scores?.building)}
+                          {fmtScore(p.scores?.building, lang)}
                         </Td>
                         <Td className="text-center">
                           <MarkSelect playerId={p.playerId} current={marks[p.playerId] || 'novo'} onChange={handleMark} />
@@ -1693,8 +2036,8 @@
                 </table>
               </div>
               <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
-                {players.length} jogador{players.length !== 1 ? 'es' : ''}
-                {newCount > 0 && <span className="ml-2 text-emerald-600 font-medium">· {newCount} novos esta semana</span>}
+                {players.length !== 1 ? t('player_count_plural', { n: players.length }) : t('player_count_single', { n: players.length })}
+                {newCount > 0 && <span className="ml-2 text-emerald-600 font-medium">{t('new_count_note', { n: newCount })}</span>}
               </div>
             </Card>
           )}
@@ -1705,6 +2048,9 @@
     // ─── Ilhas sub-tab ───────────────────────────────────────────────────────────
 
     function IlhasTab({ scanData, loading, error, onForceRefresh }) {
+      const t = useT();
+      const lang = useLang();
+      const RESOURCE_LABELS = useResourceLabels();
       const [filterDist, setFilterDist]     = useState(0);
       const [filterFree, setFilterFree]     = useState(true);
       const [filterOwn, setFilterOwn]       = useState(false);
@@ -1747,21 +2093,21 @@
       );
 
       const handleExportCsv = () => {
-        const header = ['Ilha', 'Coord', 'Recurso', 'Floresta', 'Recurso Lux.', 'Maravilha', 'Lv Maravilha', 'Slots Livres', 'Total Slots', 'Cidade próxima', 'Dist.'];
+        const header = [t('col_island'), 'Coord', t('col_resource'), t('col_forest'), 'Lux.', t('col_wonder'), 'Lv Wonder', t('col_free_slots'), 'Total Slots', 'Nearest city', t('col_dist')];
         const rows = [header, ...islands.map(i => [
           i.islandName, `(${i.x},${i.y})`,
           RESOURCE_LABELS[i.resourceType] || '—', i.woodLevel || '—', i.luxuryLevel || '—',
           i.wonder || '—', i.wonderLevel || '—', i.freeSlots, i.totalSlots,
           i.nearestOwnCity, i.distance,
         ])];
-        exportCsv(`ilhas_${new Date().toISOString().slice(0,10)}.csv`, rows);
+        exportCsv(`islands_${new Date().toISOString().slice(0,10)}.csv`, rows);
       };
 
-      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">A carregar…</Card>;
+      if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>;
       if (error || !scanData?.islands) return (
         <Card className="p-8 text-center">
-          <p className="text-slate-500 text-sm mb-3">{error || 'Dados de ilhas não disponíveis. Aguarda o primeiro scan.'}</p>
-          <button onClick={onForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">Forçar Scan</button>
+          <p className="text-slate-500 text-sm mb-3">{error || t('islands_not_available')}</p>
+          <button onClick={onForceRefresh} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg">{t('force_scan')}</button>
         </Card>
       );
 
@@ -1771,25 +2117,25 @@
             <div className="px-5 py-3 flex flex-wrap items-center gap-3">
               <button onClick={() => setFilterFree(v => !v)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterFree ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-                <i className="fa-solid fa-circle-plus" /> Apenas com slots livres
+                <i className="fa-solid fa-circle-plus" /> {t('only_free_slots')}
               </button>
               <button onClick={() => setFilterOwn(v => !v)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${filterOwn ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-                <i className="fa-solid fa-flag" /> Incluir ilhas próprias
+                <i className="fa-solid fa-flag" /> {t('include_own_islands')}
               </button>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">Recurso</label>
+                <label className="text-xs text-slate-500">{t('filter_resource')}</label>
                 <select value={filterResource} onChange={e => setFilterResource(Number(e.target.value))}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  <option value={0}>Todos</option>
+                  <option value={0}>{t('all')}</option>
                   {RESOURCE_LABELS.slice(1).map((l, i) => <option key={i+1} value={i+1}>{l}</option>)}
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500 whitespace-nowrap">Dist. máx.</label>
+                <label className="text-xs text-slate-500 whitespace-nowrap">{t('max_dist')}</label>
                 <select value={filterDist} onChange={e => setFilterDist(Number(e.target.value))}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  {[5, 8, 10, 15, 20, 0].map(v => <option key={v} value={v}>{v === 0 ? 'Todos' : `≤ ${v}`}</option>)}
+                  {[5, 8, 10, 15, 20, 0].map(v => <option key={v} value={v}>{v === 0 ? t('all') : `≤ ${v}`}</option>)}
                 </select>
               </div>
               <button onClick={handleExportCsv}
@@ -1800,20 +2146,20 @@
           </Card>
 
           {islands.length === 0 ? (
-            <Card className="p-8 text-center text-slate-400 text-sm">Nenhuma ilha encontrada com os filtros actuais.</Card>
+            <Card className="p-8 text-center text-slate-400 text-sm">{t('no_islands_found')}</Card>
           ) : (
             <Card>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                      <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">Ilha</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Recurso</th>
-                      <SortTh colKey="wood">Floresta</SortTh>
-                      <SortTh colKey="luxury">Lv Recurso</SortTh>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">Maravilha</th>
-                      <SortTh colKey="freeSlots">Slots Livres</SortTh>
-                      <SortTh colKey="distance">Dist.</SortTh>
+                      <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_island')}</th>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_resource')}</th>
+                      <SortTh colKey="wood">{t('col_forest')}</SortTh>
+                      <SortTh colKey="luxury">{t('col_lux_level')}</SortTh>
+                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_wonder')}</th>
+                      <SortTh colKey="freeSlots">{t('col_free_slots')}</SortTh>
+                      <SortTh colKey="distance">{t('col_dist')}</SortTh>
                     </tr>
                   </thead>
                   <tbody>
@@ -1823,7 +2169,7 @@
                         <Td className="font-medium text-slate-800">
                           {isl.islandName}
                           <span className="text-slate-400 text-xs ml-1">({isl.x},{isl.y})</span>
-                          {isl.hasOwnCity && <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium">tua</span>}
+                          {isl.hasOwnCity && <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium">{t('own_city_badge')}</span>}
                         </Td>
                         <Td className="text-center">
                           {isl.resourceType > 0 && (
@@ -1856,7 +2202,7 @@
                 </table>
               </div>
               <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
-                {islands.length} ilha{islands.length !== 1 ? 's' : ''}
+                {islands.length !== 1 ? t('island_count_plural', { n: islands.length }) : t('island_count_single', { n: islands.length })}
               </div>
             </Card>
           )}
@@ -1867,6 +2213,8 @@
     // ─── MundoPage (shell with sub-tabs) ────────────────────────────────────────
 
     function MundoPage() {
+      const t = useT();
+      const lang = useLang();
       const [tab, setTab]             = useState('inactivos');
       const [scanData, setScanData]   = useState(null);
       const [scanStatus, setScanStatus] = useState(null);
@@ -1884,7 +2232,7 @@
             setMarks(m);
             setLoading(false);
           })
-          .catch(e => { setError(typeof e === 'string' ? e : 'Erro ao carregar dados do scan'); setLoading(false); });
+          .catch(e => { setError(typeof e === 'string' ? e : 'Error loading scan data'); setLoading(false); });
       }, []);
 
       const fetchStatus = useCallback(() => {
@@ -1904,24 +2252,24 @@
 
       const handleForceRefresh = () => {
         fetch('/api/world-scan/refresh', { method: 'POST' })
-          .then(() => alert('Scan forçado agendado. Será executado no próximo ciclo do bot (~5-15 min).'));
+          .then(() => alert(t('scan_scheduled_msg')));
       };
 
       const isRunning = scanStatus?.status === 'running';
       const lastUpdated = scanData?.lastUpdated
-        ? new Date(scanData.lastUpdated * 1000).toLocaleString('pt-PT') : null;
+        ? new Date(scanData.lastUpdated * 1000).toLocaleString(getLocale(lang)) : null;
       const nextScan = scanData?.lastUpdated
-        ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString('pt-PT') : null;
+        ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString(getLocale(lang)) : null;
       const newCount = (scanData?.players || []).filter(p => p.isNew).length;
 
       const TABS = [
-        { key: 'inactivos', label: 'Inactivos', icon: 'fa-user-slash' },
-        { key: 'ilhas',     label: 'Ilhas',     icon: 'fa-map'        },
+        { key: 'inactivos', label: t('tab_inactive'), icon: 'fa-user-slash' },
+        { key: 'ilhas',     label: t('tab_islands'),  icon: 'fa-map'        },
       ];
 
       return (
         <div>
-          <PageHeader icon="fa-earth-europe" title="Mundo" />
+          <PageHeader icon="fa-earth-europe" title={t('world_title')} />
 
           {/* Status card */}
           <Card className="mb-4">
@@ -1930,18 +2278,18 @@
                 {lastUpdated ? (
                   <p className="text-sm text-slate-600">
                     <i className="fa-regular fa-clock mr-1.5 text-slate-400" />
-                    Último scan: <span className="font-medium text-slate-800">{lastUpdated}</span>
-                    {nextScan && <span className="ml-3 text-slate-400 text-xs">próximo: {nextScan}</span>}
+                    {t('last_scan_label')} <span className="font-medium text-slate-800">{lastUpdated}</span>
+                    {nextScan && <span className="ml-3 text-slate-400 text-xs">{t('next_scan_label')} {nextScan}</span>}
                   </p>
                 ) : (
-                  <p className="text-sm text-slate-500">Nenhum scan realizado ainda.</p>
+                  <p className="text-sm text-slate-500">{t('no_scan_yet')}</p>
                 )}
                 {scanData && (
                   <p className="text-xs text-slate-400">
-                    Raio: {scanData.scanRadius}
-                    {' · '}Inactivos: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
-                    {newCount > 0 && <span className="ml-1.5 text-emerald-600 font-semibold">({newCount} novos)</span>}
-                    {scanData.islands && <span>{' · '}Ilhas: <span className="font-semibold text-slate-600">{scanData.islands.length}</span></span>}
+                    {t('scan_radius')}: {scanData.scanRadius}
+                    {' · '}{t('inactive_label')}: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
+                    {newCount > 0 && <span className="ml-1.5 text-emerald-600 font-semibold">{t('new_count_world', { n: newCount })}</span>}
+                    {scanData.islands && <span>{' · '}{t('islands_count_world')}: <span className="font-semibold text-slate-600">{scanData.islands.length}</span></span>}
                   </p>
                 )}
                 {isRunning && (
@@ -1962,7 +2310,7 @@
               <button onClick={handleForceRefresh} disabled={isRunning}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                 <i className="fa-solid fa-rotate" />
-                {isRunning ? 'A escanear…' : 'Forçar Scan'}
+                {isRunning ? t('scanning') : t('force_scan')}
               </button>
             </div>
           </Card>
@@ -2000,27 +2348,29 @@
     // ─── Loading / Error screens ─────────────────────────────────────────────────
 
     function LoadingScreen() {
+      const t = useT();
       return (
         <div className="flex items-center justify-center h-screen bg-slate-100">
           <div className="text-center">
             <div className="w-12 h-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin mx-auto mb-4" />
-            <p className="text-slate-500 text-sm">A carregar dados do império…</p>
+            <p className="text-slate-500 text-sm">{t('loading_empire')}</p>
           </div>
         </div>
       );
     }
 
     function ErrorScreen({ message }) {
+      const t = useT();
       return (
         <div className="flex items-center justify-center h-screen bg-slate-100">
           <div className="bg-white rounded-xl border border-red-200 shadow p-8 text-center max-w-sm">
             <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4">
               <i className="fa-solid fa-triangle-exclamation text-red-400 text-xl" />
             </div>
-            <h2 className="text-slate-800 font-semibold mb-2">Erro ao carregar dados</h2>
+            <h2 className="text-slate-800 font-semibold mb-2">{t('error_loading')}</h2>
             <p className="text-red-500 text-sm">{message}</p>
             <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors">
-              Tentar novamente
+              {t('try_again')}
             </button>
           </div>
         </div>
@@ -2030,6 +2380,15 @@
     // ─── App ─────────────────────────────────────────────────────────────────────
 
     function App() {
+      const [lang, setLang] = useState(loadLang);
+      const toggleLang = useCallback(() => {
+        setLang(prev => {
+          const next = prev === 'en' ? 'pt' : 'en';
+          try { localStorage.setItem('ikabot_lang', next); } catch {}
+          return next;
+        });
+      }, []);
+
       const [page, setPage]       = useState('home');
       const [data, setData]       = useState(null);
       const [error, setError]     = useState(null);
@@ -2082,10 +2441,11 @@
         fetch('/api/movements').then(r => r.json()).then(m => setMovCount(m.filter(x => x.isOwn).length)).catch(() => {});
       }, [data]);
 
-      if (error) return <ErrorScreen message={error} />;
-      if (!data)  return <LoadingScreen />;
+      if (error) return <LangContext.Provider value={lang}><ErrorScreen message={error} /></LangContext.Provider>;
+      if (!data)  return <LangContext.Provider value={lang}><LoadingScreen /></LangContext.Provider>;
 
       return (
+        <LangContext.Provider value={lang}>
         <div className="flex h-screen overflow-hidden">
           <Sidebar
             active={page}
@@ -2095,6 +2455,8 @@
             alertCount={alertCount}
             movCount={movCount}
             countdown={countdown}
+            lang={lang}
+            toggleLang={toggleLang}
           />
           <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
             {page === 'home'      && <HomePage      data={data} />}
@@ -2107,6 +2469,7 @@
             {page === 'mundo'     && <MundoPage />}
           </main>
         </div>
+        </LangContext.Provider>
       );
     }
 
