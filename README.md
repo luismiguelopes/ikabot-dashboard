@@ -23,10 +23,10 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
    - `resources.json` — per-city resource amounts and wine timers
    - `movements.json` — active fleet and army movements
 4. Appends a timestamped snapshot to `history.jsonl` (capped at ~90 days).
-5. Triggers a background thread every 3 days to collect building upgrade costs for all non-maxed buildings, writing `building_costs.json`.
-6. Triggers a background thread every 7 days to scan nearby islands for inactive or vacation players, writing `world_scan.json`.
+5. If building upgrade costs are due (every 3 days), runs the cost collector inline before sleeping, writing `building_costs.json`.
+6. Otherwise, if the world scan is due (every 7 days), runs it inline before sleeping, writing `world_scan.json` with inactive/vacation players and island summaries (free slots, resource and wonder levels). The previous scan is kept as `world_scan_prev.json` to detect newly inactive players.
 
-All HTTP requests to the game server use randomised delays to simulate human behaviour (anti-detection).
+Steps 5 and 6 are mutually exclusive per cycle — only one runs at a time, keeping HTTP requests strictly sequential. All requests use randomised delays to simulate human behaviour (anti-detection).
 
 The `ikabot-gui` container serves a Flask app on port `5001` that reads those files and exposes them via a REST API, consumed by the React frontend.
 
@@ -87,7 +87,7 @@ docker compose up -d
 | Alertas | Configurable alerts (wine, storage, etc.) |
 | Histórico | Charts of empire stats over the last 7 days |
 | Calculadoras | Building upgrade time estimator and island vs city ROI comparator |
-| Mundo | Inactive and vacation players near own cities — sortable, filterable, with per-player marks |
+| Mundo | **Inactivos**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Ilhas**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure
 
