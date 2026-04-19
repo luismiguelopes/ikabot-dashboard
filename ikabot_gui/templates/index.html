@@ -430,8 +430,8 @@
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
             <NavItem icon="fa-house"        label={t('nav_home')}        active={active === 'home'}       onClick={() => setActive('home')}       />
             <NavItem icon="fa-city"         label={t('nav_cities')}      active={active === 'cities'}     onClick={() => setActive('cities')}     />
-            <NavItem icon="fa-landmark"     label={t('nav_buildings')}   active={active === 'buildings')} onClick={() => setActive('buildings')}  />
-            <NavItem icon="fa-ship"         label={t('nav_movements')}   active={active === 'movements')} onClick={() => setActive('movements')}  badge={movCount} />
+            <NavItem icon="fa-landmark"     label={t('nav_buildings')}   active={active === 'buildings'}  onClick={() => setActive('buildings')}  />
+            <NavItem icon="fa-ship"         label={t('nav_movements')}   active={active === 'movements'}  onClick={() => setActive('movements')}  badge={movCount} />
             <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')} active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
             <NavItem icon="fa-chart-line"   label={t('nav_history')}     active={active === 'history'}    onClick={() => setActive('history')}    />
             <NavItem icon="fa-calculator"   label={t('nav_calculators')} active={active === 'calc'}       onClick={() => setActive('calc')}       />
