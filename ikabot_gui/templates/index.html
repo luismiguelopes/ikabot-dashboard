@@ -37,6 +37,19 @@
 
     const AUTO_REFRESH_SECONDS = 300; // 5 minutes
 
+    const ALERT_DEFAULTS = {
+      wineWarning:  8,   // hours
+      wineCritical: 2,   // hours
+      storageWarning: 95, // %
+    };
+
+    function loadThresholds() {
+      try {
+        const stored = localStorage.getItem('ikabot_alert_thresholds');
+        return stored ? { ...ALERT_DEFAULTS, ...JSON.parse(stored) } : { ...ALERT_DEFAULTS };
+      } catch { return { ...ALERT_DEFAULTS }; }
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────────
 
     function fmt(n) {
@@ -549,40 +562,59 @@
 
     // ─── AlertsPage ───────────────────────────────────────────────────────────────
 
-    function AlertsPage({ data }) {
+    function ThresholdInput({ label, value, onChange, min, max, unit }) {
+      return (
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-slate-500 whitespace-nowrap">{label}</label>
+          <input
+            type="number"
+            min={min} max={max}
+            value={value}
+            onChange={e => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
+            className="w-16 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <span className="text-xs text-slate-400">{unit}</span>
+        </div>
+      );
+    }
+
+    function AlertsPage({ data, thresholds, onSaveThresholds }) {
       const { resourcesData, statusSummary: s } = data;
+      const [draft, setDraft] = useState(thresholds);
+      const [settingsOpen, setSettingsOpen] = useState(false);
+
+      const isDirty = JSON.stringify(draft) !== JSON.stringify(thresholds);
+
+      const handleSave = () => { onSaveThresholds(draft); setSettingsOpen(false); };
+      const handleReset = () => { setDraft({ ...ALERT_DEFAULTS }); };
+
       const alerts = [];
 
-      // Wine alerts
       Object.entries(resourcesData).forEach(([city, d]) => {
         const t = d.wineRunsOutIn;
         if (t !== -1 && t !== undefined) {
-          if (t < 2 * 3600) alerts.push({ level: 'critical', icon: 'fa-wine-bottle', color: 'text-red-600 bg-red-50 border-red-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}!` });
-          else if (t < 8 * 3600) alerts.push({ level: 'warning', icon: 'fa-wine-bottle', color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}` });
+          if (t < thresholds.wineCritical * 3600)
+            alerts.push({ level: 'critical', icon: 'fa-wine-bottle', color: 'text-red-600 bg-red-50 border-red-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}!` });
+          else if (t < thresholds.wineWarning * 3600)
+            alerts.push({ level: 'warning', icon: 'fa-wine-bottle', color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: Vinho acaba em ${fmtDuration(t)}` });
         }
       });
 
-      // Storage overflow alerts (> 95%)
       Object.entries(resourcesData).forEach(([city, d]) => {
         const cap = d.storageCapacity;
         if (!cap) return;
         MATERIALS.forEach(m => {
           const val = d[m.en];
-          if (val != null && val / cap >= 0.95) {
+          if (val != null && val / cap >= thresholds.storageWarning / 100)
             alerts.push({ level: 'warning', icon: m.icon, color: 'text-yellow-700 bg-yellow-50 border-yellow-200', msg: `${city}: ${m.pt} a ${Math.round(val/cap*100)}% do armazém` });
-          }
         });
       });
 
-      // Negative gold production
-      if (s.gold.production < 0) {
+      if (s.gold.production < 0)
         alerts.push({ level: 'critical', icon: 'fa-coins', color: 'text-red-600 bg-red-50 border-red-200', msg: `Produção de ouro negativa: ${fmt(s.gold.production)}/h` });
-      }
 
-      // All ships busy
-      if (s.ships.available === 0 && s.ships.total > 0) {
+      if (s.ships.available === 0 && s.ships.total > 0)
         alerts.push({ level: 'info', icon: 'fa-ship', color: 'text-blue-600 bg-blue-50 border-blue-200', msg: `Todos os ${s.ships.total} navios estão ocupados` });
-      }
 
       const critical = alerts.filter(a => a.level === 'critical');
       const warning  = alerts.filter(a => a.level === 'warning');
@@ -590,7 +622,54 @@
 
       return (
         <div>
-          <PageHeader icon="fa-triangle-exclamation" title={`Alertas (${alerts.length})`} />
+          <PageHeader icon="fa-triangle-exclamation" title={`Alertas (${alerts.length})`}>
+            <button
+              onClick={() => { setDraft(thresholds); setSettingsOpen(v => !v); }}
+              className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                settingsOpen ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <i className="fa-solid fa-sliders" /> Configurar
+            </button>
+          </PageHeader>
+
+          {settingsOpen && (
+            <Card className="mb-4">
+              <div className="px-5 py-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Thresholds de alerta</p>
+                <div className="flex flex-wrap gap-6 items-end">
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
+                      <i className="fa-solid fa-wine-bottle text-red-400" /> Vinho
+                    </p>
+                    <ThresholdInput label="Aviso abaixo de" value={draft.wineWarning}  onChange={v => setDraft(d => ({ ...d, wineWarning: v }))}  min={1} max={72} unit="h" />
+                    <ThresholdInput label="Crítico abaixo de" value={draft.wineCritical} onChange={v => setDraft(d => ({ ...d, wineCritical: v }))} min={1} max={24} unit="h" />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
+                      <i className="fa-solid fa-warehouse text-slate-400" /> Armazém
+                    </p>
+                    <ThresholdInput label="Aviso acima de" value={draft.storageWarning} onChange={v => setDraft(d => ({ ...d, storageWarning: v }))} min={50} max={99} unit="%" />
+                  </div>
+                  <div className="flex items-center gap-2 pb-0.5">
+                    <button onClick={handleSave}
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors">
+                      Guardar
+                    </button>
+                    <button onClick={handleReset}
+                      className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                      Repor
+                    </button>
+                    {!isDirty && !settingsOpen && null}
+                  </div>
+                </div>
+                <p className="mt-3 text-[11px] text-slate-400">
+                  Valores guardados no browser (localStorage). Padrões: vinho aviso {ALERT_DEFAULTS.wineWarning}h · crítico {ALERT_DEFAULTS.wineCritical}h · armazém {ALERT_DEFAULTS.storageWarning}%
+                </p>
+              </div>
+            </Card>
+          )}
+
           {alerts.length === 0 ? (
             <Card className="p-10 text-center">
               <i className="fa-solid fa-circle-check text-4xl text-emerald-400 mb-3 block" />
@@ -1955,6 +2034,12 @@
       const [data, setData]       = useState(null);
       const [error, setError]     = useState(null);
       const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
+      const [thresholds, setThresholds] = useState(loadThresholds);
+
+      const saveThresholds = useCallback(t => {
+        setThresholds(t);
+        try { localStorage.setItem('ikabot_alert_thresholds', JSON.stringify(t)); } catch {}
+      }, []);
 
       const fetchData = useCallback(() => {
         fetch('/api/data')
@@ -1983,13 +2068,13 @@
         let n = 0;
         Object.values(data.resourcesData).forEach(d => {
           const t = d.wineRunsOutIn;
-          if (t !== -1 && t !== undefined && t < 8 * 3600) n++;
+          if (t !== -1 && t !== undefined && t < thresholds.wineWarning * 3600) n++;
           const cap = d.storageCapacity;
-          if (cap) MATERIALS.forEach(m => { if ((d[m.en] || 0) / cap >= 0.95) n++; });
+          if (cap) MATERIALS.forEach(m => { if ((d[m.en] || 0) / cap >= thresholds.storageWarning / 100) n++; });
         });
         if (data.statusSummary.gold.production < 0) n++;
         return n;
-      }, [data]);
+      }, [data, thresholds]);
 
       // Movements badge from last fetch (we track count via a separate small fetch)
       const [movCount, setMovCount] = useState(0);
@@ -2016,7 +2101,7 @@
             {page === 'cities'    && <CitiesPage    data={data} />}
             {page === 'buildings' && <BuildingsPage data={data} />}
             {page === 'movements' && <MovementsPage />}
-            {page === 'alerts'    && <AlertsPage    data={data} />}
+            {page === 'alerts'    && <AlertsPage    data={data} thresholds={thresholds} onSaveThresholds={saveThresholds} />}
             {page === 'history'   && <HistoryPage />}
             {page === 'calc'      && <CalculadorasPage data={data} />}
             {page === 'mundo'     && <MundoPage />}
