@@ -8,23 +8,26 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 
 | Container | Description |
 |---|---|
-| `ikabot` | Runs the ikabot automation bot with a custom `empireFunction.py` injected |
+| `ikabot` | Runs the ikabot automation bot with custom files injected via volume mounts |
 | `ikabot-gui` | Flask web dashboard that reads the collected JSON data |
 
 ### How it works
 
 `empireFunction.py` runs as a background process inside the ikabot container. Every hour (configurable) it:
 
-1. Iterates over all your cities and collects resources, buildings, production rates, and wine status.
+1. Iterates over all cities and collects resources, buildings, production rates, and wine status.
 2. Fetches military and fleet movements from the military advisor.
-3. Writes the results to four JSON files on the shared volume:
+3. Writes the results to JSON files on the shared volume:
    - `statusSummary.json` — empire-wide totals (gold, ships, resources, population)
    - `empire.json` — per-city building levels and construction status
    - `resources.json` — per-city resource amounts and wine timers
    - `movements.json` — active fleet and army movements
 4. Appends a timestamped snapshot to `history.jsonl` (capped at ~90 days).
+5. Triggers a background thread every 3 days to collect building upgrade costs for all non-maxed buildings, writing `building_costs.json`.
 
-The `ikabot-gui` container serves a Flask app on port `5001` that reads those files and exposes them via a REST API, consumed by the frontend dashboard.
+All HTTP requests to the game server use randomised delays to simulate human behaviour (anti-detection).
+
+The `ikabot-gui` container serves a Flask app on port `5001` that reads those files and exposes them via a REST API, consumed by the React frontend.
 
 ## Requirements
 
@@ -59,20 +62,40 @@ docker compose up -d
 
 ## API Endpoints
 
-| Endpoint | Description |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/data` | GET | Empire-wide status, buildings, and resources |
+| `/api/movements` | GET | Current fleet and army movements |
+| `/api/history` | GET | Last 7 days of hourly empire snapshots |
+| `/api/building-costs` | GET | Upgrade costs per building per level per city |
+| `/api/building-costs/refresh` | POST | Schedules an early building costs refresh |
+
+## Dashboard Tabs
+
+| Tab | Description |
 |---|---|
-| `GET /api/data` | Empire-wide status, buildings, and resources |
-| `GET /api/movements` | Current fleet and army movements |
-| `GET /api/history` | Last 7 days of hourly empire snapshots |
+| Home | Empire-wide summary (gold, ships, population) |
+| Cidades | Per-city resources, production, and wine timers |
+| Edifícios | Building levels and active constructions per city |
+| Movimentos | Active fleet and army movements |
+| Alertas | Configurable alerts (wine, storage, etc.) |
+| Histórico | Charts of empire stats over the last 7 days |
+| Calculadoras | **Building upgrade time estimator** and **island vs city ROI comparator** |
 
 ## Project Structure
 
 ```
 .
 ├── docker-compose.yml
-├── empireFunction.py      # Custom empire data collector (injected into ikabot)
-├── ikabot_gui/            # Flask dashboard
+├── empireFunction.py        # Custom empire data collector (injected into ikabot)
+├── planRoutes_patched.py    # Patched transport helper with anti-detection delays
+├── ikabot_gui/              # Flask dashboard
 │   ├── app.py
 │   └── templates/
-└── .env                   # Credentials — never commit this
+│       └── index.html       # Single-file React SPA (no build step)
+└── .env                     # Credentials — never commit this
 ```
+
+## Patches Applied to Ikabot Core
+
+`planRoutes_patched.py` replaces `ikabot/ikabot/helpers/planRoutes.py` via Docker volume mount. It adds randomised delays between consecutive fleet dispatches on the same route and between distinct routes, reducing detection risk when sending large transport operations.

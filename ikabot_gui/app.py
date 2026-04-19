@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 import json
 import os
 import time
@@ -11,6 +11,8 @@ STATUS_SUMMARY_JSON_PATH = os.path.join(LOGS_DIR, "statusSummary.json")
 RESOURCES_JSON_PATH     = os.path.join(LOGS_DIR, "resources.json")
 MOVEMENTS_JSON_PATH     = os.path.join(LOGS_DIR, "movements.json")
 HISTORY_JSONL_PATH      = os.path.join(LOGS_DIR, "history.jsonl")
+BUILDING_COSTS_JSON_PATH = os.path.join(LOGS_DIR, "building_costs.json")
+FORCE_COSTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_costs_update")
 
 
 def get_last_modified_date(filepath):
@@ -88,6 +90,21 @@ def api_history():
             except Exception:
                 pass
     return jsonify(entries)
+
+
+@app.route("/api/building-costs")
+def api_building_costs():
+    if not os.path.exists(BUILDING_COSTS_JSON_PATH):
+        return jsonify({"error": "building_costs.json não encontrado. Aguarda o próximo ciclo do bot."}), 404
+    with open(BUILDING_COSTS_JSON_PATH) as f:
+        return jsonify(json.load(f))
+
+
+@app.route("/api/building-costs/refresh", methods=["POST"])
+def api_building_costs_refresh():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_COSTS_FLAG_PATH, "w").close()
+    return jsonify({"ok": True, "message": "Extração forçada agendada para o próximo ciclo do bot."})
 
 
 if __name__ == "__main__":

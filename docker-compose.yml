@@ -9,6 +9,8 @@ services:
     volumes:
       # Pega no ficheiro ./empireFunction.py que está ao lado do compose e injeta na diretoria correta do bot
       - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py
+      # Substitui o helper de rotas por versão com delays humanos entre envios consecutivos
+      - ./planRoutes_patched.py:/ikabot/ikabot/helpers/planRoutes.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
     command: >
