@@ -135,17 +135,17 @@
         auto_computed_label:'Auto-filled from game data',
         // ColonyROICalc
         tab_colony:'Colony ROI',
-        colony_desc:'Compare upgrading the Sawmill / Quarry on all existing islands versus colonising a new island (Residence upgrade on all cities + build from scratch on the new island).',
+        colony_desc:'Compare upgrading the Sawmill / Quarry on your island versus colonising a new island. Residence upgrade costs are auto-filled from building data — only cities below the required level are counted.',
         n_existing_cities:'Existing cities',
-        option_upgrade_lbl:'Upgrade existing islands',
+        required_level_lbl:'Required level: {n}',
+        one_sawmill_note:'1 Sawmill — all {n} cities on this island benefit',
+        option_upgrade_lbl:'Upgrade existing island',
         option_colony_lbl:'New colony',
         residence_label:'Residence',
         new_island_lbl:'New island',
-        gain_all_islands_lbl:'Total gain ({n} islands)',
+        gain_all_islands_lbl:'Total gain ({n} cities)',
         gain_new_island_lbl:'Production (new island)',
-        res_cost_per_city_lbl:'Residence cost × {n} cities',
-        new_island_build_lbl:'Build cost (new island)',
-        starting_level:'Starting level',
+        new_city_lbl:'New city',
         // CalculadorasPage
         calc_title:'Calculators',
         tab_upgrade:'Building Evolution', tab_roi:'ROI Sawmill / Quarry',
@@ -290,17 +290,17 @@
         auto_computed_label:'Preenchido automaticamente com dados do jogo',
         // ColonyROICalc
         tab_colony:'ROI Colónia',
-        colony_desc:'Compara a evolução da Serraria / Pedreira em todas as ilhas existentes com a colonização de uma nova ilha (evolução da Residência em todas as cidades + construção do zero na nova ilha).',
+        colony_desc:'Compara a evolução da Serraria / Pedreira na ilha atual com a colonização de uma nova ilha. Os custos de Residência são preenchidos automaticamente — só as cidades abaixo do nível necessário são contabilizadas.',
         n_existing_cities:'Cidades existentes',
-        option_upgrade_lbl:'Evoluir ilhas existentes',
+        required_level_lbl:'Nível necessário: {n}',
+        one_sawmill_note:'1 Serraria — todas as {n} cidades desta ilha beneficiam',
+        option_upgrade_lbl:'Evoluir ilha existente',
         option_colony_lbl:'Nova colónia',
         residence_label:'Residência',
         new_island_lbl:'Nova ilha',
-        gain_all_islands_lbl:'Ganho total ({n} ilhas)',
+        gain_all_islands_lbl:'Ganho total ({n} cidades)',
         gain_new_island_lbl:'Produção (nova ilha)',
-        res_cost_per_city_lbl:'Custo de Residência × {n} cidades',
-        new_island_build_lbl:'Custo de construção (nova ilha)',
-        starting_level:'Nível inicial',
+        new_city_lbl:'Nova cidade',
         calc_title:'Calculadoras',
         tab_upgrade:'Evolução de Edifícios', tab_roi:'ROI Serraria / Pedreira',
         mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
@@ -2144,76 +2144,115 @@
       const t    = useT();
       const lang = useLang();
 
-      const defaultCities = data && data.empireData ? Object.keys(data.empireData).length : 2;
+      const numCities    = data && data.empireData ? Object.keys(data.empireData).length : 0;
+      const requiredLevel = numCities; // level needed in every Palace/Residence to unlock next colony
 
-      const [resType,      setResType]     = useState('wood');
-      const [numCities,    setNumCities]   = useState(defaultCities);
-      const [goldPrice,    setGoldPrice]   = useState(15);
-      // Option A — upgrade existing
-      const [upFrom,       setUpFrom]      = useState(1);
-      const [upTo,         setUpTo]        = useState(2);
-      // Option B — new colony
-      const [resFrom,      setResFrom]     = useState(1);
-      const [resTo,        setResTo]       = useState(2);
-      const [newIslandFrom,setNewIslandFrom] = useState(1);
-      const [newIslandTo,  setNewIslandTo] = useState(10);
+      const [resType,        setResType]       = useState('wood');
+      const [goldPrice,      setGoldPrice]     = useState(15);
+      // Option A — upgrade current island's Sawmill/Quarry
+      const [upFrom,         setUpFrom]        = useState(1);
+      const [upTo,           setUpTo]          = useState(2);
+      // Option B — new island: Sawmill level selector only (no build cost)
+      const [newIslandLevel, setNewIslandLevel] = useState(10);
+      // Building costs data (for real residence levels)
+      const [costsData,    setCostsData]    = useState(null);
+      const [costsLoading, setCostsLoading] = useState(true);
 
-      const isWood      = resType === 'wood';
-      const islandLevels = isWood ? sawmillLevels : quarryLevels;
-      const resName     = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
-      const resIcon     = isWood ? 'fa-tree' : 'fa-mountain';
-      const resColorCls = isWood ? 'text-green-500' : 'text-slate-400';
+      useEffect(() => {
+        fetch('/api/building-costs')
+          .then(r => r.ok ? r.json() : Promise.reject())
+          .then(d => { setCostsData(d); setCostsLoading(false); })
+          .catch(() => setCostsLoading(false));
+      }, []);
+
+      const isWood        = resType === 'wood';
+      const islandLevels  = isWood ? sawmillLevels : quarryLevels;
+      const resName       = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
+      const resIcon       = isWood ? 'fa-tree' : 'fa-mountain';
+      const resColorCls   = isWood ? 'text-green-500' : 'text-slate-400';
       const islandBldName = isWood ? t('wood_island_bld') : t('marble_island_bld');
 
-      // ── Option A ──────────────────────────────────────────────────────────────
-      const upFromData = islandLevels.find(r => r[0] === upFrom);
-      const upToData   = islandLevels.find(r => r[0] === upTo);
-      const gainPerIsland = (upFromData && upToData && upTo > upFrom)
+      // ── Option A: upgrade 1 Sawmill, all numCities cities benefit ─────────────
+      const upFromData  = islandLevels.find(r => r[0] === upFrom);
+      const upToData    = islandLevels.find(r => r[0] === upTo);
+      const gainPerCity = (upFromData && upToData && upTo > upFrom)
         ? Math.round((upToData[2] - upFromData[2]) * ISLAND_WORKER_BONUS * 10) / 10
         : 0;
-      const totalGainA = gainPerIsland * numCities;
-      const upgradeCostPerIsland = islandLevels
+      const totalGainA  = gainPerCity * numCities;
+      const upgradeCost = islandLevels
         .filter(r => r[0] > upFrom && r[0] <= upTo)
         .reduce((s, r) => s + r[1], 0);
-      const totalCostAGold = upgradeCostPerIsland * numCities * goldPrice;
+      const totalCostAGold = upgradeCost * goldPrice; // ×1 sawmill only
       const roiA = totalCostAGold > 0 ? totalGainA / totalCostAGold : null;
 
-      // ── Option B ──────────────────────────────────────────────────────────────
-      // Residence upgrade cost per city (5 resources)
-      const resInRange = residenceLevels.filter(r => r[0] > resFrom && r[0] <= resTo);
-      const resCostPerCity = resInRange.reduce(
-        (acc, r) => [acc[0]+r[1], acc[1]+r[2], acc[2]+r[3], acc[3]+r[4], acc[4]+r[5]],
-        [0, 0, 0, 0, 0]
-      );
-      const totalResCost  = resCostPerCity.map(v => v * numCities);
-      const totalResCostGold = totalResCost.reduce((s, v) => s + v * goldPrice, 0);
+      // ── Option B: real residence costs from building_costs.json ───────────────
+      const PALACE_NAME = 'Palácio';
+      const GOVRES_NAME = 'Residência do Governador';
 
-      // New island: build from newIslandFrom to newIslandTo
-      const newIslandFromData = islandLevels.find(r => r[0] === newIslandFrom);
-      const newIslandToData   = islandLevels.find(r => r[0] === newIslandTo);
-      const gainB = (newIslandToData && newIslandFromData)
-        ? Math.round((newIslandToData[2] - (newIslandFrom > 0 ? newIslandFromData[2] : 0)) * ISLAND_WORKER_BONUS * 10) / 10
+      const cityResidences = useMemo(() => {
+        if (!costsData || !costsData.cities) return [];
+        return Object.entries(costsData.cities).map(([cityName, buildings]) => {
+          const isPalace = !!buildings[PALACE_NAME];
+          const bname    = isPalace ? PALACE_NAME : GOVRES_NAME;
+          const bData    = buildings[bname];
+          // If building is absent from costs data it's already at or above requiredLevel
+          const currentLevel = bData ? bData.currentLevel : requiredLevel;
+          const needsUpgrade = currentLevel < requiredLevel;
+          let upgradeCost5   = [0, 0, 0, 0, 0];
+          if (needsUpgrade && bData) {
+            for (let lv = currentLevel + 1; lv <= requiredLevel; lv++) {
+              const c = bData.costs[String(lv)];
+              if (c) {
+                upgradeCost5[0] += c.wood   || 0;
+                upgradeCost5[1] += c.wine   || 0;
+                upgradeCost5[2] += c.marble || 0;
+                upgradeCost5[3] += c.glass  || 0;
+                upgradeCost5[4] += c.sulfur || 0;
+              }
+            }
+          }
+          return {
+            cityName, bname, isPalace, currentLevel, needsUpgrade,
+            upgradeCost5,
+            costGold: upgradeCost5.reduce((s, v) => s + v * goldPrice, 0),
+          };
+        });
+      }, [costsData, requiredLevel, goldPrice]);
+
+      // New city Governor's Residence: level 0 → requiredLevel (hardcoded table)
+      const newCityResCost5 = useMemo(() =>
+        residenceLevels
+          .filter(r => r[0] >= 1 && r[0] <= requiredLevel)
+          .reduce((acc, r) => [acc[0]+r[1], acc[1]+r[2], acc[2]+r[3], acc[3]+r[4], acc[4]+r[5]], [0,0,0,0,0]),
+        [requiredLevel]
+      );
+      const newCityResGold = newCityResCost5.reduce((s, v) => s + v * goldPrice, 0);
+
+      const existingResCost5 = useMemo(() =>
+        cityResidences.reduce((acc, c) => acc.map((v, i) => v + c.upgradeCost5[i]), [0,0,0,0,0]),
+        [cityResidences]
+      );
+      const totalResCost5    = existingResCost5.map((v, i) => v + newCityResCost5[i]);
+      const totalResCostGold = totalResCost5.reduce((s, v) => s + v * goldPrice, 0);
+
+      // New island: production only (Sawmill already exists at selected level)
+      const newIslandData = islandLevels.find(r => r[0] === newIslandLevel);
+      const gainB         = newIslandData
+        ? Math.round(newIslandData[2] * ISLAND_WORKER_BONUS * 10) / 10
         : 0;
-      const newIslandBuildCost = islandLevels
-        .filter(r => r[0] > newIslandFrom && r[0] <= newIslandTo)
-        .reduce((s, r) => s + r[1], 0);
-      const newIslandBuildCostGold = newIslandBuildCost * goldPrice;
-      const totalCostBGold = totalResCostGold + newIslandBuildCostGold;
+      const totalCostBGold = totalResCostGold;
       const roiB = totalCostBGold > 0 ? gainB / totalCostBGold : null;
 
-      const aWins = roiA !== null && (roiB === null || roiA > roiB);
-      const bWins = roiB !== null && (roiA === null || roiB > roiA);
+      const aWins     = roiA !== null && (roiB === null || roiA > roiB);
+      const bWins     = roiB !== null && (roiA === null || roiB > roiA);
       const showCompare = roiA !== null || roiB !== null;
-      const maxRoi = Math.max(roiA || 0, roiB || 0);
+      const maxRoi    = Math.max(roiA || 0, roiB || 0);
 
       const LevelSelect = ({ label, value, onChange, options }) => (
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-slate-500">{label}</label>
-          <select
-            value={value}
-            onChange={e => onChange(+e.target.value)}
-            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
-          >
+          <select value={value} onChange={e => onChange(+e.target.value)}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700">
             {options.map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
           </select>
         </div>
@@ -2243,8 +2282,10 @@
                   </button>
                 </div>
               </div>
-              <div className="w-36">
-                <NumInput label={t('n_existing_cities')} value={numCities} onChange={setNumCities} min={1} />
+              <div className="text-sm text-slate-600 self-end pb-2">
+                <span className="font-medium">{t('n_existing_cities')}:</span>{' '}
+                <span className="font-bold text-indigo-700">{numCities}</span>
+                <span className="ml-2 text-xs text-slate-400">({t('required_level_lbl', { n: requiredLevel })})</span>
               </div>
               <div className="w-44">
                 <NumInput label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
@@ -2255,13 +2296,13 @@
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
 
-            {/* Option A — Upgrade existing */}
+            {/* Option A — Upgrade existing island */}
             <Card className={aWins ? 'ring-2 ring-emerald-400' : ''}>
               <CardHeader icon="fa-arrow-up" title={t('option_upgrade_lbl')} />
               <div className="p-5 space-y-4">
                 <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
                   <i className="fa-solid fa-city mr-1" />
-                  {t('benefits_all_cities', { n: numCities })}
+                  {t('one_sawmill_note', { n: numCities })}
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <LevelSelect label={t('current_level')} value={upFrom}
@@ -2275,7 +2316,7 @@
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500">{t('gain_per_city_label', { res: resName })}</span>
                     <span className={`font-semibold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
-                      <i className={`fa-solid ${resIcon} mr-1`} />{fmt(gainPerIsland)} /h
+                      <i className={`fa-solid ${resIcon} mr-1`} />{fmt(gainPerCity)} /h
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -2287,7 +2328,7 @@
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500">{t('upgrade_cost_label')}</span>
                     <span className="font-semibold">
-                      <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(upgradeCostPerIsland)} × {numCities} = {fmt(upgradeCostPerIsland * numCities)} {MATERIALS[0][lang]}
+                      <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(upgradeCost)} {MATERIALS[0][lang]}
                     </span>
                   </div>
                   <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
@@ -2313,66 +2354,72 @@
             <Card className={bWins ? 'ring-2 ring-emerald-400' : ''}>
               <CardHeader icon="fa-ship" title={t('option_colony_lbl')} />
               <div className="p-5 space-y-4">
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
-                  <i className="fa-solid fa-house mr-1" />
-                  {t('res_cost_per_city_lbl', { n: numCities })}
-                </div>
 
-                {/* Residence levels */}
+                {/* Per-city residence status */}
                 <div>
-                  <p className="text-xs font-semibold text-slate-600 mb-2">
-                    <i className="fa-solid fa-house mr-1 text-amber-500" />{t('residence_label')}
+                  <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-2">
+                    <i className="fa-solid fa-house text-amber-500" />{t('residence_label')}
+                    <span className="ml-auto font-normal text-slate-400">{t('required_level_lbl', { n: requiredLevel })}</span>
                   </p>
-                  <div className="flex flex-wrap gap-3 mb-3">
-                    <LevelSelect label={t('current_level')} value={resFrom}
-                      onChange={v => { setResFrom(v); if (resTo <= v) setResTo(v + 1); }}
-                      options={residenceLevels.slice(0, -1)} />
-                    <LevelSelect label={t('target_level')} value={resTo}
-                      onChange={setResTo}
-                      options={residenceLevels.filter(r => r[0] > resFrom)} />
-                  </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1">
-                    {MATERIALS.map((m, i) => totalResCost[i] > 0 && (
-                      <div key={m.en} className="flex justify-between items-center">
-                        <span className="text-slate-500 flex items-center gap-1">
-                          <i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}
-                        </span>
-                        <span className="font-semibold text-slate-700">
-                          {fmt(resCostPerCity[i])} × {numCities} = {fmt(totalResCost[i])}
-                        </span>
+                  {costsLoading
+                    ? <div className="text-xs text-slate-400 py-2">{t('loading')}</div>
+                    : (
+                      <div className="rounded-lg border border-slate-200 overflow-hidden text-xs divide-y divide-slate-100">
+                        {cityResidences.map(c => (
+                          <div key={c.cityName} className={`flex items-center justify-between px-3 py-1.5 ${c.needsUpgrade ? 'bg-red-50' : 'bg-emerald-50'}`}>
+                            <span className="font-medium text-slate-700 truncate mr-2">
+                              {c.isPalace ? '🏛 ' : '🏠 '}{c.cityName}
+                            </span>
+                            <span className="flex items-center gap-2 shrink-0">
+                              <span className="text-slate-400">lv {c.currentLevel}</span>
+                              {c.needsUpgrade
+                                ? <span className="text-red-600 font-semibold">{fmt(c.costGold)} {t('gold_label')}</span>
+                                : <i className="fa-solid fa-check-circle text-emerald-500" />
+                              }
+                            </span>
+                          </div>
+                        ))}
+                        {/* New city row */}
+                        <div className="flex items-center justify-between px-3 py-1.5 bg-blue-50">
+                          <span className="font-medium text-blue-700">🏠 {t('new_city_lbl')}</span>
+                          <span className="text-blue-600 font-semibold ml-2">{fmt(newCityResGold)} {t('gold_label')}</span>
+                        </div>
                       </div>
-                    ))}
-                    <div className="text-xs text-slate-400 italic pt-1">{t('auto_computed_label')}</div>
-                  </div>
+                    )
+                  }
+                  {/* Resource totals */}
+                  {!costsLoading && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1 mt-2">
+                      {MATERIALS.map((m, i) => totalResCost5[i] > 0 && (
+                        <div key={m.en} className="flex justify-between items-center">
+                          <span className="text-slate-500 flex items-center gap-1">
+                            <i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}
+                          </span>
+                          <span className="font-semibold text-slate-700">{fmt(totalResCost5[i])}</span>
+                        </div>
+                      ))}
+                      <div className="text-xs text-slate-400 italic pt-1">{t('auto_computed_label')}</div>
+                    </div>
+                  )}
                 </div>
 
-                {/* New island building */}
+                {/* New island Sawmill — production only */}
                 <div>
                   <p className="text-xs font-semibold text-slate-600 mb-2">
                     <i className={`fa-solid ${resIcon} mr-1 ${resColorCls}`} />{islandBldName} — {t('new_island_lbl')}
                   </p>
                   <div className="flex flex-wrap gap-3 mb-3">
-                    <LevelSelect label={t('starting_level')} value={newIslandFrom}
-                      onChange={v => { setNewIslandFrom(v); if (newIslandTo <= v) setNewIslandTo(v + 1); }}
-                      options={islandLevels.slice(0, -1)} />
-                    <LevelSelect label={t('target_level')} value={newIslandTo}
-                      onChange={setNewIslandTo}
-                      options={islandLevels.filter(r => r[0] > newIslandFrom)} />
+                    <LevelSelect label={t('current_level')} value={newIslandLevel}
+                      onChange={setNewIslandLevel}
+                      options={islandLevels} />
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm">
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500">{t('gain_new_island_lbl')}</span>
-                      <span className={`font-semibold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
+                      <span className={`font-bold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
                         <i className={`fa-solid ${resIcon} mr-1`} />{fmt(gainB)} /h
                       </span>
                     </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-500">{t('new_island_build_lbl')}</span>
-                      <span className="font-semibold">
-                        <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(newIslandBuildCost)} {MATERIALS[0][lang]}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
                   </div>
                 </div>
 
