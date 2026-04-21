@@ -114,7 +114,7 @@
         gold_label:'gold',
         available_now:'Available now!',
         // ROICalc
-        roi_desc:'Compares the return on gold invested (ROI) between upgrading the island building (benefits all cities) vs the city building (benefits only that city). Enter the production gain of the next level (visible in game) and the upgrade cost.',
+        roi_desc:'For the Sawmill (wood), select current and target level — costs and production are auto-filled. For Quarry (marble) and city buildings, enter values manually.',
         config_title:'Configuration', resource_type:'Resource type',
         cities_on_island:'No. of cities on island',
         island_label:'(Island)', city_building_label:'(City)',
@@ -131,6 +131,8 @@
         city_better_roi:'Upgrading {name} is better: better return per gold invested in this configuration.',
         wood_island_bld:'Sawmill', wood_city_bld:'Forest Warden',
         marble_island_bld:'Quarry', marble_city_bld:'Stonemason',
+        current_level:'Current level', target_level:'Target level',
+        auto_computed_label:'Auto-filled from game data',
         // CalculadorasPage
         calc_title:'Calculators',
         tab_upgrade:'Building Evolution', tab_roi:'ROI Sawmill / Quarry',
@@ -254,7 +256,7 @@
         missing_gold_amount:'Faltam {n} ouro',
         gold_label:'ouro',
         available_now:'Disponível agora!',
-        roi_desc:'Compara o retorno por ouro investido (ROI) entre evoluir o edifício da ilha (beneficia todas as cidades) vs o edifício da cidade (beneficia apenas essa cidade). Introduz o ganho de produção do nível seguinte (visível no jogo) e o custo de evolução.',
+        roi_desc:'Para a Serraria (madeira), seleciona o nível atual e alvo — custos e produção são preenchidos automaticamente. Para a Pedreira (mármore) e edifícios de cidade, introduz os valores manualmente.',
         config_title:'Configuração', resource_type:'Tipo de recurso',
         cities_on_island:'Nº de cidades na ilha',
         island_label:'(Ilha)', city_building_label:'(Cidade)',
@@ -271,6 +273,8 @@
         city_better_roi:'Evoluir o {name} é mais vantajoso: melhor retorno por ouro investido nesta configuração.',
         wood_island_bld:'Serraria', wood_city_bld:'Guarda Florestal',
         marble_island_bld:'Pedreira', marble_city_bld:'Pedreiro',
+        current_level:'Nível atual', target_level:'Nível alvo',
+        auto_computed_label:'Preenchido automaticamente com dados do jogo',
         calc_title:'Calculadoras',
         tab_upgrade:'Evolução de Edifícios', tab_roi:'ROI Serraria / Pedreira',
         mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
@@ -1504,6 +1508,115 @@
 
     // ─── ROICalc ──────────────────────────────────────────────────────────────────
 
+    // [level, woodUpgradeCost, workers, buildTime_s]  — 1 worker = 1 resource + 122% bonus = 2.22/h
+    const ISLAND_WORKER_BONUS = 2.22;
+    const sawmillLevels = [
+      [1,  0,           30,    0],
+      [2,  499,         40,    1457],
+      [3,  906,         52,    2056],
+      [4,  1463,        66,    2742],
+      [5,  2216,        81,    3524],
+      [6,  3220,        97,    4380],
+      [7,  4550,        115,   5400],
+      [8,  6299,        134,   6540],
+      [9,  8582,        154,   7800],
+      [10, 11550,       174,   9240],
+      [11, 15388,       196,   10860],
+      [12, 20333,       218,   12720],
+      [13, 26679,       241,   14760],
+      [14, 34799,       264,   17040],
+      [15, 45159,       289,   19560],
+      [16, 58342,       314,   22440],
+      [17, 75080,       340,   25620],
+      [18, 96286,       366,   29100],
+      [19, 123100,      393,   33060],
+      [20, 156945,      420,   37380],
+      [21, 199595,      449,   42240],
+      [22, 253260,      477,   47580],
+      [23, 320690,      506,   53460],
+      [24, 405305,      536,   60060],
+      [25, 511358,      566,   67320],
+      [26, 644127,      597,   75300],
+      [27, 810168,      628,   84180],
+      [28, 1017614,     659,   93600],
+      [29, 1276546,     692,   104400],
+      [30, 1599459,     724,   115200],
+      [31, 2001829,     757,   129600],
+      [32, 2502814,     790,   144000],
+      [33, 3126123,     824,   158400],
+      [34, 3901076,     858,   176400],
+      [35, 4863926,     893,   194400],
+      [36, 6059473,     928,   216000],
+      [37, 7543059,     964,   237600],
+      [38, 9383023,     999,   266400],
+      [39, 11663724,    1036,  291600],
+      [40, 14489255,    1072,  324000],
+      [41, 17988019,    1109,  356400],
+      [42, 22318356,    1147,  390600],
+      [43, 27675457,    1184,  435600],
+      [44, 34299868,    1222,  476280],
+      [45, 42487944,    1261,  536400],
+      [46, 52604690,    1299,  579600],
+      [47, 65099540,    1339,  640800],
+      [48, 80525740,    1378,  702000],
+      [49, 99564152,    1418,  773200],
+      [50, 123052474,   1458,  849600],
+    ];
+
+    // [level, woodUpgradeCost, workers, buildTime_s]  — 1 worker = 1 marble + 122% bonus = 2.22 marble/h
+    const quarryLevels = [
+      [1,  0,           20,    0],
+      [2,  1303,        33,    2945],
+      [3,  2106,        49,    4020],
+      [4,  3245,        67,    5340],
+      [5,  4837,        88,    6840],
+      [6,  7034,        110,   8520],
+      [7,  10036,       133,   10380],
+      [8,  14105,       158,   12600],
+      [9,  19585,       184,   15000],
+      [10, 26919,       212,   17760],
+      [11, 36686,       241,   20880],
+      [12, 49637,       270,   24360],
+      [13, 66743,       301,   28320],
+      [14, 89259,       333,   32700],
+      [15, 118808,      365,   37560],
+      [16, 157478,      399,   43080],
+      [17, 207961,      433,   49200],
+      [18, 273717,      468,   55980],
+      [19, 359190,      504,   63540],
+      [20, 470087,      541,   72031],
+      [21, 613720,      578,   81360],
+      [22, 799459,      616,   90000],
+      [23, 1039293,     655,   100800],
+      [24, 1348558,     695,   115200],
+      [25, 1746847,     735,   129600],
+      [26, 2259181,     776,   144000],
+      [27, 2917489,     817,   162000],
+      [28, 3762487,     859,   180000],
+      [29, 4846065,     902,   201600],
+      [30, 6234320,     946,   221400],
+      [31, 8011387,     990,   244800],
+      [32, 10284319,    1034,  280800],
+      [33, 13189247,    1079,  309600],
+      [34, 16899206,    1125,  347160],
+      [35, 21634025,    1171,  385200],
+      [36, 27672867,    1218,  424800],
+      [37, 35370086,    1265,  468000],
+      [38, 45175295,    1313,  522000],
+      [39, 57658753,    1361,  579600],
+      [40, 73543456,    1410,  640800],
+      [41, 93745717,    1459,  705600],
+      [42, 119426446,   1509,  774000],
+      [43, 152055942,   1559,  860400],
+      [44, 193495737,   1610,  953520],
+      [45, 246101961,   1661,  1047600],
+      [46, 312855839,   1713,  1155600],
+      [47, 397528431,   1765,  1274400],
+      [48, 504888526,   1817,  1400400],
+      [49, 640964962,   1870,  1540800],
+      [50, 813377537,   1924,  1699200],
+    ];
+
     function ROICalc({ data }) {
       const t = useT();
       const lang = useLang();
@@ -1514,21 +1627,37 @@
       const [gainCity,   setGainCity]   = useState(0);
       const [costCity,   setCostCity]   = useState([0, 0, 0, 0, 0]);
       const [goldPrice,  setGoldPrice]  = useState(15);
+      const [sawmillFrom, setSawmillFrom] = useState(1);
+      const [sawmillTo,   setSawmillTo]   = useState(2);
+      const [quarryFrom,  setQuarryFrom]  = useState(1);
+      const [quarryTo,    setQuarryTo]    = useState(2);
 
       const setCostI = (i, v) => setCostIsland(p => { const c = [...p]; c[i] = v; return c; });
       const setCostC = (i, v) => setCostCity(p => { const c = [...p]; c[i] = v; return c; });
 
       const isWood        = resType === 'wood';
+
+      // Derive island gain/cost from game data tables (sawmill for wood, quarry for marble)
+      const smFrom = sawmillLevels.find(r => r[0] === sawmillFrom);
+      const smTo   = sawmillLevels.find(r => r[0] === sawmillTo);
+      const qFrom  = quarryLevels.find(r => r[0] === quarryFrom);
+      const qTo    = quarryLevels.find(r => r[0] === quarryTo);
+      const effGainIsland = isWood
+        ? (smFrom && smTo && sawmillTo > sawmillFrom ? Math.round((smTo[2] - smFrom[2]) * ISLAND_WORKER_BONUS * 10) / 10 : gainIsland)
+        : (qFrom  && qTo  && quarryTo  > quarryFrom  ? Math.round((qTo[2]  - qFrom[2])  * ISLAND_WORKER_BONUS * 10) / 10 : gainIsland);
+      const effCostIsland = isWood
+        ? [sawmillLevels.filter(r => r[0] > sawmillFrom && r[0] <= sawmillTo).reduce((s, r) => s + r[1], 0), 0, 0, 0, 0]
+        : [quarryLevels.filter(r => r[0] > quarryFrom && r[0] <= quarryTo).reduce((s, r) => s + r[1], 0), 0, 0, 0, 0];
       const islandBldName = isWood ? t('wood_island_bld') : t('marble_island_bld');
       const cityBldName   = isWood ? t('wood_city_bld')   : t('marble_city_bld');
       const resIcon       = isWood ? 'fa-tree' : 'fa-mountain';
       const resColorCls   = isWood ? 'text-green-500' : 'text-slate-400';
       const resName       = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
 
-      const totalIslandGain = gainIsland * numCities;
+      const totalIslandGain = effGainIsland * numCities;
       const totalCityGain   = gainCity;
 
-      const costIslandGold = costIsland.reduce((s, v) => s + v * goldPrice, 0);
+      const costIslandGold = effCostIsland.reduce((s, v) => s + v * goldPrice, 0);
       const costCityGold   = costCity.reduce((s, v) => s + v * goldPrice, 0);
 
       const roiIsland = costIslandGold > 0 ? totalIslandGain / costIslandGold : null;
@@ -1589,25 +1718,54 @@
                   <i className="fa-solid fa-city mr-1" />
                   {t('benefits_all_cities', { n: numCities })}
                 </div>
-                <NumInput
-                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> {t('gain_per_city_label', { res: resName })}</>}
-                  value={gainIsland}
-                  onChange={setGainIsland}
-                  min={0}
-                />
-                <div>
-                  <p className="text-xs font-medium text-slate-500 mb-2">{t('upgrade_cost_label')}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {MATERIALS.map((m, i) => (
-                      <NumInput
-                        key={m.en}
-                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}</>}
-                        value={costIsland[i]}
-                        onChange={v => setCostI(i, v)}
-                      />
-                    ))}
-                  </div>
-                </div>
+                {(() => {
+                  const levels   = isWood ? sawmillLevels : quarryLevels;
+                  const fromVal  = isWood ? sawmillFrom : quarryFrom;
+                  const toVal    = isWood ? sawmillTo   : quarryTo;
+                  const setFrom  = isWood
+                    ? v => { setSawmillFrom(v); if (sawmillTo <= v) setSawmillTo(v + 1); }
+                    : v => { setQuarryFrom(v);  if (quarryTo  <= v) setQuarryTo(v + 1);  };
+                  const setTo    = isWood ? setSawmillTo : setQuarryTo;
+                  return (
+                    <>
+                      <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-slate-500">{t('current_level')}</label>
+                          <select
+                            value={fromVal}
+                            onChange={e => setFrom(+e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                          >
+                            {levels.slice(0, -1).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                          </select>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-slate-500">{t('target_level')}</label>
+                          <select
+                            value={toVal}
+                            onChange={e => setTo(+e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                          >
+                            {levels.filter(r => r[0] > fromVal).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">{t('gain_per_city_label', { res: resName })}</span>
+                          <span className={`font-semibold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
+                            <i className={`fa-solid ${resIcon} mr-1`} />{fmt(effGainIsland)} /h
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">{t('upgrade_cost_label')}</span>
+                          <span className="font-semibold"><i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(effCostIsland[0])} {MATERIALS[0][lang]}</span>
+                        </div>
+                        <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
+                      </div>
+                    </>
+                  );
+                })()}
                 <div className={`rounded-xl border-2 p-4 ${islandWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                   <div className="flex items-center justify-between">
                     <div>
