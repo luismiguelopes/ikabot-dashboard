@@ -59,8 +59,10 @@ docker compose up -d
 |---|---|---|
 | `IKABOT_EMAIL` | — | Your Ikariam account email |
 | `IKABOT_PASSWORD` | — | Your Ikariam account password |
-| `EMPIRE_UPDATE_INTERVAL` | `3600` | Seconds between data collection cycles |
-| `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the weekly world scan |
+| `EMPIRE_UPDATE_INTERVAL` | `3600` | Seconds between main data collection cycles |
+| `BUILDING_COSTS_UPDATE_INTERVAL` | `259200` | Seconds between building costs refreshes (default: 3 days) |
+| `WORLD_SCAN_UPDATE_INTERVAL` | `604800` | Seconds between world scans (default: 7 days) |
+| `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the world scan |
 | `LOG_LANG` | `en` | Language for backend log messages (`en` or `pt`) |
 
 ## API Endpoints
@@ -89,7 +91,7 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 | Movements | Active fleet and army movements |
 | Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | History | Charts of empire stats over the last 7 days |
-| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing (`max(0, totalNeeded − totalAvailable)`) and estimates collection time using empire production. **ROI Sawmill / Quarry**: island vs city building comparator — select current and target level for the island building (Sawmill for wood, Quarry for marble) and costs/production are auto-filled from built-in game data tables; city building inputs remain manual |
+| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing (`max(0, totalNeeded − totalAvailable)`) and estimates collection time using empire production. **ROI Sawmill / Quarry**: island vs city building comparator — level selectors for both the island building (Sawmill / Quarry) and city building (Forest Warden / Stonemason) auto-fill production gain and upgrade costs from built-in game data; city building gain is calculated as `levels × 2% × islandWorkers × 2.22 resource/h` |
 | World | **Inactive**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure

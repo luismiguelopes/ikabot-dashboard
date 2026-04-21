@@ -114,7 +114,7 @@
         gold_label:'gold',
         available_now:'Available now!',
         // ROICalc
-        roi_desc:'For the Sawmill (wood), select current and target level — costs and production are auto-filled. For Quarry (marble) and city buildings, enter values manually.',
+        roi_desc:'Select current and target level for the island and city buildings — costs and production are auto-filled from game data.',
         config_title:'Configuration', resource_type:'Resource type',
         cities_on_island:'No. of cities on island',
         island_label:'(Island)', city_building_label:'(City)',
@@ -256,7 +256,7 @@
         missing_gold_amount:'Faltam {n} ouro',
         gold_label:'ouro',
         available_now:'Disponível agora!',
-        roi_desc:'Para a Serraria (madeira), seleciona o nível atual e alvo — custos e produção são preenchidos automaticamente. Para a Pedreira (mármore) e edifícios de cidade, introduz os valores manualmente.',
+        roi_desc:'Seleciona o nível atual e alvo para os edifícios de ilha e cidade — custos e produção são preenchidos automaticamente com dados do jogo.',
         config_title:'Configuração', resource_type:'Tipo de recurso',
         cities_on_island:'Nº de cidades na ilha',
         island_label:'(Ilha)', city_building_label:'(Cidade)',
@@ -1617,6 +1617,114 @@
       [50, 813377537,   1924,  1699200],
     ];
 
+    // [level, woodCost, marbleCost]  — Forest Warden city building
+    const forestWardenLevels = [
+      [1,  79,         0],
+      [2,  100,        24],
+      [3,  132,        41],
+      [4,  178,        66],
+      [5,  244,        102],
+      [6,  338,        152],
+      [7,  469,        223],
+      [8,  652,        322],
+      [9,  904,        458],
+      [10, 1250,        645],
+      [11, 1721,        900],
+      [12, 2361,        1247],
+      [13, 3225,        1716],
+      [14, 4388,        2349],
+      [15, 5951,        3199],
+      [16, 8042,        4339],
+      [17, 10834,       5863],
+      [18, 14554,       7894],
+      [19, 19498,       10598],
+      [20, 26056,       14190],
+      [21, 34741,       18951],
+      [22, 46223,       25254],
+      [23, 61381,       33583],
+      [24, 81362,       44576],
+      [25, 107667,      59066],
+      [26, 142257,      78141],
+      [27, 187686,      103223],
+      [28, 247291,      136171],
+      [29, 325417,      179406],
+      [30, 427721,      236088],
+      [31, 561569,      310334],
+      [32, 736543,      407505],
+      [33, 965097,      534579],
+      [34, 1263419,     700638],
+      [35, 1652531,     917485],
+      [36, 2159725,     1200467],
+      [37, 2820414,     1569518],
+      [38, 3680532,     2050525],
+      [39, 4799634,     2677091],
+      [40, 6254902,     3492815],
+      [41, 8146323,     4554247],
+      [42, 10603386,    5934706],
+      [43, 13793720,    7729219],
+      [44, 17934260,    10060905],
+      [45, 23305651,    13089231],
+      [46, 30270848,    17020673],
+      [47, 39299108,    22122491],
+      [48, 50996952,    28740524],
+      [49, 66148080,    37322164],
+      [50, 85764858,    48446013],
+    ];
+
+    // [level, woodCost, marbleCost]  — Stonemason city building
+    const stoneMasonLevels = [
+      [1,  82,         0],
+      [2,  104,        30],
+      [3,  135,        48],
+      [4,  182,        75],
+      [5,  249,        112],
+      [6,  343,        166],
+      [7,  477,        241],
+      [8,  662,        345],
+      [9,  917,        490],
+      [10, 1268,        688],
+      [11, 1747,        958],
+      [12, 2398,        1324],
+      [13, 3279,        1821],
+      [14, 4467,        2490],
+      [15, 6064,        3389],
+      [16, 8204,        4593],
+      [17, 11065,       6203],
+      [18, 14881,       8348],
+      [19, 19960,       11203],
+      [20, 26706,       14994],
+      [21, 35651,       20018],
+      [22, 47492,       26666],
+      [23, 63143,       35449],
+      [24, 83799,       47038],
+      [25, 111028,      62309],
+      [26, 146877,      82405],
+      [27, 194020,      108824],
+      [28, 255951,      143516],
+      [29, 337225,      189027],
+      [30, 443786,      248675],
+      [31, 583378,      326783],
+      [32, 766088,      428979],
+      [33, 1005044,     562585],
+      [34, 1317332,     737128],
+      [35, 1725166,     964988],
+      [36, 2257425,     1262254],
+      [37, 2951628,     1649819],
+      [38, 3856498,     2154810],
+      [39, 5035289,     2812424],
+      [40, 6570077,     3668320],
+      [41, 8567326,     4781698],
+      [42, 11165083,    6229293],
+      [43, 14542282,    8110528],
+      [44, 18930774,    10554182],
+      [45, 24630878,    13727001],
+      [46, 32031478,    17844825],
+      [47, 41635985,    23186949],
+      [48, 54095871,    30114684],
+      [49, 70253972,    39095294],
+      [50, 91200405,    50732907],
+    ];
+
     function ROICalc({ data }) {
       const t = useT();
       const lang = useLang();
@@ -1631,6 +1739,10 @@
       const [sawmillTo,   setSawmillTo]   = useState(2);
       const [quarryFrom,  setQuarryFrom]  = useState(1);
       const [quarryTo,    setQuarryTo]    = useState(2);
+      const [fwFrom,      setFwFrom]      = useState(1);
+      const [fwTo,        setFwTo]        = useState(2);
+      const [stonFrom,    setStonFrom]    = useState(1);
+      const [stonTo,      setStonTo]      = useState(2);
 
       const setCostI = (i, v) => setCostIsland(p => { const c = [...p]; c[i] = v; return c; });
       const setCostC = (i, v) => setCostCity(p => { const c = [...p]; c[i] = v; return c; });
@@ -1654,11 +1766,21 @@
       const resColorCls   = isWood ? 'text-green-500' : 'text-slate-400';
       const resName       = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
 
+      // Derive city gain/cost from game data (Forest Warden for wood; Stonemason for marble)
+      const fwInRange   = forestWardenLevels.filter(r => r[0] > fwFrom   && r[0] <= fwTo);
+      const stonInRange = stoneMasonLevels.filter(r => r[0] > stonFrom && r[0] <= stonTo);
+      const effGainCity = isWood
+        ? (smFrom && fwTo > fwFrom   ? Math.round((fwTo   - fwFrom)   * 0.02 * smFrom[2] * ISLAND_WORKER_BONUS * 10) / 10 : gainCity)
+        : (qFrom  && stonTo > stonFrom ? Math.round((stonTo - stonFrom) * 0.02 * qFrom[2]  * ISLAND_WORKER_BONUS * 10) / 10 : gainCity);
+      const effCostCity = isWood
+        ? [fwInRange.reduce((s, r) => s + r[1], 0),   0, fwInRange.reduce((s, r) => s + r[2], 0),   0, 0]
+        : [stonInRange.reduce((s, r) => s + r[1], 0), 0, stonInRange.reduce((s, r) => s + r[2], 0), 0, 0];
+
       const totalIslandGain = effGainIsland * numCities;
-      const totalCityGain   = gainCity;
+      const totalCityGain   = effGainCity;
 
       const costIslandGold = effCostIsland.reduce((s, v) => s + v * goldPrice, 0);
-      const costCityGold   = costCity.reduce((s, v) => s + v * goldPrice, 0);
+      const costCityGold   = effCostCity.reduce((s, v) => s + v * goldPrice, 0);
 
       const roiIsland = costIslandGold > 0 ? totalIslandGain / costIslandGold : null;
       const roiCity   = costCityGold   > 0 ? totalCityGain   / costCityGold   : null;
@@ -1799,25 +1921,89 @@
                   <i className="fa-solid fa-house mr-1" />
                   {t('benefits_only_city')}
                 </div>
-                <NumInput
-                  label={<><i className={`fa-solid ${resIcon} ${resColorCls}`} /> {t('gain_this_city_label', { res: resName })}</>}
-                  value={gainCity}
-                  onChange={setGainCity}
-                  min={0}
-                />
-                <div>
-                  <p className="text-xs font-medium text-slate-500 mb-2">{t('upgrade_cost_label')}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {MATERIALS.map((m, i) => (
-                      <NumInput
-                        key={m.en}
-                        label={<><i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}</>}
-                        value={costCity[i]}
-                        onChange={v => setCostC(i, v)}
-                      />
-                    ))}
-                  </div>
-                </div>
+                {isWood ? (
+                  <>
+                    <div className="flex flex-wrap gap-3">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-500">{t('current_level')}</label>
+                        <select
+                          value={fwFrom}
+                          onChange={e => { const v = +e.target.value; setFwFrom(v); if (fwTo <= v) setFwTo(v + 1); }}
+                          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                        >
+                          {forestWardenLevels.slice(0, -1).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-500">{t('target_level')}</label>
+                        <select
+                          value={fwTo}
+                          onChange={e => setFwTo(+e.target.value)}
+                          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                        >
+                          {forestWardenLevels.filter(r => r[0] > fwFrom).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">{t('gain_this_city_label', { res: resName })}</span>
+                        <span className="font-semibold text-green-700">
+                          <i className="fa-solid fa-tree mr-1" />{fmt(effGainCity)} /h
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">{t('upgrade_cost_label')}</span>
+                        <span className="font-semibold">
+                          <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(effCostCity[0])} {MATERIALS[0][lang]}
+                          {effCostCity[2] > 0 && <span className="ml-2"><i className="fa-solid fa-mountain text-slate-400 mr-1" />{fmt(effCostCity[2])} {MATERIALS[2][lang]}</span>}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-3">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-500">{t('current_level')}</label>
+                        <select
+                          value={stonFrom}
+                          onChange={e => { const v = +e.target.value; setStonFrom(v); if (stonTo <= v) setStonTo(v + 1); }}
+                          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                        >
+                          {stoneMasonLevels.slice(0, -1).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-500">{t('target_level')}</label>
+                        <select
+                          value={stonTo}
+                          onChange={e => setStonTo(+e.target.value)}
+                          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+                        >
+                          {stoneMasonLevels.filter(r => r[0] > stonFrom).map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">{t('gain_this_city_label', { res: resName })}</span>
+                        <span className="font-semibold text-slate-600">
+                          <i className="fa-solid fa-mountain mr-1" />{fmt(effGainCity)} /h
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">{t('upgrade_cost_label')}</span>
+                        <span className="font-semibold">
+                          <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(effCostCity[0])} {MATERIALS[0][lang]}
+                          {effCostCity[2] > 0 && <span className="ml-2"><i className="fa-solid fa-mountain text-slate-400 mr-1" />{fmt(effCostCity[2])} {MATERIALS[2][lang]}</span>}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
+                    </div>
+                  </>
+                )}
                 <div className={`rounded-xl border-2 p-4 ${cityWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
                   <div className="flex items-center justify-between">
                     <div>

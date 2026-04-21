@@ -25,9 +25,8 @@ LOGS_DIR = "/tmp/ikalogs/"
 UPDATE_INTERVAL = int(os.getenv("EMPIRE_UPDATE_INTERVAL", 3600))
 # Maximum history lines kept in history.jsonl (~90 days at 1h interval)
 MAX_HISTORY_LINES = 2160
-# Building costs are re-fetched every 3 days (costs rarely change)
-BUILDING_COSTS_UPDATE_INTERVAL = 3 * 24 * 3600
-WORLD_SCAN_UPDATE_INTERVAL = 7 * 24 * 3600
+BUILDING_COSTS_UPDATE_INTERVAL = int(os.getenv("BUILDING_COSTS_UPDATE_INTERVAL", 3 * 24 * 3600))
+WORLD_SCAN_UPDATE_INTERVAL = int(os.getenv("WORLD_SCAN_UPDATE_INTERVAL", 7 * 24 * 3600))
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 LOG_LANG = os.getenv("LOG_LANG", "en")
 

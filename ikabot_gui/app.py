@@ -136,8 +136,9 @@ def api_world_scan():
         prev_inactive_ids = {p["playerId"] for p in prev.get("players", [])}
     for player in scan.get("players", []):
         pid = player["playerId"]
-        player["mark"] = marks.get(pid, {}).get("status", "novo")
-        player["markNote"] = marks.get(pid, {}).get("note", "")
+        mk = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
+        player["mark"] = marks.get(mk, {}).get("status", "novo")
+        player["markNote"] = marks.get(mk, {}).get("note", "")
         player["isNew"] = pid not in prev_inactive_ids
     return jsonify(scan)
 
@@ -161,6 +162,9 @@ def api_world_scan_refresh():
 def api_world_scan_mark():
     body = request.get_json(force=True)
     player_id = str(body.get("playerId", ""))
+    island_x  = str(body.get("islandX", ""))
+    island_y  = str(body.get("islandY", ""))
+    mark_key  = f"{player_id}_{island_x}_{island_y}"
     status = body.get("status", "novo")
     note = body.get("note", "")
     if status not in ("novo", "visto", "alvo", "ignorar"):
@@ -169,7 +173,7 @@ def api_world_scan_mark():
     if os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
-    marks[player_id] = {"status": status, "note": note, "updatedAt": int(time.time())}
+    marks[mark_key] = {"status": status, "note": note, "updatedAt": int(time.time())}
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(PLAYER_MARKS_JSON_PATH, "w") as f:
         json.dump(marks, f, indent=2)
