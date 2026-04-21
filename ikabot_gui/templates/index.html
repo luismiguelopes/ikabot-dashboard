@@ -133,6 +133,19 @@
         marble_island_bld:'Quarry', marble_city_bld:'Stonemason',
         current_level:'Current level', target_level:'Target level',
         auto_computed_label:'Auto-filled from game data',
+        // ColonyROICalc
+        tab_colony:'Colony ROI',
+        colony_desc:'Compare upgrading the Sawmill / Quarry on all existing islands versus colonising a new island (Residence upgrade on all cities + build from scratch on the new island).',
+        n_existing_cities:'Existing cities',
+        option_upgrade_lbl:'Upgrade existing islands',
+        option_colony_lbl:'New colony',
+        residence_label:'Residence',
+        new_island_lbl:'New island',
+        gain_all_islands_lbl:'Total gain ({n} islands)',
+        gain_new_island_lbl:'Production (new island)',
+        res_cost_per_city_lbl:'Residence cost × {n} cities',
+        new_island_build_lbl:'Build cost (new island)',
+        starting_level:'Starting level',
         // CalculadorasPage
         calc_title:'Calculators',
         tab_upgrade:'Building Evolution', tab_roi:'ROI Sawmill / Quarry',
@@ -275,6 +288,19 @@
         marble_island_bld:'Pedreira', marble_city_bld:'Pedreiro',
         current_level:'Nível atual', target_level:'Nível alvo',
         auto_computed_label:'Preenchido automaticamente com dados do jogo',
+        // ColonyROICalc
+        tab_colony:'ROI Colónia',
+        colony_desc:'Compara a evolução da Serraria / Pedreira em todas as ilhas existentes com a colonização de uma nova ilha (evolução da Residência em todas as cidades + construção do zero na nova ilha).',
+        n_existing_cities:'Cidades existentes',
+        option_upgrade_lbl:'Evoluir ilhas existentes',
+        option_colony_lbl:'Nova colónia',
+        residence_label:'Residência',
+        new_island_lbl:'Nova ilha',
+        gain_all_islands_lbl:'Ganho total ({n} ilhas)',
+        gain_new_island_lbl:'Produção (nova ilha)',
+        res_cost_per_city_lbl:'Custo de Residência × {n} cidades',
+        new_island_build_lbl:'Custo de construção (nova ilha)',
+        starting_level:'Nível inicial',
         calc_title:'Calculadoras',
         tab_upgrade:'Evolução de Edifícios', tab_roi:'ROI Serraria / Pedreira',
         mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
@@ -1725,6 +1751,40 @@
       [50, 91200405,    50732907],
     ];
 
+    // [level, wood, wine, marble, crystal, sulfur]  — Residence (Governor's Palace)
+    const residenceLevels = [
+      [1,  180,        0,           0,           0,           0],
+      [2,  1689,       0,           442,         0,           0],
+      [3,  5048,       0,           1086,        0,           1094],
+      [4,  12137,      3823,        2583,        0,           2650],
+      [5,  26586,      6652,        5939,        7540,        6167],
+      [6,  55313,      12852,       13258,       13235,       13905],
+      [7,  111377,     26174,       28910,       25501,       30594],
+      [8,  219245,     54361,       61874,       51515,       66041],
+      [9,  424427,     113291,      130469,      106028,      140426],
+      [10, 811101,     235289,      271821,      219149,      294996],
+      [11, 1534190,    485816,      560757,      451988,      613596],
+      [12, 2877574,    996785,      1147360,     927985,      1265824],
+      [13, 5359447,    2032901,     2331397,     1895429,     2593290],
+      [14, 9922516,    4123361,     4709381,     3851862,     5281507],
+      [15, 18276565,   8322636,     9464426,     7791006,     10701538],
+      [16, 33514195,   16725639,    18936172,    15691697,    21587461],
+      [17, 61215452,   33483256,    37739085,    31483988,    43376838],
+      [18, 111426066,  66800333,    74952423,    62954307,    86857878],
+      [19, 202194535,  132859525,   148401314,   125495803,   173387679],
+      [20, 365887002,  263514708,   293011890,   249478706,   345161732],
+      [21, 660445922,  521352340,   577092870,   494712943,   685393523],
+      [22, 1189437229, 1029135556,  1134018897,  978787593,   1357911481],
+      [23, 2137703678, 2027290386,  2223804780,  1932529188,  2684755281],
+      [24, 3834702705, 3986004336,  4352625336,  3808397298,  5298051873],
+      [25, 6866908160, 7823570927,  8504548800,  7492106845,  10436937222],
+      [26, 12277087211,15331226483, 16590361288, 14715341065, 20527426697],
+      [27, 21917272848,29998937601, 32315991702, 28859833558, 40313734039],
+      [28, 39073429886,58619041476, 62861245793, 56522476809, 79063383156],
+      [29, 69570040228,114397690298,122122076176,110559039476,154861499922],
+      [30, 123721809393,222986767990,236967433467,215998445395,302966645935],
+    ];
+
     function ROICalc({ data }) {
       const t = useT();
       const lang = useLang();
@@ -2078,6 +2138,302 @@
       );
     }
 
+    // ─── ColonyROICalc ────────────────────────────────────────────────────────────
+
+    function ColonyROICalc({ data }) {
+      const t    = useT();
+      const lang = useLang();
+
+      const defaultCities = data && data.empireData ? Object.keys(data.empireData).length : 2;
+
+      const [resType,      setResType]     = useState('wood');
+      const [numCities,    setNumCities]   = useState(defaultCities);
+      const [goldPrice,    setGoldPrice]   = useState(15);
+      // Option A — upgrade existing
+      const [upFrom,       setUpFrom]      = useState(1);
+      const [upTo,         setUpTo]        = useState(2);
+      // Option B — new colony
+      const [resFrom,      setResFrom]     = useState(1);
+      const [resTo,        setResTo]       = useState(2);
+      const [newIslandFrom,setNewIslandFrom] = useState(1);
+      const [newIslandTo,  setNewIslandTo] = useState(10);
+
+      const isWood      = resType === 'wood';
+      const islandLevels = isWood ? sawmillLevels : quarryLevels;
+      const resName     = isWood ? MATERIALS[0][lang] : MATERIALS[2][lang];
+      const resIcon     = isWood ? 'fa-tree' : 'fa-mountain';
+      const resColorCls = isWood ? 'text-green-500' : 'text-slate-400';
+      const islandBldName = isWood ? t('wood_island_bld') : t('marble_island_bld');
+
+      // ── Option A ──────────────────────────────────────────────────────────────
+      const upFromData = islandLevels.find(r => r[0] === upFrom);
+      const upToData   = islandLevels.find(r => r[0] === upTo);
+      const gainPerIsland = (upFromData && upToData && upTo > upFrom)
+        ? Math.round((upToData[2] - upFromData[2]) * ISLAND_WORKER_BONUS * 10) / 10
+        : 0;
+      const totalGainA = gainPerIsland * numCities;
+      const upgradeCostPerIsland = islandLevels
+        .filter(r => r[0] > upFrom && r[0] <= upTo)
+        .reduce((s, r) => s + r[1], 0);
+      const totalCostAGold = upgradeCostPerIsland * numCities * goldPrice;
+      const roiA = totalCostAGold > 0 ? totalGainA / totalCostAGold : null;
+
+      // ── Option B ──────────────────────────────────────────────────────────────
+      // Residence upgrade cost per city (5 resources)
+      const resInRange = residenceLevels.filter(r => r[0] > resFrom && r[0] <= resTo);
+      const resCostPerCity = resInRange.reduce(
+        (acc, r) => [acc[0]+r[1], acc[1]+r[2], acc[2]+r[3], acc[3]+r[4], acc[4]+r[5]],
+        [0, 0, 0, 0, 0]
+      );
+      const totalResCost  = resCostPerCity.map(v => v * numCities);
+      const totalResCostGold = totalResCost.reduce((s, v) => s + v * goldPrice, 0);
+
+      // New island: build from newIslandFrom to newIslandTo
+      const newIslandFromData = islandLevels.find(r => r[0] === newIslandFrom);
+      const newIslandToData   = islandLevels.find(r => r[0] === newIslandTo);
+      const gainB = (newIslandToData && newIslandFromData)
+        ? Math.round((newIslandToData[2] - (newIslandFrom > 0 ? newIslandFromData[2] : 0)) * ISLAND_WORKER_BONUS * 10) / 10
+        : 0;
+      const newIslandBuildCost = islandLevels
+        .filter(r => r[0] > newIslandFrom && r[0] <= newIslandTo)
+        .reduce((s, r) => s + r[1], 0);
+      const newIslandBuildCostGold = newIslandBuildCost * goldPrice;
+      const totalCostBGold = totalResCostGold + newIslandBuildCostGold;
+      const roiB = totalCostBGold > 0 ? gainB / totalCostBGold : null;
+
+      const aWins = roiA !== null && (roiB === null || roiA > roiB);
+      const bWins = roiB !== null && (roiA === null || roiB > roiA);
+      const showCompare = roiA !== null || roiB !== null;
+      const maxRoi = Math.max(roiA || 0, roiB || 0);
+
+      const LevelSelect = ({ label, value, onChange, options }) => (
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-slate-500">{label}</label>
+          <select
+            value={value}
+            onChange={e => onChange(+e.target.value)}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700"
+          >
+            {options.map(r => <option key={r[0]} value={r[0]}>{r[0]}</option>)}
+          </select>
+        </div>
+      );
+
+      return (
+        <div className="space-y-5">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-5 py-4 text-sm text-indigo-700 flex items-start gap-3">
+            <i className="fa-solid fa-circle-info mt-0.5 flex-shrink-0" />
+            <span>{t('colony_desc')}</span>
+          </div>
+
+          {/* Config */}
+          <Card>
+            <CardHeader icon="fa-sliders" title={t('config_title')} />
+            <div className="p-5 flex flex-wrap gap-5 items-end">
+              <div>
+                <p className="text-xs font-medium text-slate-500 mb-2">{t('resource_type')}</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setResType('wood')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${resType === 'wood' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                    <i className="fa-solid fa-tree" /> {MATERIALS[0][lang]}
+                  </button>
+                  <button onClick={() => setResType('marble')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${resType === 'marble' ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                    <i className="fa-solid fa-mountain" /> {MATERIALS[2][lang]}
+                  </button>
+                </div>
+              </div>
+              <div className="w-36">
+                <NumInput label={t('n_existing_cities')} value={numCities} onChange={setNumCities} min={1} />
+              </div>
+              <div className="w-44">
+                <NumInput label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
+                  value={goldPrice} onChange={setGoldPrice} min={1} />
+              </div>
+            </div>
+          </Card>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+
+            {/* Option A — Upgrade existing */}
+            <Card className={aWins ? 'ring-2 ring-emerald-400' : ''}>
+              <CardHeader icon="fa-arrow-up" title={t('option_upgrade_lbl')} />
+              <div className="p-5 space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+                  <i className="fa-solid fa-city mr-1" />
+                  {t('benefits_all_cities', { n: numCities })}
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <LevelSelect label={t('current_level')} value={upFrom}
+                    onChange={v => { setUpFrom(v); if (upTo <= v) setUpTo(v + 1); }}
+                    options={islandLevels.slice(0, -1)} />
+                  <LevelSelect label={t('target_level')} value={upTo}
+                    onChange={setUpTo}
+                    options={islandLevels.filter(r => r[0] > upFrom)} />
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">{t('gain_per_city_label', { res: resName })}</span>
+                    <span className={`font-semibold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
+                      <i className={`fa-solid ${resIcon} mr-1`} />{fmt(gainPerIsland)} /h
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">{t('gain_all_islands_lbl', { n: numCities })}</span>
+                    <span className={`font-bold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
+                      <i className={`fa-solid ${resIcon} mr-1`} />{fmt(totalGainA)} /h
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">{t('upgrade_cost_label')}</span>
+                    <span className="font-semibold">
+                      <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(upgradeCostPerIsland)} × {numCities} = {fmt(upgradeCostPerIsland * numCities)} {MATERIALS[0][lang]}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
+                </div>
+                <div className={`rounded-xl border-2 p-4 ${aWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">{t('total_gain')}</div>
+                      <div className="text-2xl font-bold text-slate-800">
+                        {fmt(totalGainA)} <span className="text-sm font-normal text-slate-400">{resName}/h</span>
+                      </div>
+                    </div>
+                    {aWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(totalCostAGold) })}</div>
+                  {roiA !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">ROI: {roiA.toFixed(5)} {resName}/gold</div>}
+                  {aWins && <div className="text-xs text-emerald-600 font-bold mt-2"><i className="fa-solid fa-check-circle mr-1" />{t('best_option')}</div>}
+                </div>
+              </div>
+            </Card>
+
+            {/* Option B — New colony */}
+            <Card className={bWins ? 'ring-2 ring-emerald-400' : ''}>
+              <CardHeader icon="fa-ship" title={t('option_colony_lbl')} />
+              <div className="p-5 space-y-4">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                  <i className="fa-solid fa-house mr-1" />
+                  {t('res_cost_per_city_lbl', { n: numCities })}
+                </div>
+
+                {/* Residence levels */}
+                <div>
+                  <p className="text-xs font-semibold text-slate-600 mb-2">
+                    <i className="fa-solid fa-house mr-1 text-amber-500" />{t('residence_label')}
+                  </p>
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <LevelSelect label={t('current_level')} value={resFrom}
+                      onChange={v => { setResFrom(v); if (resTo <= v) setResTo(v + 1); }}
+                      options={residenceLevels.slice(0, -1)} />
+                    <LevelSelect label={t('target_level')} value={resTo}
+                      onChange={setResTo}
+                      options={residenceLevels.filter(r => r[0] > resFrom)} />
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1">
+                    {MATERIALS.map((m, i) => totalResCost[i] > 0 && (
+                      <div key={m.en} className="flex justify-between items-center">
+                        <span className="text-slate-500 flex items-center gap-1">
+                          <i className={`fa-solid ${m.icon} ${m.color}`} /> {m[lang]}
+                        </span>
+                        <span className="font-semibold text-slate-700">
+                          {fmt(resCostPerCity[i])} × {numCities} = {fmt(totalResCost[i])}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="text-xs text-slate-400 italic pt-1">{t('auto_computed_label')}</div>
+                  </div>
+                </div>
+
+                {/* New island building */}
+                <div>
+                  <p className="text-xs font-semibold text-slate-600 mb-2">
+                    <i className={`fa-solid ${resIcon} mr-1 ${resColorCls}`} />{islandBldName} — {t('new_island_lbl')}
+                  </p>
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <LevelSelect label={t('starting_level')} value={newIslandFrom}
+                      onChange={v => { setNewIslandFrom(v); if (newIslandTo <= v) setNewIslandTo(v + 1); }}
+                      options={islandLevels.slice(0, -1)} />
+                    <LevelSelect label={t('target_level')} value={newIslandTo}
+                      onChange={setNewIslandTo}
+                      options={islandLevels.filter(r => r[0] > newIslandFrom)} />
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">{t('gain_new_island_lbl')}</span>
+                      <span className={`font-semibold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
+                        <i className={`fa-solid ${resIcon} mr-1`} />{fmt(gainB)} /h
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">{t('new_island_build_lbl')}</span>
+                      <span className="font-semibold">
+                        <i className="fa-solid fa-tree text-green-500 mr-1" />{fmt(newIslandBuildCost)} {MATERIALS[0][lang]}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 italic">{t('auto_computed_label')}</div>
+                  </div>
+                </div>
+
+                <div className={`rounded-xl border-2 p-4 ${bWins ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">{t('total_gain')}</div>
+                      <div className="text-2xl font-bold text-slate-800">
+                        {fmt(gainB)} <span className="text-sm font-normal text-slate-400">{resName}/h</span>
+                      </div>
+                    </div>
+                    {bWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(totalCostBGold) })}</div>
+                  {roiB !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">ROI: {roiB.toFixed(5)} {resName}/gold</div>}
+                  {bWins && <div className="text-xs text-emerald-600 font-bold mt-2"><i className="fa-solid fa-check-circle mr-1" />{t('best_option')}</div>}
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Comparison */}
+          {showCompare && (
+            <Card>
+              <CardHeader icon="fa-scale-balanced" title={t('roi_comparison')} />
+              <div className="p-5 space-y-4">
+                {[
+                  { label: t('option_upgrade_lbl'), gain: totalGainA, costGold: totalCostAGold, roi: roiA, wins: aWins },
+                  { label: t('option_colony_lbl'),  gain: gainB,      costGold: totalCostBGold, roi: roiB, wins: bWins },
+                ].map((opt, i) => {
+                  const barPct = maxRoi > 0 && opt.roi !== null ? Math.round((opt.roi / maxRoi) * 100) : 0;
+                  return (
+                    <div key={i}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-semibold text-slate-700 flex items-center gap-1">
+                          {opt.wins && <i className="fa-solid fa-trophy text-yellow-500 text-xs" />}
+                          {opt.label}
+                        </span>
+                        <div className="text-xs text-slate-500 text-right">
+                          +{fmt(opt.gain)} {resName}/h &nbsp;|&nbsp; {fmt(opt.costGold)} {t('gold_label')}
+                          {opt.roi !== null && <span className="ml-2 font-semibold text-indigo-600">ROI: {opt.roi.toFixed(5)}</span>}
+                        </div>
+                      </div>
+                      <div className="w-full h-5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2 text-white text-xs font-bold ${opt.wins ? 'bg-emerald-500' : 'bg-indigo-400'}`}
+                          style={{ width: `${Math.max(barPct, 2)}%` }}
+                        >
+                          {barPct > 15 ? `${barPct}%` : ''}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </div>
+      );
+    }
+
     // ─── CalculadorasPage ─────────────────────────────────────────────────────────
 
     function CalculadorasPage({ data }) {
@@ -2086,6 +2442,7 @@
       const tabs = [
         { key: 'upgrade', label: t('tab_upgrade'), icon: 'fa-building-columns' },
         { key: 'roi',     label: t('tab_roi'),     icon: 'fa-scale-balanced'   },
+        { key: 'colony',  label: t('tab_colony'),  icon: 'fa-ship'         },
       ];
       return (
         <div>
@@ -2108,6 +2465,7 @@
           </div>
           {tab === 'upgrade' && <BuildingUpgradeCalc data={data} />}
           {tab === 'roi'     && <ROICalc data={data} />}
+          {tab === 'colony'  && <ColonyROICalc data={data} />}
         </div>
       );
     }
