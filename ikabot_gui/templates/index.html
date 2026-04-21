@@ -1165,8 +1165,9 @@
       const gp      = goldPrice || 15;
       const missing = needed.map((n, i) => Math.max(0, n - (available[i] || 0)));
 
-      // Global sums — all resources treated as equivalent units
-      const totalMissing    = missing.reduce((s, m) => s + m, 0);
+      const totalNeeded     = needed.reduce((s, n) => s + n, 0);
+      const totalAvailable  = available.reduce((s, a) => s + (a || 0), 0);
+      const totalMissing    = Math.max(0, totalNeeded - totalAvailable);
       const totalProduction = production.reduce((s, p) => s + (p || 0), 0);
       const goldNeededAll   = totalMissing * gp;
       const canBuyAll       = gold >= goldNeededAll;
@@ -1779,12 +1780,12 @@
       );
     }
 
-    function MarkSelect({ playerId, current, onChange }) {
+    function MarkSelect({ markKey, current, onChange }) {
       const MARK_CONFIG = useMarkConfig();
       return (
         <select
           value={current}
-          onChange={e => onChange(playerId, e.target.value)}
+          onChange={e => onChange(markKey, e.target.value)}
           className={`text-xs rounded-full px-2 py-0.5 border font-medium cursor-pointer focus:outline-none
             ${MARK_CONFIG[current]?.bg || ''} ${MARK_CONFIG[current]?.text || ''} border-transparent`}
         >
@@ -1839,49 +1840,57 @@
       const t = useT();
       const lang = useLang();
       const [filterDist, setFilterDist]   = useState(20);
-      const [filterState, setFilterState] = useState('all');
       const [filterMark, setFilterMark]   = useState('excl_ignorar');
       const [filterNew, setFilterNew]     = useState(false);
       const [search, setSearch]           = useState('');
       const [sortKey, setSortKey]         = useState('distance');
       const [sortAsc, setSortAsc]         = useState(true);
 
-      const handleMark = useCallback((playerId, status) => {
-        setMarks(prev => ({ ...prev, [playerId]: status }));
+      const handleMark = useCallback((markKey, status) => {
+        setMarks(prev => ({ ...prev, [markKey]: status }));
+        // markKey = "playerId_islandX_islandY"; island coords are always integers so no ambiguity
+        const parts = markKey.split('_');
+        const islandY = parts.pop();
+        const islandX = parts.pop();
+        const playerId = parts.join('_');
         fetch('/api/world-scan/mark', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId, status }),
+          body: JSON.stringify({ playerId, islandX, islandY, status }),
         }).catch(() => {});
       }, [setMarks]);
 
       const players = useMemo(() => {
         if (!scanData?.players) return [];
-        let list = scanData.players.map(p => ({ ...p, mark: marks[p.playerId] || p.mark || 'novo' }));
+        let list = scanData.players
+          .filter(p => p.state === 'inactive')
+          .map(p => {
+            const markKey = `${p.playerId}_${p.islandX}_${p.islandY}`;
+            return { ...p, markKey, mark: marks[markKey] || p.mark || 'novo' };
+          });
 
-        if (filterNew)             list = list.filter(p => p.isNew);
-        if (filterState !== 'all') list = list.filter(p => p.state === filterState);
+        if (filterNew)  list = list.filter(p => p.isNew);
         if (filterMark === 'excl_ignorar') list = list.filter(p => p.mark !== 'ignorar');
         else if (filterMark !== 'all')     list = list.filter(p => p.mark === filterMark);
-        if (filterDist > 0)        list = list.filter(p => p.distance <= filterDist);
-        if (search.trim())         list = list.filter(p => p.playerName.toLowerCase().includes(search.toLowerCase()));
+        if (filterDist > 0)  list = list.filter(p => p.distance <= filterDist);
+        if (search.trim())   list = list.filter(p => (p.playerName || '').toLowerCase().includes(search.trim().toLowerCase()));
 
         list.sort((a, b) => {
           let va, vb;
-          if (sortKey === 'distance')  { va = a.distance; vb = b.distance; }
-          else if (sortKey === 'army') { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army); }
+          if (sortKey === 'distance')      { va = a.distance; vb = b.distance; }
+          else if (sortKey === 'army')     { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army); }
           else if (sortKey === 'building') { va = parseScore(a.scores?.building); vb = parseScore(b.scores?.building); }
           else if (sortKey === 'player')   { va = a.playerName.toLowerCase(); vb = b.playerName.toLowerCase(); }
-          else                         { va = a[sortKey]; vb = b[sortKey]; }
+          else                             { va = a[sortKey]; vb = b[sortKey]; }
           if (va < vb) return sortAsc ? -1 : 1;
           if (va > vb) return sortAsc ? 1 : -1;
           return 0;
         });
         return list;
-      }, [scanData, marks, filterState, filterMark, filterDist, filterNew, search, sortKey, sortAsc]);
+      }, [scanData, marks, filterMark, filterDist, filterNew, search, sortKey, sortAsc]);
 
       const newCount = useMemo(() =>
-        (scanData?.players || []).filter(p => p.isNew).length, [scanData]);
+        (scanData?.players || []).filter(p => p.state === 'inactive' && p.isNew).length, [scanData]);
 
       const handleSort = (key) => {
         if (sortKey === key) setSortAsc(a => !a);
@@ -1899,14 +1908,14 @@
       );
 
       const handleExportCsv = () => {
-        const header = [t('col_player'), t('col_alliance'), t('filter_state'), 'New?', t('col_island'), 'Coord', 'Nearest city', t('col_dist'),
+        const header = [t('col_player'), t('col_alliance'), 'New?', t('col_island'), 'Coord', 'Nearest city', t('col_dist'),
                         'Military score', 'Building score', 'Rank', t('col_mark')];
         const rows = [header, ...players.map(p => [
-          p.playerName, p.allyTag || '—', p.state, p.isNew ? 'Yes' : 'No',
+          p.playerName, p.allyTag || '—', p.isNew ? 'Yes' : 'No',
           p.islandName, `(${p.islandX},${p.islandY})`,
           p.nearestOwnCity, p.distance,
           fmtScore(p.scores?.army, lang), fmtScore(p.scores?.building, lang), p.scores?.rank || '—',
-          marks[p.playerId] || 'novo',
+          p.mark,
         ])];
         exportCsv(`inactive_${new Date().toISOString().slice(0,10)}.csv`, rows);
       };
@@ -1945,15 +1954,6 @@
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-slate-500">{t('filter_state')}</label>
-                <select value={filterState} onChange={e => setFilterState(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
-                  <option value="all">{t('all')}</option>
-                  <option value="inactive">{t('filter_inactive')}</option>
-                  <option value="vacation">{t('filter_vacation')}</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
                 <label className="text-xs text-slate-500">{t('filter_mark')}</label>
                 <select value={filterMark} onChange={e => setFilterMark(e.target.value)}
                   className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
@@ -1983,7 +1983,6 @@
                     <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
                       <SortTh colKey="player" align="text-left">{t('col_player')}</SortTh>
                       <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_alliance')}</th>
-                      <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('filter_state')}</th>
                       <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_island')}</th>
                       <SortTh colKey="distance">{t('col_dist')}</SortTh>
                       <SortTh colKey="army">{t('col_military')}</SortTh>
@@ -1993,8 +1992,8 @@
                   </thead>
                   <tbody>
                     {players.map((p, idx) => (
-                      <tr key={`${p.playerId}-${p.islandX}-${p.islandY}`}
-                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${marks[p.playerId] === 'ignorar' ? 'opacity-40' : ''} ${idx % 2 ? 'bg-slate-50/40' : ''}`}>
+                      <tr key={p.markKey}
+                        className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${p.mark === 'ignorar' ? 'opacity-40' : ''} ${idx % 2 ? 'bg-slate-50/40' : ''}`}>
                         <Td className="font-medium text-slate-800">
                           <div className="flex items-center gap-1.5">
                             {p.playerName}
@@ -2010,7 +2009,6 @@
                             ? <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-mono">{p.allyTag}</span>
                             : <span className="text-slate-300">—</span>}
                         </Td>
-                        <Td className="text-center"><StatePill state={p.state} /></Td>
                         <Td className="text-center">
                           <span className="text-slate-700 font-medium">{p.islandName}</span>
                           <span className="text-slate-400 text-xs ml-1">({p.islandX},{p.islandY})</span>
@@ -2028,7 +2026,7 @@
                           {fmtScore(p.scores?.building, lang)}
                         </Td>
                         <Td className="text-center">
-                          <MarkSelect playerId={p.playerId} current={marks[p.playerId] || 'novo'} onChange={handleMark} />
+                          <MarkSelect markKey={p.markKey} current={p.mark} onChange={handleMark} />
                         </Td>
                       </tr>
                     ))}
@@ -2228,7 +2226,10 @@
           .then(d => {
             setScanData(d);
             const m = {};
-            (d.players || []).forEach(p => { m[p.playerId] = p.mark || 'novo'; });
+            (d.players || []).forEach(p => {
+              const mk = `${p.playerId}_${p.islandX}_${p.islandY}`;
+              m[mk] = p.mark || 'novo';
+            });
             setMarks(m);
             setLoading(false);
           })
@@ -2260,7 +2261,8 @@
         ? new Date(scanData.lastUpdated * 1000).toLocaleString(getLocale(lang)) : null;
       const nextScan = scanData?.lastUpdated
         ? new Date((scanData.lastUpdated + 7 * 24 * 3600) * 1000).toLocaleDateString(getLocale(lang)) : null;
-      const newCount = (scanData?.players || []).filter(p => p.isNew).length;
+      const inactiveCount = (scanData?.players || []).filter(p => p.state === 'inactive').length;
+      const newCount = (scanData?.players || []).filter(p => p.state === 'inactive' && p.isNew).length;
 
       const TABS = [
         { key: 'inactivos', label: t('tab_inactive'), icon: 'fa-user-slash' },
@@ -2287,7 +2289,7 @@
                 {scanData && (
                   <p className="text-xs text-slate-400">
                     {t('scan_radius')}: {scanData.scanRadius}
-                    {' · '}{t('inactive_label')}: <span className="font-semibold text-slate-600">{scanData.players?.length ?? 0}</span>
+                    {' · '}{t('inactive_label')}: <span className="font-semibold text-slate-600">{inactiveCount}</span>
                     {newCount > 0 && <span className="ml-1.5 text-emerald-600 font-semibold">{t('new_count_world', { n: newCount })}</span>}
                     {scanData.islands && <span>{' · '}{t('islands_count_world')}: <span className="font-semibold text-slate-600">{scanData.islands.length}</span></span>}
                   </p>

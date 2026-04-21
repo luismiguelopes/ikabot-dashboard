@@ -89,7 +89,7 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 | Movements | Active fleet and army movements |
 | Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | History | Charts of empire stats over the last 7 days |
-| Calculators | Building upgrade time estimator and island vs city ROI comparator |
+| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing (`max(0, totalNeeded − totalAvailable)`) and estimates collection time using empire production. **ROI**: island vs city building comparator |
 | World | **Inactive**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure
