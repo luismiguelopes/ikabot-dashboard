@@ -133,6 +133,7 @@
         marble_island_bld:'Quarry', marble_city_bld:'Stonemason',
         current_level:'Current level', target_level:'Target level',
         auto_computed_label:'Auto-filled from game data',
+        amort_lbl:'Payback',
         // ColonyROICalc
         tab_colony:'Colony ROI',
         colony_desc:'Compare upgrading the Sawmill / Quarry on your island versus colonising a new island. Residence upgrade costs are auto-filled from building data — only cities below the required level are counted.',
@@ -288,6 +289,7 @@
         marble_island_bld:'Pedreira', marble_city_bld:'Pedreiro',
         current_level:'Nível atual', target_level:'Nível alvo',
         auto_computed_label:'Preenchido automaticamente com dados do jogo',
+        amort_lbl:'Amortização',
         // ColonyROICalc
         tab_colony:'ROI Colónia',
         colony_desc:'Compara a evolução da Serraria / Pedreira na ilha atual com a colonização de uma nova ilha. Os custos de Residência são preenchidos automaticamente — só as cidades abaixo do nível necessário são contabilizadas.',
@@ -394,6 +396,18 @@
       const num = Number(n);
       if (n === null || n === undefined || isNaN(num)) return '—';
       return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+    }
+
+    function fmtTime(hours) {
+      if (hours === null || !isFinite(hours) || hours <= 0) return '—';
+      if (hours < 1/60) return '<1m';
+      if (hours < 1)    return `${Math.round(hours * 60)}m`;
+      if (hours < 24)   return `${Math.floor(hours)}h ${Math.round((hours % 1) * 60)}m`;
+      const days  = Math.floor(hours / 24);
+      const h     = Math.round(hours % 24);
+      if (days < 365)   return `${days}d ${h}h`;
+      const years = Math.floor(days / 365);
+      return `${years}y ${Math.floor(days % 365)}d`;
     }
 
     function fmtDuration(seconds) {
@@ -1842,13 +1856,14 @@
       const costIslandGold = effCostIsland.reduce((s, v) => s + v * goldPrice, 0);
       const costCityGold   = effCostCity.reduce((s, v) => s + v * goldPrice, 0);
 
-      const roiIsland = costIslandGold > 0 ? totalIslandGain / costIslandGold : null;
-      const roiCity   = costCityGold   > 0 ? totalCityGain   / costCityGold   : null;
+      // Amortization in hours: time to recover investment at current production gain
+      const amortIsland = (costIslandGold > 0 && totalIslandGain > 0) ? costIslandGold / (totalIslandGain * goldPrice) : null;
+      const amortCity   = (costCityGold   > 0 && totalCityGain   > 0) ? costCityGold   / (totalCityGain   * goldPrice) : null;
 
-      const islandWins = roiIsland !== null && (roiCity === null || roiIsland > roiCity);
-      const cityWins   = roiCity   !== null && (roiIsland === null || roiCity > roiIsland);
+      const islandWins = amortIsland !== null && (amortCity === null || amortIsland < amortCity);
+      const cityWins   = amortCity   !== null && (amortIsland === null || amortCity < amortIsland);
       const showCompare = (totalIslandGain > 0 || totalCityGain > 0) && (costIslandGold > 0 || costCityGold > 0);
-      const maxRoi = Math.max(roiIsland || 0, roiCity || 0);
+      const minAmort = Math.min(amortIsland ?? Infinity, amortCity ?? Infinity);
 
       return (
         <div className="space-y-5">
@@ -1959,9 +1974,9 @@
                     {islandWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
                   <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(costIslandGold) })}</div>
-                  {roiIsland !== null && (
+                  {amortIsland !== null && (
                     <div className="text-xs font-semibold text-indigo-600 mt-1">
-                      ROI: {roiIsland.toFixed(5)} {resName}/gold
+                      {t('amort_lbl')}: {fmtTime(amortIsland)}
                     </div>
                   )}
                   {islandWins && (
@@ -2075,9 +2090,9 @@
                     {cityWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
                   <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(costCityGold) })}</div>
-                  {roiCity !== null && (
+                  {amortCity !== null && (
                     <div className="text-xs font-semibold text-indigo-600 mt-1">
-                      ROI: {roiCity.toFixed(5)} {resName}/gold
+                      {t('amort_lbl')}: {fmtTime(amortCity)}
                     </div>
                   )}
                   {cityWins && (
@@ -2095,10 +2110,10 @@
               <CardHeader icon="fa-scale-balanced" title={t('roi_comparison')} />
               <div className="p-5 space-y-4">
                 {[
-                  { label: `${islandBldName} ${t('island_label')}`,       gain: totalIslandGain, costGold: costIslandGold, roi: roiIsland, wins: islandWins },
-                  { label: `${cityBldName} ${t('city_building_label')}`,   gain: totalCityGain,   costGold: costCityGold,   roi: roiCity,   wins: cityWins   },
+                  { label: `${islandBldName} ${t('island_label')}`,     gain: totalIslandGain, costGold: costIslandGold, amort: amortIsland, wins: islandWins },
+                  { label: `${cityBldName} ${t('city_building_label')}`, gain: totalCityGain,   costGold: costCityGold,   amort: amortCity,   wins: cityWins   },
                 ].map((opt, i) => {
-                  const barPct = maxRoi > 0 && opt.roi !== null ? Math.round((opt.roi / maxRoi) * 100) : 0;
+                  const barPct = (isFinite(minAmort) && opt.amort !== null) ? Math.round((minAmort / opt.amort) * 100) : 0;
                   return (
                     <div key={i}>
                       <div className="flex items-center justify-between mb-1">
@@ -2108,7 +2123,7 @@
                         </span>
                         <div className="text-xs text-slate-500 text-right">
                           +{fmt(opt.gain)} {resName}/h &nbsp;|&nbsp; {fmt(opt.costGold)} {t('gold_label')}
-                          {opt.roi !== null && <span className="ml-2 font-semibold text-indigo-600">ROI: {opt.roi.toFixed(5)}</span>}
+                          {opt.amort !== null && <span className="ml-2 font-semibold text-indigo-600">{t('amort_lbl')}: {fmtTime(opt.amort)}</span>}
                         </div>
                       </div>
                       <div className="w-full h-5 bg-slate-100 rounded-full overflow-hidden">
@@ -2183,7 +2198,6 @@
         .filter(r => r[0] > upFrom && r[0] <= upTo)
         .reduce((s, r) => s + r[1], 0);
       const totalCostAGold = upgradeCost * goldPrice; // ×1 sawmill only
-      const roiA = totalCostAGold > 0 ? totalGainA / totalCostAGold : null;
 
       // ── Option B: real residence costs from building_costs.json ───────────────
       const PALACE_NAME = 'Palácio';
@@ -2241,12 +2255,13 @@
         ? Math.round(newIslandData[2] * ISLAND_WORKER_BONUS * 10) / 10
         : 0;
       const totalCostBGold = totalResCostGold;
-      const roiB = totalCostBGold > 0 ? gainB / totalCostBGold : null;
+      const amortA = (totalCostAGold > 0 && totalGainA > 0) ? totalCostAGold / (totalGainA * goldPrice) : null;
+      const amortB = (totalCostBGold > 0 && gainB       > 0) ? totalCostBGold / (gainB       * goldPrice) : null;
 
-      const aWins     = roiA !== null && (roiB === null || roiA > roiB);
-      const bWins     = roiB !== null && (roiA === null || roiB > roiA);
-      const showCompare = roiA !== null || roiB !== null;
-      const maxRoi    = Math.max(roiA || 0, roiB || 0);
+      const aWins     = amortA !== null && (amortB === null || amortA < amortB);
+      const bWins     = amortB !== null && (amortA === null || amortB < amortA);
+      const showCompare = amortA !== null || amortB !== null;
+      const minAmort  = Math.min(amortA ?? Infinity, amortB ?? Infinity);
 
       const LevelSelect = ({ label, value, onChange, options }) => (
         <div className="flex flex-col gap-1">
@@ -2344,7 +2359,7 @@
                     {aWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
                   <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(totalCostAGold) })}</div>
-                  {roiA !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">ROI: {roiA.toFixed(5)} {resName}/gold</div>}
+                  {amortA !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">{t('amort_lbl')}: {fmtTime(amortA)}</div>}
                   {aWins && <div className="text-xs text-emerald-600 font-bold mt-2"><i className="fa-solid fa-check-circle mr-1" />{t('best_option')}</div>}
                 </div>
               </div>
@@ -2434,7 +2449,7 @@
                     {bWins && <i className="fa-solid fa-trophy text-3xl text-yellow-500" />}
                   </div>
                   <div className="text-xs text-slate-500 mt-2">{t('equiv_cost', { n: fmt(totalCostBGold) })}</div>
-                  {roiB !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">ROI: {roiB.toFixed(5)} {resName}/gold</div>}
+                  {amortB !== null && <div className="text-xs font-semibold text-indigo-600 mt-1">{t('amort_lbl')}: {fmtTime(amortB)}</div>}
                   {bWins && <div className="text-xs text-emerald-600 font-bold mt-2"><i className="fa-solid fa-check-circle mr-1" />{t('best_option')}</div>}
                 </div>
               </div>
@@ -2447,10 +2462,10 @@
               <CardHeader icon="fa-scale-balanced" title={t('roi_comparison')} />
               <div className="p-5 space-y-4">
                 {[
-                  { label: t('option_upgrade_lbl'), gain: totalGainA, costGold: totalCostAGold, roi: roiA, wins: aWins },
-                  { label: t('option_colony_lbl'),  gain: gainB,      costGold: totalCostBGold, roi: roiB, wins: bWins },
+                  { label: t('option_upgrade_lbl'), gain: totalGainA, costGold: totalCostAGold, amort: amortA, wins: aWins },
+                  { label: t('option_colony_lbl'),  gain: gainB,      costGold: totalCostBGold, amort: amortB, wins: bWins },
                 ].map((opt, i) => {
-                  const barPct = maxRoi > 0 && opt.roi !== null ? Math.round((opt.roi / maxRoi) * 100) : 0;
+                  const barPct = (isFinite(minAmort) && opt.amort !== null) ? Math.round((minAmort / opt.amort) * 100) : 0;
                   return (
                     <div key={i}>
                       <div className="flex items-center justify-between mb-1">
@@ -2460,7 +2475,7 @@
                         </span>
                         <div className="text-xs text-slate-500 text-right">
                           +{fmt(opt.gain)} {resName}/h &nbsp;|&nbsp; {fmt(opt.costGold)} {t('gold_label')}
-                          {opt.roi !== null && <span className="ml-2 font-semibold text-indigo-600">ROI: {opt.roi.toFixed(5)}</span>}
+                          {opt.amort !== null && <span className="ml-2 font-semibold text-indigo-600">{t('amort_lbl')}: {fmtTime(opt.amort)}</span>}
                         </div>
                       </div>
                       <div className="w-full h-5 bg-slate-100 rounded-full overflow-hidden">
