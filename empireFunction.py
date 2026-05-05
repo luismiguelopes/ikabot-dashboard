@@ -22,6 +22,7 @@ getcontext().prec = 30
 import time
 
 LOGS_DIR = "/tmp/ikalogs/"
+QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 
 def _parse_duration(value, default):
     """Converte string de duração (ex: '3h', '2d', '30m') ou segundos inteiros para segundos."""
@@ -152,6 +153,50 @@ _LM = {
         "en": "Error during data extraction:",
         "pt": "Erro durante extracção de dados:",
     },
+    "queue_cycle_start": {
+        "en": "[{ts}] Processing building queue...",
+        "pt": "[{ts}] A processar fila de construção...",
+    },
+    "queue_city_not_found": {
+        "en": "      -> Queue: city '{city}' not found in session, skipping.",
+        "pt": "      -> Fila: cidade '{city}' não encontrada na sessão, a ignorar.",
+    },
+    "queue_building_not_found": {
+        "en": "      -> Queue [{city}]: building '{building}' not found, removing from queue.",
+        "pt": "      -> Fila [{city}]: edifício '{building}' não encontrado, a remover da fila.",
+    },
+    "queue_max_level": {
+        "en": "      -> Queue [{city}]: {building} already at max level, removing from queue.",
+        "pt": "      -> Fila [{city}]: {building} já está no nível máximo, a remover da fila.",
+    },
+    "queue_target_reached": {
+        "en": "      -> Queue [{city}]: {building} reached target level {level}, removing from queue.",
+        "pt": "      -> Fila [{city}]: {building} atingiu nível alvo {level}, a remover da fila.",
+    },
+    "queue_no_resources": {
+        "en": "      -> Queue [{city}]: {building} — insufficient resources, will retry next cycle.",
+        "pt": "      -> Fila [{city}]: {building} — recursos insuficientes, tenta no próximo ciclo.",
+    },
+    "queue_city_busy": {
+        "en": "      -> Queue [{city}]: construction already in progress, skipping.",
+        "pt": "      -> Fila [{city}]: construção já em curso, a saltar.",
+    },
+    "queue_started": {
+        "en": "      -> Queue [{city}]: started {building} {from_lv} → {to_lv}.",
+        "pt": "      -> Fila [{city}]: iniciada construção {building} {from_lv} → {to_lv}.",
+    },
+    "queue_start_failed": {
+        "en": "      -> Queue [{city}]: failed to start {building} (server rejected).",
+        "pt": "      -> Fila [{city}]: falhou ao iniciar {building} (servidor recusou).",
+    },
+    "queue_construction_done": {
+        "en": "      -> Queue [{city}]: {building} construction completed.",
+        "pt": "      -> Fila [{city}]: construção de {building} concluída.",
+    },
+    "queue_done": {
+        "en": "[+] Building queue cycle done.",
+        "pt": "[+] Ciclo da fila de construção concluído.",
+    },
 }
 
 
@@ -198,6 +243,164 @@ def _write_scan_status(status, phase, progress, total, message):
 
 def _dist(x1, y1, x2, y2):
     return ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
+
+
+# ── Building queue (Phase 1) ─────────────────────────────────────────────────
+
+def _load_queue():
+    if not os.path.exists(QUEUE_JSON_PATH):
+        return {"queues": {}, "inProgress": {}}
+    with open(QUEUE_JSON_PATH) as f:
+        return json.load(f)
+
+
+def _save_queue(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(QUEUE_JSON_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _has_building_queue():
+    data = _load_queue()
+    return any(len(items) > 0 for items in data.get("queues", {}).values())
+
+
+def _process_building_queue(session, ids, cities):
+    print(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
+    data = _load_queue()
+    queues = data.get("queues", {})
+    in_progress = data.get("inProgress", {})
+    changed = False
+
+    # Build city name → id map
+    name_to_id = {cities[cid]["name"]: cid for cid in ids if cid in cities}
+
+    first_city = True
+    for city_name, items in list(queues.items()):
+        if not items:
+            continue
+
+        city_id = name_to_id.get(city_name)
+        if not city_id:
+            print(lm("queue_city_not_found", city=city_name))
+            continue
+
+        if not first_city:
+            time.sleep(random.randint(15, 30))
+        first_city = False
+
+        html = session.get("view=city&cityId={}".format(city_id))
+        city_data = getCity(html)
+
+        # ── Check if tracked in-progress construction has completed ──────────
+        ip = in_progress.get(city_name)
+        if ip:
+            still_busy = any(
+                b.get("isBusy") and b["name"] == ip["building"]
+                for b in city_data["position"]
+            )
+            if not still_busy:
+                print(lm("queue_construction_done", city=city_name, building=ip["building"]))
+                # Advance queue: remove item if target level reached
+                if items and items[0]["building"] == ip["building"]:
+                    for b in city_data["position"]:
+                        if b["name"] == items[0]["building"]:
+                            if b["level"] >= items[0]["targetLevel"]:
+                                items.pop(0)
+                            break
+                del in_progress[city_name]
+                changed = True
+
+        if not items:
+            continue
+
+        # ── Skip if any construction is already running in this city ─────────
+        if any(b.get("isBusy") for b in city_data["position"]):
+            # Sync inProgress if we're not tracking it yet
+            if city_name not in in_progress:
+                for b in city_data["position"]:
+                    if b.get("isBusy") and b["name"] == items[0]["building"]:
+                        in_progress[city_name] = {
+                            "building": b["name"],
+                            "fromLevel": b["level"],
+                            "toLevel": b["level"] + 1,
+                            "startedAt": int(time.time()),
+                        }
+                        changed = True
+                        break
+            print(lm("queue_city_busy", city=city_name))
+            continue
+
+        # ── Try to start the next item ────────────────────────────────────────
+        next_item = items[0]
+        target_b = next((b for b in city_data["position"] if b["name"] == next_item["building"]), None)
+
+        if target_b is None:
+            print(lm("queue_building_not_found", city=city_name, building=next_item["building"]))
+            items.pop(0)
+            changed = True
+            continue
+
+        if target_b.get("isMaxLevel"):
+            print(lm("queue_max_level", city=city_name, building=next_item["building"]))
+            items.pop(0)
+            changed = True
+            continue
+
+        if target_b["level"] >= next_item["targetLevel"]:
+            print(lm("queue_target_reached", city=city_name, building=next_item["building"], level=next_item["targetLevel"]))
+            items.pop(0)
+            changed = True
+            continue
+
+        if not target_b.get("canUpgrade"):
+            print(lm("queue_no_resources", city=city_name, building=next_item["building"]))
+            continue
+
+        # ── Fire the upgrade POST ─────────────────────────────────────────────
+        url = (
+            "action=CityScreen&function=upgradeBuilding"
+            "&actionRequest={}&cityId={}&position={:d}&level={}"
+            "&activeTab=tabSendTransporter&backgroundView=city"
+            "&currentCityId={}&templateView={}&ajax=1"
+        ).format(
+            actionRequest,
+            city_id,
+            target_b["position"],
+            target_b["level"],
+            city_id,
+            target_b["building"],
+        )
+        session.post(url)
+
+        # ── Verify it started ─────────────────────────────────────────────────
+        time.sleep(random.randint(3, 6))
+        html2 = session.get("view=city&cityId={}".format(city_id))
+        city2 = getCity(html2)
+        started = False
+        for b in city2["position"]:
+            if b["name"] == next_item["building"] and b.get("isBusy"):
+                in_progress[city_name] = {
+                    "building": b["name"],
+                    "fromLevel": target_b["level"],
+                    "toLevel": b["level"] + 1,
+                    "startedAt": int(time.time()),
+                }
+                started = True
+                changed = True
+                print(lm("queue_started", city=city_name, building=b["name"],
+                          from_lv=target_b["level"], to_lv=b["level"] + 1))
+                break
+
+        if not started:
+            print(lm("queue_start_failed", city=city_name, building=next_item["building"]))
+
+    if changed:
+        data["queues"] = queues
+        data["inProgress"] = in_progress
+        _save_queue(data)
+
+    print(lm("queue_done"))
 
 
 def _collect_world_scan(session):
@@ -769,6 +972,10 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── World scan (sequential, every 7 days) ────────────────────────
             elif _should_update_world_scan():
                 _collect_world_scan(session)
+
+            # ── Building queue (sequential, every cycle if items exist) ───────
+            elif _has_building_queue():
+                _process_building_queue(session, ids, cities)
 
             # ── Ship movements ───────────────────────────────────────────────
             time.sleep(random.randint(5, 10))

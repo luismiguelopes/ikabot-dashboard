@@ -18,6 +18,7 @@ WORLD_SCAN_PREV_PATH    = os.path.join(LOGS_DIR, "world_scan_prev.json")
 WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
 PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
+BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 
 
 def get_last_modified_date(filepath):
@@ -178,6 +179,90 @@ def api_world_scan_mark():
     with open(PLAYER_MARKS_JSON_PATH, "w") as f:
         json.dump(marks, f, indent=2)
     return jsonify({"ok": True})
+
+
+def _load_building_queue():
+    if not os.path.exists(BUILDING_QUEUE_JSON_PATH):
+        return {"queues": {}, "inProgress": {}}
+    with open(BUILDING_QUEUE_JSON_PATH) as f:
+        return json.load(f)
+
+
+def _save_building_queue(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(BUILDING_QUEUE_JSON_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+@app.route("/api/building-queue")
+def api_building_queue():
+    return jsonify(_load_building_queue())
+
+
+@app.route("/api/building-queue/add", methods=["POST"])
+def api_building_queue_add():
+    body = request.get_json(force=True)
+    city_name = str(body.get("cityName", "")).strip()
+    building_name = str(body.get("buildingName", "")).strip()
+    try:
+        target_level = int(body.get("targetLevel", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "targetLevel inválido"}), 400
+    if not city_name or not building_name or target_level < 1:
+        return jsonify({"error": "cityName, buildingName e targetLevel são obrigatórios"}), 400
+
+    data = _load_building_queue()
+    data.setdefault("queues", {}).setdefault(city_name, [])
+    data["queues"][city_name].append({
+        "building": building_name,
+        "targetLevel": target_level,
+        "addedAt": int(time.time()),
+    })
+    _save_building_queue(data)
+    return jsonify({"ok": True, "queue": data["queues"][city_name]})
+
+
+@app.route("/api/building-queue/remove", methods=["POST"])
+def api_building_queue_remove():
+    body = request.get_json(force=True)
+    city_name = str(body.get("cityName", "")).strip()
+    try:
+        index = int(body.get("index", -1))
+    except (ValueError, TypeError):
+        return jsonify({"error": "index inválido"}), 400
+
+    data = _load_building_queue()
+    city_queue = data.get("queues", {}).get(city_name, [])
+    if index < 0 or index >= len(city_queue):
+        return jsonify({"error": "index fora do intervalo"}), 400
+
+    city_queue.pop(index)
+    data["queues"][city_name] = city_queue
+    _save_building_queue(data)
+    return jsonify({"ok": True, "queue": city_queue})
+
+
+@app.route("/api/building-queue/reorder", methods=["POST"])
+def api_building_queue_reorder():
+    body = request.get_json(force=True)
+    city_name = str(body.get("cityName", "")).strip()
+    try:
+        from_idx = int(body.get("fromIndex", -1))
+        to_idx   = int(body.get("toIndex",   -1))
+    except (ValueError, TypeError):
+        return jsonify({"error": "fromIndex/toIndex inválidos"}), 400
+
+    data = _load_building_queue()
+    city_queue = data.get("queues", {}).get(city_name, [])
+    n = len(city_queue)
+    if not (0 <= from_idx < n and 0 <= to_idx < n) or from_idx == to_idx:
+        return jsonify({"error": "índices inválidos"}), 400
+
+    item = city_queue.pop(from_idx)
+    city_queue.insert(to_idx, item)
+    data["queues"][city_name] = city_queue
+    _save_building_queue(data)
+    return jsonify({"ok": True, "queue": city_queue})
 
 
 if __name__ == "__main__":
