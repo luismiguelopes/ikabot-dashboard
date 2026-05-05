@@ -209,6 +209,18 @@ _LM = {
         "en": "[+] Building queue cycle done.",
         "pt": "[+] Ciclo da fila de construção concluído.",
     },
+    "queue_wake": {
+        "en": "[{ts}] Queue wake-up: checking constructions...",
+        "pt": "[{ts}] Acordei para a fila de construção: a verificar construções...",
+    },
+    "queue_sleep_until": {
+        "en": "      -> Next construction ETA: {eta}. Sleeping {mins} min.",
+        "pt": "      -> Próxima construção prevista: {eta}. A dormir {mins} min.",
+    },
+    "cycle_sleep": {
+        "en": "[+] Sleeping {mins} min until next empire cycle.",
+        "pt": "[+] A dormir {mins} min até ao próximo ciclo do império.",
+    },
 }
 
 
@@ -275,6 +287,36 @@ def _save_queue(data):
 def _has_building_queue():
     data = _load_queue()
     return any(len(items) > 0 for items in data.get("queues", {}).values())
+
+
+def _get_next_construction_eta():
+    """Return the earliest construction completion timestamp across all in-progress cities, or None."""
+    data = _load_queue()
+    etas = [
+        entry["eta"]
+        for entry in data.get("inProgress", {}).values()
+        if entry.get("eta", 0) > time.time()
+    ]
+    return min(etas) if etas else None
+
+
+def _smart_sleep(last_full_cycle_time, next_full_jitter):
+    """Sleep until the next full empire cycle or the next construction ETA, whichever comes first."""
+    next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
+    eta = _get_next_construction_eta()
+
+    if eta:
+        # Wake up 3–8 min after construction ends to start the next level
+        wake_for_queue = eta + random.randint(3, 8) * 60
+        sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
+        if wake_for_queue < next_full_at:
+            eta_str = time.strftime('%H:%M:%S', time.localtime(eta))
+            print(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
+    else:
+        sleep_secs = max(60, next_full_at - time.time())
+
+    print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
+    time.sleep(sleep_secs)
 
 
 def _process_building_queue(session, ids, cities):
@@ -406,6 +448,7 @@ def _process_building_queue(session, ids, cities):
                     "fromLevel": target_b["level"],
                     "toLevel": b["level"] + 1,
                     "startedAt": int(time.time()),
+                    "eta": int(b.get("completed", 0)),
                 }
                 started = True
                 changed = True
@@ -839,8 +882,25 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     print(lm("empire_start_1"))
     print(lm("empire_start_2", interval=UPDATE_INTERVAL))
 
+    ids = None
+    cities = None
+    last_full_cycle_time = 0
+    next_full_jitter = 0
+
     while True:
         try:
+            now = time.time()
+            do_full = ids is None or (now >= last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter)
+
+            # ── Queue-only wake-up ───────────────────────────────────────────
+            if not do_full:
+                if ids and _has_building_queue():
+                    print(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
+                    _process_building_queue(session, ids, cities)
+                _smart_sleep(last_full_cycle_time, next_full_jitter)
+                continue
+
+            # ── Full empire data cycle ───────────────────────────────────────
             print(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
             (ids, cities) = getIdsOfCities(session)
 
@@ -994,10 +1054,6 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             elif _should_update_world_scan():
                 _collect_world_scan(session)
 
-            # ── Building queue (sequential, every cycle if items exist) ───────
-            elif _has_building_queue():
-                _process_building_queue(session, ids, cities)
-
             # ── Ship movements ───────────────────────────────────────────────
             time.sleep(random.randint(5, 10))
             movements = _collect_movements(session, ids[0])
@@ -1026,7 +1082,14 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             _trim_history(history_path)
 
             print(lm("cycle_done"))
-            time.sleep(UPDATE_INTERVAL + random.randint(-300, 300))
+            last_full_cycle_time = time.time()
+            next_full_jitter = random.randint(-300, 300)
+
+            # ── Building queue (after full cycle) ────────────────────────────
+            if _has_building_queue():
+                _process_building_queue(session, ids, cities)
+
+            _smart_sleep(last_full_cycle_time, next_full_jitter)
 
         except Exception:
             import traceback
