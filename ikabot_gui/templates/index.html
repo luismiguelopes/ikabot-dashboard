@@ -168,6 +168,7 @@
         queue_no_data:'Load empire data first (wait for the first bot cycle).',
         queue_buildings_panel:'Buildings', queue_panel:'Queue',
         queue_already_queued:'Already queued',
+        queue_last_cycle:'Last bot cycle: {ts}',
         // MARK labels
         mark_novo:'New', mark_alvo:'Target', mark_visto:'Seen', mark_ignorar:'Ignore',
         // StatePill
@@ -341,6 +342,7 @@
         queue_no_data:'Aguarda o primeiro ciclo do bot para carregar os dados do império.',
         queue_buildings_panel:'Edifícios', queue_panel:'Fila',
         queue_already_queued:'Já na fila',
+        queue_last_cycle:'Último ciclo do bot: {ts}',
         mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
         state_inactive:'Inactivo', state_vacation:'Férias',
         res_wine:'Vinho', res_marble:'Mármore', res_crystal:'Cristal', res_sulfur:'Enxofre',
@@ -2536,15 +2538,33 @@
     // ─── BuildingQueueTab ─────────────────────────────────────────────────────────
 
     function BuildingQueueTab({ data }) {
-      const t = useT();
-      const [queue, setQueue]         = React.useState(null);
-      const [selCity, setSelCity]     = React.useState('');
+      const t    = useT();
+      const lang = useLang();
+      const [queue, setQueue]               = React.useState(null);
+      const [selCity, setSelCity]           = React.useState('');
       const [targetLevels, setTargetLevels] = React.useState({});
+      const [costsData, setCostsData]       = React.useState(null);
+      const [refreshMsg, setRefreshMsg]     = React.useState('');
 
       const fetchQueue = () =>
         fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {});
 
       React.useEffect(() => { fetchQueue(); }, []);
+
+      React.useEffect(() => {
+        fetch('/api/building-costs')
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d && !d.error) setCostsData(d); })
+          .catch(() => {});
+      }, []);
+
+      const handleForceRefresh = () => {
+        setRefreshMsg('sending');
+        fetch('/api/building-costs/refresh', { method: 'POST' })
+          .then(r => r.json())
+          .then(() => setRefreshMsg('ok'))
+          .catch(() => setRefreshMsg('error'));
+      };
 
       const empireData = data?.empireData || {};
       const cityNames  = Object.keys(empireData).sort();
@@ -2615,6 +2635,36 @@
       return (
         <div className="space-y-4">
           <PageHeader icon="fa-list-check" title={t('queue_title')} />
+
+          {/* Status card */}
+          <Card>
+            <div className="px-5 py-4 flex flex-wrap items-center gap-4">
+              <div className="flex-1 min-w-0 space-y-1">
+                {data?.lastUpdated && (
+                  <p className="text-sm text-slate-600">
+                    <i className="fa-regular fa-clock mr-1.5 text-slate-400" />
+                    {t('queue_last_cycle', { ts: data.lastUpdated })}
+                  </p>
+                )}
+                <p className="text-xs text-slate-400">
+                  {costsData?.lastUpdated
+                    ? <><i className="fa-solid fa-cube mr-1" />{t('last_extraction', { ts: fmtTs(costsData.lastUpdated, lang) })}<span className="ml-2 text-slate-300">{t('updates_3d')}</span></>
+                    : <span className="italic">{t('costs_unavailable')}</span>
+                  }
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                {refreshMsg === 'sending' && <span className="text-xs text-slate-400">{t('sending_request')}</span>}
+                {refreshMsg === 'ok'      && <span className="text-xs text-emerald-600 font-medium">{t('scheduled_ok')}</span>}
+                {refreshMsg === 'error'   && <span className="text-xs text-red-500">{t('schedule_error')}</span>}
+                <button onClick={handleForceRefresh}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors">
+                  <i className="fa-solid fa-rotate" />
+                  {t('force_update')}
+                </button>
+              </div>
+            </div>
+          </Card>
 
           {/* City tab pills */}
           <div className="flex gap-2 flex-wrap">
