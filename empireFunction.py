@@ -193,6 +193,18 @@ _LM = {
         "en": "      -> Queue [{city}]: {building} construction completed.",
         "pt": "      -> Fila [{city}]: construção de {building} concluída.",
     },
+    "queue_no_citizens": {
+        "en": "      -> Queue [{city}]: {building} — no free citizens, will retry next cycle.",
+        "pt": "      -> Fila [{city}]: {building} — sem cidadãos livres, tenta no próximo ciclo.",
+    },
+    "queue_attempting": {
+        "en": "      -> Queue [{city}]: attempting {building} lv{lv} (type={btype}, pos={pos}, canUpgrade={can}, citizens={cit})",
+        "pt": "      -> Fila [{city}]: a tentar {building} lv{lv} (tipo={btype}, pos={pos}, canUpgrade={can}, cidadãos={cit})",
+    },
+    "queue_post_resp": {
+        "en": "      -> Queue [{city}]: POST response: {resp}",
+        "pt": "      -> Fila [{city}]: resposta POST: {resp}",
+    },
     "queue_done": {
         "en": "[+] Building queue cycle done.",
         "pt": "[+] Ciclo da fila de construção concluído.",
@@ -353,11 +365,19 @@ def _process_building_queue(session, ids, cities):
             changed = True
             continue
 
-        if not target_b.get("canUpgrade"):
+        if target_b.get("canUpgrade") is False:
             print(lm("queue_no_resources", city=city_name, building=next_item["building"]))
             continue
 
+        if city_data.get("freeCitizens", 1) == 0:
+            print(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
+            continue
+
         # ── Fire the upgrade POST ─────────────────────────────────────────────
+        print(lm("queue_attempting", city=city_name, building=next_item["building"],
+                  lv=target_b["level"], btype=target_b["building"], pos=target_b["position"],
+                  can=target_b.get("canUpgrade"), cit=city_data.get("freeCitizens")))
+
         url = (
             "action=CityScreen&function=upgradeBuilding"
             "&actionRequest={}&cityId={}&position={:d}&level={}"
@@ -371,7 +391,8 @@ def _process_building_queue(session, ids, cities):
             city_id,
             target_b["building"],
         )
-        session.post(url)
+        resp = session.post(url)
+        print(lm("queue_post_resp", city=city_name, resp=str(resp)[:300]))
 
         # ── Verify it started ─────────────────────────────────────────────────
         time.sleep(random.randint(3, 6))
