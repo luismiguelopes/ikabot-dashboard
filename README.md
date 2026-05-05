@@ -43,6 +43,12 @@ The `ikabot-gui` container serves a Flask app on port `5001` that reads those fi
 ```env
 IKABOT_EMAIL=your_email@example.com
 IKABOT_PASSWORD=your_password
+
+# Optional — shown with defaults
+EMPIRE_UPDATE_INTERVAL=1h
+BUILDING_COSTS_UPDATE_INTERVAL=3d
+WORLD_SCAN_UPDATE_INTERVAL=7d
+WORLD_SCAN_RADIUS=10
 ```
 
 3. Start the containers:
@@ -55,13 +61,15 @@ docker compose up -d
 
 ## Configuration
 
+Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `30m`, `90s`) or a plain integer (seconds).
+
 | Environment variable | Default | Description |
 |---|---|---|
 | `IKABOT_EMAIL` | — | Your Ikariam account email |
 | `IKABOT_PASSWORD` | — | Your Ikariam account password |
-| `EMPIRE_UPDATE_INTERVAL` | `3600` | Seconds between main data collection cycles |
-| `BUILDING_COSTS_UPDATE_INTERVAL` | `259200` | Seconds between building costs refreshes (default: 3 days) |
-| `WORLD_SCAN_UPDATE_INTERVAL` | `604800` | Seconds between world scans (default: 7 days) |
+| `EMPIRE_UPDATE_INTERVAL` | `1h` | Interval between main data collection cycles |
+| `BUILDING_COSTS_UPDATE_INTERVAL` | `3d` | Interval between building costs refreshes |
+| `WORLD_SCAN_UPDATE_INTERVAL` | `7d` | Interval between world scans |
 | `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the world scan |
 | `LOG_LANG` | `en` | Language for backend log messages (`en` or `pt`) |
 

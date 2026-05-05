@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
+    env_file:
+      - .env
     volumes:
       # Pega no ficheiro ./empireFunction.py que está ao lado do compose e injeta na diretoria correta do bot
       - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py

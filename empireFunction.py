@@ -22,11 +22,24 @@ getcontext().prec = 30
 import time
 
 LOGS_DIR = "/tmp/ikalogs/"
-UPDATE_INTERVAL = int(os.getenv("EMPIRE_UPDATE_INTERVAL", 3600))
+
+def _parse_duration(value, default):
+    """Converte string de duração (ex: '3h', '2d', '30m') ou segundos inteiros para segundos."""
+    if value is None:
+        return default
+    value = str(value).strip().lower()
+    match = re.fullmatch(r'(\d+(?:\.\d+)?)\s*(d|h|m|s)?', value)
+    if not match:
+        return default
+    amount, unit = float(match.group(1)), match.group(2) or 's'
+    multipliers = {'d': 86400, 'h': 3600, 'm': 60, 's': 1}
+    return int(amount * multipliers[unit])
+
+UPDATE_INTERVAL = _parse_duration(os.getenv("EMPIRE_UPDATE_INTERVAL"), 3600)
 # Maximum history lines kept in history.jsonl (~90 days at 1h interval)
 MAX_HISTORY_LINES = 2160
-BUILDING_COSTS_UPDATE_INTERVAL = int(os.getenv("BUILDING_COSTS_UPDATE_INTERVAL", 3 * 24 * 3600))
-WORLD_SCAN_UPDATE_INTERVAL = int(os.getenv("WORLD_SCAN_UPDATE_INTERVAL", 7 * 24 * 3600))
+BUILDING_COSTS_UPDATE_INTERVAL = _parse_duration(os.getenv("BUILDING_COSTS_UPDATE_INTERVAL"), 3 * 24 * 3600)
+WORLD_SCAN_UPDATE_INTERVAL = _parse_duration(os.getenv("WORLD_SCAN_UPDATE_INTERVAL"), 7 * 24 * 3600)
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 LOG_LANG = os.getenv("LOG_LANG", "en")
 
