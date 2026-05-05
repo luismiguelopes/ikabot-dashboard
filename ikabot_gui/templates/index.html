@@ -32,7 +32,7 @@
         // Sidebar
         nav_home:'Home', nav_cities:'Cities', nav_buildings:'Buildings',
         nav_movements:'Movements', nav_alerts:'Alerts', nav_history:'History',
-        nav_calculators:'Calculators', nav_world:'World',
+        nav_calculators:'Calculators', nav_world:'World', nav_construction:'Construction',
         stale_data:'Stale data', refresh_in:'Refresh in {t}',
         lang_other:'PT',
         // Shared
@@ -150,7 +150,6 @@
         // CalculadorasPage
         calc_title:'Calculators',
         tab_upgrade:'Building Evolution', tab_roi:'ROI Sawmill / Quarry',
-        tab_queue:'Build Queue',
         queue_title:'Building Queue',
         queue_desc:'Add buildings to the queue per city. The bot will start each upgrade automatically when the city has enough resources.',
         queue_add_title:'Add to queue',
@@ -214,7 +213,7 @@
       pt: {
         nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
         nav_movements:'Movimentos', nav_alerts:'Alertas', nav_history:'Histórico',
-        nav_calculators:'Calculadoras', nav_world:'Mundo',
+        nav_calculators:'Calculadoras', nav_world:'Mundo', nav_construction:'Construção',
         stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}',
         lang_other:'EN',
         all_cities:'Todas as cidades', loading:'A carregar…', col_city:'Cidade', col_dist:'Dist.',
@@ -322,7 +321,6 @@
         new_city_lbl:'Nova cidade',
         calc_title:'Calculadoras',
         tab_upgrade:'Evolução de Edifícios', tab_roi:'ROI Serraria / Pedreira',
-        tab_queue:'Fila de Construção',
         queue_title:'Fila de Construção',
         queue_desc:'Adiciona edifícios à fila por cidade. O bot inicia cada upgrade automaticamente quando a cidade tiver recursos suficientes.',
         queue_add_title:'Adicionar à fila',
@@ -512,8 +510,9 @@
             <NavItem icon="fa-ship"         label={t('nav_movements')}   active={active === 'movements'}  onClick={() => setActive('movements')}  badge={movCount} />
             <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')} active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
             <NavItem icon="fa-chart-line"   label={t('nav_history')}     active={active === 'history'}    onClick={() => setActive('history')}    />
-            <NavItem icon="fa-calculator"   label={t('nav_calculators')} active={active === 'calc'}       onClick={() => setActive('calc')}       />
-            <NavItem icon="fa-earth-europe" label={t('nav_world')}       active={active === 'mundo'}      onClick={() => setActive('mundo')}      />
+            <NavItem icon="fa-calculator"   label={t('nav_calculators')} active={active === 'calc'}         onClick={() => setActive('calc')}         />
+            <NavItem icon="fa-list-check"   label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
+            <NavItem icon="fa-earth-europe" label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
           </nav>
 
           <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
@@ -2600,7 +2599,12 @@
         }).then(() => fetchQueue());
       };
 
-      if (!data) return <p className="text-slate-500 text-sm">{t('queue_no_data')}</p>;
+      if (!data) return (
+        <div>
+          <PageHeader icon="fa-list-check" title={t('queue_title')} />
+          <p className="text-slate-500 text-sm">{t('queue_no_data')}</p>
+        </div>
+      );
 
       const queues     = queue?.queues     || {};
       const inProgress = queue?.inProgress || {};
@@ -2623,6 +2627,7 @@
 
       return (
         <div className="space-y-6">
+          <PageHeader icon="fa-list-check" title={t('queue_title')} />
           <p className="text-sm text-slate-500">{t('queue_desc')}</p>
 
           {/* Add form */}
@@ -2753,7 +2758,6 @@
         { key: 'upgrade', label: t('tab_upgrade'), icon: 'fa-building-columns' },
         { key: 'roi',     label: t('tab_roi'),     icon: 'fa-scale-balanced'   },
         { key: 'colony',  label: t('tab_colony'),  icon: 'fa-ship'             },
-        { key: 'queue',   label: t('tab_queue'),   icon: 'fa-list-check'       },
       ];
       return (
         <div>
@@ -2777,7 +2781,6 @@
           {tab === 'upgrade' && <BuildingUpgradeCalc data={data} />}
           {tab === 'roi'     && <ROICalc data={data} />}
           {tab === 'colony'  && <ColonyROICalc data={data} />}
-          {tab === 'queue'   && <BuildingQueueTab data={data} />}
         </div>
       );
     }
@@ -3481,8 +3484,9 @@
             {page === 'movements' && <MovementsPage />}
             {page === 'alerts'    && <AlertsPage    data={data} thresholds={thresholds} onSaveThresholds={saveThresholds} />}
             {page === 'history'   && <HistoryPage />}
-            {page === 'calc'      && <CalculadorasPage data={data} />}
-            {page === 'mundo'     && <MundoPage />}
+            {page === 'calc'         && <CalculadorasPage data={data} />}
+            {page === 'construction' && <BuildingQueueTab data={data} />}
+            {page === 'mundo'        && <MundoPage />}
           </main>
         </div>
         </LangContext.Provider>
