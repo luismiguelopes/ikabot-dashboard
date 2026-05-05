@@ -166,6 +166,8 @@
         queue_city_section:'{city}',
         queue_lv_current:'Current: {lv}', queue_lv_target:'Target: {lv}',
         queue_no_data:'Load empire data first (wait for the first bot cycle).',
+        queue_buildings_panel:'Buildings', queue_panel:'Queue',
+        queue_already_queued:'Already queued',
         // MARK labels
         mark_novo:'New', mark_alvo:'Target', mark_visto:'Seen', mark_ignorar:'Ignore',
         // StatePill
@@ -337,6 +339,8 @@
         queue_city_section:'{city}',
         queue_lv_current:'Atual: {lv}', queue_lv_target:'Alvo: {lv}',
         queue_no_data:'Aguarda o primeiro ciclo do bot para carregar os dados do império.',
+        queue_buildings_panel:'Edifícios', queue_panel:'Fila',
+        queue_already_queued:'Já na fila',
         mark_novo:'Novo', mark_alvo:'Alvo', mark_visto:'Visto', mark_ignorar:'Ignorar',
         state_inactive:'Inactivo', state_vacation:'Férias',
         res_wine:'Vinho', res_marble:'Mármore', res_crystal:'Cristal', res_sulfur:'Enxofre',
@@ -2533,218 +2537,247 @@
 
     function BuildingQueueTab({ data }) {
       const t = useT();
-      const [queue, setQueue]           = React.useState(null);
-      const [loading, setLoading]       = React.useState(true);
-      const [addCity, setAddCity]       = React.useState('');
-      const [addBuilding, setAddBuilding] = React.useState('');
-      const [addLevel, setAddLevel]     = React.useState('');
-      const [saving, setSaving]         = React.useState(false);
-      const [error, setError]           = React.useState('');
+      const [queue, setQueue]         = React.useState(null);
+      const [selCity, setSelCity]     = React.useState('');
+      const [targetLevels, setTargetLevels] = React.useState({});
 
-      const fetchQueue = () => {
-        fetch('/api/building-queue')
-          .then(r => r.json())
-          .then(d => { setQueue(d); setLoading(false); })
-          .catch(() => setLoading(false));
-      };
+      const fetchQueue = () =>
+        fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {});
 
       React.useEffect(() => { fetchQueue(); }, []);
 
       const empireData = data?.empireData || {};
       const cityNames  = Object.keys(empireData).sort();
 
-      // Buildings available in the selected city (from empire.json, excluding empty/metadata)
+      React.useEffect(() => {
+        if (!selCity && cityNames.length > 0) setSelCity(cityNames[0]);
+      }, [cityNames.length]);
+
       const buildingsInCity = React.useMemo(() => {
-        if (!addCity || !empireData[addCity]) return [];
-        return Object.entries(empireData[addCity])
+        if (!selCity || !empireData[selCity]) return [];
+        return Object.entries(empireData[selCity])
           .filter(([k, v]) => k !== '_constructionEnds' && v !== '')
-          .map(([k, v]) => ({ name: k, level: parseInt(v) || 0 }))
+          .map(([k, v]) => ({ name: k, level: parseInt(v) || 0, isBusy: String(v).endsWith('+') }))
           .sort((a, b) => a.name.localeCompare(b.name));
-      }, [addCity, empireData]);
+      }, [selCity, empireData]);
 
-      const currentLevel = React.useMemo(() => {
-        const b = buildingsInCity.find(b => b.name === addBuilding);
-        return b ? b.level : null;
-      }, [addBuilding, buildingsInCity]);
+      React.useEffect(() => {
+        const defaults = {};
+        buildingsInCity.forEach(b => { defaults[b.name] = b.level + 1; });
+        setTargetLevels(defaults);
+      }, [selCity]);
 
-      const handleAdd = () => {
-        const lvl = parseInt(addLevel);
-        if (!addCity || !addBuilding || !lvl || lvl < 1) return;
-        setSaving(true);
-        setError('');
+      const queues     = queue?.queues     || {};
+      const inProgress = queue?.inProgress || {};
+
+      const cityQueue      = queues[selCity] || [];
+      const cityInProgress = inProgress[selCity];
+      const queuedSet      = new Set(cityQueue.map(i => i.building));
+
+      const totalQueued = city =>
+        (queues[city]?.length || 0) + (inProgress[city] ? 1 : 0);
+
+      const handleAdd = buildingName => {
+        const targetLevel = targetLevels[buildingName];
+        if (!selCity || !targetLevel) return;
         fetch('/api/building-queue/add', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ cityName: addCity, buildingName: addBuilding, targetLevel: lvl }),
-        })
-          .then(r => r.json())
-          .then(d => { if (d.ok) { fetchQueue(); setAddBuilding(''); setAddLevel(''); } else setError(d.error || ''); })
-          .catch(e => setError(String(e)))
-          .finally(() => setSaving(false));
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ cityName: selCity, buildingName, targetLevel }),
+        }).then(fetchQueue);
       };
 
-      const handleRemove = (cityName, index) => {
+      const handleRemove = idx => {
         fetch('/api/building-queue/remove', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ cityName, index }),
-        }).then(() => fetchQueue());
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ cityName: selCity, index: idx }),
+        }).then(fetchQueue);
       };
 
-      const handleReorder = (cityName, fromIndex, toIndex) => {
+      const handleReorder = (fromIndex, toIndex) => {
         fetch('/api/building-queue/reorder', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ cityName, fromIndex, toIndex }),
-        }).then(() => fetchQueue());
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ cityName: selCity, fromIndex, toIndex }),
+        }).then(fetchQueue);
       };
 
       if (!data) return (
         <div>
           <PageHeader icon="fa-list-check" title={t('queue_title')} />
-          <p className="text-slate-500 text-sm">{t('queue_no_data')}</p>
+          <p className="text-slate-500 text-sm mt-4">{t('queue_no_data')}</p>
         </div>
       );
 
-      const queues     = queue?.queues     || {};
-      const inProgress = queue?.inProgress || {};
-      const allCitiesWithQueue = Object.keys(queues).filter(c => queues[c].length > 0);
-
-      const statusBadge = (cityName, idx) => {
-        const ip = inProgress[cityName];
-        if (ip && idx === 0) {
-          return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{t('queue_status_building')}</span>;
-        }
-        return <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">{t('queue_status_pending')}</span>;
-      };
-
-      const currentLevelForItem = (cityName, buildingName) => {
-        const cityBuildings = empireData[cityName] || {};
-        const raw = cityBuildings[buildingName];
-        if (raw === undefined || raw === '') return null;
-        return parseInt(raw) || 0;
-      };
+      const selectCls = "border border-slate-200 rounded-lg";
 
       return (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <PageHeader icon="fa-list-check" title={t('queue_title')} />
-          <p className="text-sm text-slate-500">{t('queue_desc')}</p>
 
-          {/* Add form */}
-          <Card>
-            <h3 className="font-semibold text-slate-700 mb-4">{t('queue_add_title')}</h3>
-            <div className="flex flex-wrap gap-3 items-end">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-500">Cidade</label>
-                <select
-                  value={addCity}
-                  onChange={e => { setAddCity(e.target.value); setAddBuilding(''); setAddLevel(''); }}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          {/* City tab pills */}
+          <div className="flex gap-2 flex-wrap">
+            {cityNames.map(city => {
+              const count = totalQueued(city);
+              return (
+                <button key={city} onClick={() => setSelCity(city)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+                    selCity === city
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
                 >
-                  <option value="">{t('queue_select_city')}</option>
-                  {cityNames.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
+                  {city}
+                  {count > 0 && (
+                    <span className={`text-xs rounded-full px-1.5 py-0.5 font-semibold ${
+                      selCity === city ? 'bg-white text-indigo-600' : 'bg-indigo-100 text-indigo-700'
+                    }`}>{count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-500">Edifício</label>
-                <select
-                  value={addBuilding}
-                  onChange={e => { setAddBuilding(e.target.value); setAddLevel(''); }}
-                  disabled={!addCity}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
-                >
-                  <option value="">{t('queue_select_building')}</option>
-                  {buildingsInCity.map(b => (
-                    <option key={b.name} value={b.name}>{b.name} (lv {b.level})</option>
-                  ))}
-                </select>
-              </div>
+          {selCity && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-500">
-                  {t('queue_target_level')}
-                  {currentLevel !== null && <span className="ml-1 text-slate-400">(atual: {currentLevel})</span>}
-                </label>
-                <input
-                  type="number"
-                  min={currentLevel !== null ? currentLevel + 1 : 1}
-                  value={addLevel}
-                  onChange={e => setAddLevel(e.target.value)}
-                  disabled={!addBuilding}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
-                />
-              </div>
+              {/* ── Left: building list ───────────────────────────────────── */}
+              <Card>
+                <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <i className="fa-solid fa-landmark text-indigo-400" />
+                  {t('queue_buildings_panel')}
+                </h3>
+                <div className="space-y-1.5">
+                  {buildingsInCity.map(b => {
+                    const inQueue = queuedSet.has(b.name) || cityInProgress?.building === b.name;
+                    const targetLv = targetLevels[b.name] ?? (b.level + 1);
+                    const invalid  = !targetLv || targetLv <= b.level;
+                    return (
+                      <div key={b.name}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                          inQueue
+                            ? 'bg-indigo-50 border border-indigo-100'
+                            : 'bg-slate-50 hover:bg-slate-100 border border-transparent'
+                        }`}
+                      >
+                        {/* name + busy indicator */}
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-slate-700 text-sm truncate">{b.name}</span>
+                          {b.isBusy && (
+                            <span className="ml-1.5 text-xs text-blue-500 font-semibold">↑</span>
+                          )}
+                        </div>
 
-              <button
-                onClick={handleAdd}
-                disabled={saving || !addCity || !addBuilding || !addLevel}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-              >
-                <i className="fa-solid fa-plus" />
-                {t('queue_add_btn')}
-              </button>
-            </div>
-            {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-          </Card>
+                        {/* current level */}
+                        <span className="text-xs font-mono text-slate-400 shrink-0">lv {b.level}</span>
+                        <span className="text-slate-300 shrink-0">→</span>
 
-          {/* Queue per city */}
-          {loading && <p className="text-sm text-slate-400">A carregar…</p>}
+                        {/* target level input */}
+                        <input
+                          type="number"
+                          min={b.level + 1}
+                          value={targetLv}
+                          onChange={e => setTargetLevels(prev => ({...prev, [b.name]: parseInt(e.target.value) || b.level + 1}))}
+                          disabled={inQueue}
+                          className="w-14 border border-slate-200 rounded px-2 py-1 text-sm text-center focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:opacity-40 disabled:cursor-default"
+                        />
 
-          {!loading && allCitiesWithQueue.length === 0 && (
-            <p className="text-sm text-slate-400">{t('queue_empty')}</p>
-          )}
+                        {/* add / already-queued button */}
+                        {inQueue ? (
+                          <span className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-indigo-100 text-indigo-500">
+                            <i className="fa-solid fa-check text-xs" />
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleAdd(b.name)}
+                            disabled={invalid}
+                            title={t('queue_add_btn')}
+                            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-30 transition-colors"
+                          >
+                            <i className="fa-solid fa-plus text-xs" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {buildingsInCity.length === 0 && (
+                    <p className="text-sm text-slate-400 py-2">{t('queue_no_data')}</p>
+                  )}
+                </div>
+              </Card>
 
-          {allCitiesWithQueue.map(cityName => (
-            <Card key={cityName}>
-              <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                <i className="fa-solid fa-city text-indigo-500" />
-                {cityName}
-                {inProgress[cityName] && (
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium ml-1">
-                    {t('queue_status_building')} {inProgress[cityName].building} {inProgress[cityName].fromLevel}→{inProgress[cityName].toLevel}
-                  </span>
-                )}
-              </h3>
-              <div className="space-y-2">
-                {queues[cityName].map((item, idx) => {
-                  const curLv = currentLevelForItem(cityName, item.building);
-                  return (
-                    <div key={idx} className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 border border-slate-100">
-                      <span className="text-slate-400 text-xs w-5 text-right">{idx + 1}.</span>
-                      <div className="flex-1 min-w-0">
-                        <span className="font-medium text-slate-700 text-sm">{item.building}</span>
-                        <span className="ml-2 text-xs text-slate-400">
-                          {curLv !== null && `${t('queue_lv_current', {lv: curLv})} · `}
-                          {t('queue_lv_target', {lv: item.targetLevel})}
+              {/* ── Right: queue for this city ────────────────────────────── */}
+              <Card>
+                <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <i className="fa-solid fa-list-check text-indigo-400" />
+                  {t('queue_panel')}
+                  {cityQueue.length > 0 && (
+                    <span className="ml-1 text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-semibold">
+                      {cityQueue.length}
+                    </span>
+                  )}
+                </h3>
+
+                {cityQueue.length === 0 && !cityInProgress ? (
+                  <div className="py-6 flex flex-col items-center gap-2 text-slate-400">
+                    <i className="fa-solid fa-inbox text-2xl" />
+                    <p className="text-sm">{t('queue_empty')}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* In-progress item */}
+                    {cityInProgress && (
+                      <div className="flex items-center gap-3 px-3 py-3 rounded-lg bg-blue-50 border border-blue-200">
+                        <span className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-blue-200 text-blue-700 text-xs font-bold">
+                          <i className="fa-solid fa-hammer" />
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-semibold text-blue-800 text-sm">{cityInProgress.building}</span>
+                          <span className="ml-2 text-xs text-blue-500">
+                            {cityInProgress.fromLevel} → {cityInProgress.toLevel}
+                          </span>
+                        </div>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-200 text-blue-700 font-medium">
+                          {t('queue_status_building')}
                         </span>
                       </div>
-                      {statusBadge(cityName, idx)}
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleReorder(cityName, idx, idx - 1)}
-                          disabled={idx === 0}
-                          title={t('queue_up')}
-                          className="p-1.5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-30 transition-colors"
-                        ><i className="fa-solid fa-chevron-up text-xs" /></button>
-                        <button
-                          onClick={() => handleReorder(cityName, idx, idx + 1)}
-                          disabled={idx === queues[cityName].length - 1}
-                          title={t('queue_down')}
-                          className="p-1.5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-30 transition-colors"
-                        ><i className="fa-solid fa-chevron-down text-xs" /></button>
-                        <button
-                          onClick={() => handleRemove(cityName, idx)}
-                          title={t('queue_remove')}
-                          className="p-1.5 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                        ><i className="fa-solid fa-trash text-xs" /></button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          ))}
+                    )}
+
+                    {/* Pending items */}
+                    {cityQueue.map((item, idx) => {
+                      const curLv = parseInt(empireData[selCity]?.[item.building]) || 0;
+                      return (
+                        <div key={idx}
+                          className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors"
+                        >
+                          <span className="shrink-0 w-5 text-xs text-slate-400 text-right font-mono">{idx + 1}.</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-slate-700 text-sm truncate">{item.building}</span>
+                            <span className="ml-2 text-xs text-slate-400">
+                              lv {curLv} → {item.targetLevel}
+                            </span>
+                          </div>
+                          <div className="flex gap-0.5 shrink-0">
+                            <button onClick={() => handleReorder(idx, idx - 1)} disabled={idx === 0}
+                              className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-20 transition-colors"
+                            ><i className="fa-solid fa-chevron-up text-xs" /></button>
+                            <button onClick={() => handleReorder(idx, idx + 1)} disabled={idx === cityQueue.length - 1}
+                              className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-20 transition-colors"
+                            ><i className="fa-solid fa-chevron-down text-xs" /></button>
+                            <button onClick={() => handleRemove(idx)}
+                              className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                            ><i className="fa-solid fa-xmark text-xs" /></button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+
+            </div>
+          )}
         </div>
       );
     }
