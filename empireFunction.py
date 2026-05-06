@@ -480,11 +480,19 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     building_name = next_item["building"]
     current_level = target_b["level"]
 
-    # Cost of the next upgrade level (from cache, no HTTP)
+    # Cost of the next upgrade: try cache first, fall back to live HTTP query
     cost = _get_upgrade_cost_from_cache(city_name, building_name, current_level)
     if cost is None:
         print(lm("queue_no_cost_data", city=city_name, building=building_name))
-        return
+        try:
+            from ikabot.function.constructionList import getResourcesNeeded
+            cost = getResourcesNeeded(session, city_data, target_b, current_level, current_level + 1)
+        except Exception:
+            import traceback
+            print(traceback.format_exc())
+            return
+        if cost is None or cost == [-1, -1, -1, -1, -1]:
+            return
 
     available = city_data.get("availableResources", [0] * 5)
     missing = [max(0, cost[i] - available[i]) for i in range(5)]
