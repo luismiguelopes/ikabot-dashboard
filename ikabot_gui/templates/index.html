@@ -807,6 +807,12 @@
       const cities = Object.keys(empireData);
       const [filter, setFilter] = useState('all');
       const visible = filter === 'all' ? cities : cities.filter(c => c === filter);
+      const [queue, setQueue] = useState(null);
+
+      const fetchQueue = () =>
+        fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {});
+
+      useEffect(() => { fetchQueue(); }, []);
 
       const buildingNames = useMemo(() => {
         const names = new Set();
@@ -822,6 +828,29 @@
         });
         return avgs;
       }, [empireData]);
+
+      const queuedSet = useMemo(() => {
+        const s = new Set();
+        if (queue?.queues) {
+          Object.entries(queue.queues).forEach(([city, items]) =>
+            items.forEach(item => s.add(`${city}::${item.building}`))
+          );
+        }
+        if (queue?.inProgress) {
+          Object.entries(queue.inProgress).forEach(([city, ip]) =>
+            s.add(`${city}::${ip.building}`)
+          );
+        }
+        return s;
+      }, [queue]);
+
+      const handleQuickAdd = (cityName, buildingName, currentLevel) => {
+        fetch('/api/building-queue/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cityName, buildingName, targetLevel: currentLevel + 1 }),
+        }).then(fetchQueue);
+      };
 
       const now = Math.floor(Date.now() / 1000);
 
@@ -865,13 +894,29 @@
                           const numVal = parseFloat(val);
                           const isUnderConstruction = String(val).includes('+');
                           const isBelowAvg = !isUnderConstruction && !isNaN(numVal) && numVal < averages[b];
+                          const isQueued = !!val && !isUnderConstruction && queuedSet.has(`${city}::${b}`);
                           return (
-                            <Td key={b} className={`text-center font-mono
+                            <Td key={b} className={`text-center font-mono px-2
                               ${isUnderConstruction ? 'text-orange-500 font-semibold' : ''}
                               ${isBelowAvg ? 'text-red-500 font-bold' : ''}
                               ${!isUnderConstruction && !isBelowAvg ? 'text-slate-600' : ''}
                             `}>
-                              {val || '—'}
+                              {val ? (
+                                <span className="inline-flex items-center justify-center gap-0.5">
+                                  <span>{val}</span>
+                                  {!isUnderConstruction && (
+                                    <button
+                                      onClick={() => handleQuickAdd(city, b, parseInt(val))}
+                                      disabled={isQueued}
+                                      title={isQueued ? 'Já na fila' : 'Adicionar à fila'}
+                                      className={`opacity-0 group-hover:opacity-100 transition-opacity text-[10px] leading-none w-3.5 h-3.5 flex items-center justify-center rounded
+                                        ${isQueued ? 'text-green-500 cursor-default' : 'text-slate-400 hover:text-indigo-500 cursor-pointer'}`}
+                                    >
+                                      <i className={`fa-solid ${isQueued ? 'fa-check' : 'fa-plus'}`} />
+                                    </button>
+                                  )}
+                                </span>
+                              ) : '—'}
                             </Td>
                           );
                         })}
