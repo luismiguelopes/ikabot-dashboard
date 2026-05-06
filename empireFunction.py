@@ -349,19 +349,24 @@ def _process_building_queue(session, ids, cities):
         # ── Check if tracked in-progress construction has completed ──────────
         ip = in_progress.get(city_name)
         if ip:
-            still_busy = any(
-                b.get("isBusy") and b["name"] == ip["building"]
-                for b in city_data["position"]
-            )
+            # Use stored position index when available (more reliable than name when isBusy).
+            ip_pos = ip.get("position")
+            if ip_pos is not None and ip_pos < len(city_data["position"]):
+                still_busy = bool(city_data["position"][ip_pos].get("isBusy"))
+            else:
+                still_busy = any(
+                    b.get("isBusy") and b["name"] == ip["building"]
+                    for b in city_data["position"]
+                )
             if not still_busy:
                 print(lm("queue_construction_done", city=city_name, building=ip["building"]))
                 # Advance queue: remove item if target level reached
                 if items and items[0]["building"] == ip["building"]:
-                    for b in city_data["position"]:
-                        if b["name"] == items[0]["building"]:
-                            if b["level"] >= items[0]["targetLevel"]:
-                                items.pop(0)
-                            break
+                    b_done = (city_data["position"][ip_pos]
+                              if ip_pos is not None and ip_pos < len(city_data["position"])
+                              else next((b for b in city_data["position"] if b["name"] == items[0]["building"]), None))
+                    if b_done and b_done.get("level", 0) >= items[0]["targetLevel"]:
+                        items.pop(0)
                 del in_progress[city_name]
                 changed = True
 
@@ -372,16 +377,17 @@ def _process_building_queue(session, ids, cities):
         if any(b.get("isBusy") for b in city_data["position"]):
             # Sync inProgress if we're not tracking it yet
             if city_name not in in_progress:
-                for b in city_data["position"]:
-                    if b.get("isBusy") and b["name"] == items[0]["building"]:
-                        in_progress[city_name] = {
-                            "building": b["name"],
-                            "fromLevel": b["level"],
-                            "toLevel": b["level"] + 1,
-                            "startedAt": int(time.time()),
-                        }
-                        changed = True
-                        break
+                busy_b = next((b for b in city_data["position"] if b.get("isBusy")), None)
+                if busy_b and items:
+                    in_progress[city_name] = {
+                        "building": busy_b.get("name") or items[0]["building"],
+                        "position": busy_b["position"],
+                        "fromLevel": busy_b.get("level", 0),
+                        "toLevel": busy_b.get("level", 0) + 1,
+                        "startedAt": int(time.time()),
+                        "eta": int(busy_b.get("completed", 0)),
+                    }
+                    changed = True
             print(lm("queue_city_busy", city=city_name))
             continue
 
@@ -415,49 +421,50 @@ def _process_building_queue(session, ids, cities):
             print(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
             continue
 
-        # ── Fire the upgrade POST ─────────────────────────────────────────────
+        # ── Fire the upgrade POST via expandBuilding (same path as constructionList) ──
         print(lm("queue_attempting", city=city_name, building=next_item["building"],
                   lv=target_b["level"], btype=target_b["building"], pos=target_b["position"],
                   can=target_b.get("canUpgrade"), cit=city_data.get("freeCitizens")))
 
-        url = (
-            "action=CityScreen&function=upgradeBuilding"
-            "&actionRequest={}&cityId={}&position={:d}&level={}"
-            "&activeTab=tabSendTransporter&backgroundView=city"
-            "&currentCityId={}&templateView={}&ajax=1"
-        ).format(
-            actionRequest,
-            city_id,
-            target_b["position"],
-            target_b["level"],
-            city_id,
-            target_b["building"],
-        )
-        resp = session.post(url)
-        print(lm("queue_post_resp", city=city_name, resp=str(resp)[:300]))
+        from ikabot.function.constructionList import expandBuilding as _expandBuilding
+        target_for_expand = dict(target_b)
+        target_for_expand["upgradeTo"] = target_b["level"] + 1
+        _expandBuilding(session, city_id, target_for_expand, False)
 
         # ── Verify it started ─────────────────────────────────────────────────
-        time.sleep(random.randint(3, 6))
+        time.sleep(2)
         html2 = session.get("view=city&cityId={}".format(city_id))
         city2 = getCity(html2)
+        pos_idx = target_b["position"]
         started = False
-        for b in city2["position"]:
-            if b["name"] == next_item["building"] and b.get("isBusy"):
+        if pos_idx < len(city2["position"]):
+            b = city2["position"][pos_idx]
+            if b.get("isBusy"):
                 in_progress[city_name] = {
-                    "building": b["name"],
+                    "building": next_item["building"],
+                    "position": pos_idx,
                     "fromLevel": target_b["level"],
-                    "toLevel": b["level"] + 1,
+                    "toLevel": target_b["level"] + 1,
                     "startedAt": int(time.time()),
                     "eta": int(b.get("completed", 0)),
                 }
                 started = True
                 changed = True
-                print(lm("queue_started", city=city_name, building=b["name"],
-                          from_lv=target_b["level"], to_lv=b["level"] + 1))
-                break
+                print(lm("queue_started", city=city_name, building=next_item["building"],
+                          from_lv=target_b["level"], to_lv=target_b["level"] + 1))
 
         if not started:
             print(lm("queue_start_failed", city=city_name, building=next_item["building"]))
+            b_diag = city2["position"][pos_idx] if pos_idx < len(city2["position"]) else {}
+            print("      -> [diag] pos={} após POST: level={}, canUpgrade={}, isMaxLevel={}, isBusy={}, building={}".format(
+                pos_idx, b_diag.get("level"), b_diag.get("canUpgrade"),
+                b_diag.get("isMaxLevel"), b_diag.get("isBusy"), b_diag.get("building")))
+            next_item["failedAttempts"] = next_item.get("failedAttempts", 0) + 1
+            changed = True
+            if next_item["failedAttempts"] >= 5:
+                print("      -> [aviso] {} tentativas falhadas consecutivas para {}. A remover da fila.".format(
+                    next_item["failedAttempts"], next_item["building"]))
+                items.pop(0)
 
     if changed:
         data["queues"] = queues
