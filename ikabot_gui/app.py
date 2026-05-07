@@ -20,6 +20,7 @@ PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
+LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 
 
 def get_last_modified_date(filepath):
@@ -65,6 +66,14 @@ def load_all_data():
         except Exception:
             pass
 
+    last_alive = None
+    if os.path.exists(LAST_ALIVE_JSON_PATH):
+        try:
+            with open(LAST_ALIVE_JSON_PATH) as f:
+                last_alive = json.load(f).get("lastAlive")
+        except Exception:
+            pass
+
     return {
         "empireData":    empire_data,
         "statusSummary": status_summary,
@@ -72,6 +81,7 @@ def load_all_data():
         "lastUpdated":   get_last_modified_date(EMPIRE_JSON_PATH),
         "lastUpdatedTs": get_last_modified_ts(EMPIRE_JSON_PATH),
         "nextCycleAt":   next_cycle_at,
+        "lastAlive":     last_alive,
     }, None
 
 
