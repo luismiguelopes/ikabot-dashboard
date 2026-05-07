@@ -273,6 +273,10 @@ _LM = {
         "en": "[+] Outside active hours. Sleeping {mins} min until {start}h.",
         "pt": "[+] Fora das horas activas. A dormir {mins} min até às {start}h.",
     },
+    "queue_movements_refresh": {
+        "en": "      -> Transport dispatched — refreshing movements for ETA tracking.",
+        "pt": "      -> Transporte enviado — a actualizar movimentos para rastreio de ETA.",
+    },
 }
 
 
@@ -354,6 +358,35 @@ def _get_next_construction_eta():
     return min(etas) if etas else None
 
 
+def _get_next_transport_eta():
+    """Return earliest arrival timestamp for own transports heading to cities with pending queue items, or None."""
+    data = _load_queue()
+    pending_cities = {name for name, items in data.get("queues", {}).items() if items}
+    if not pending_cities:
+        return None
+    path = os.path.join(LOGS_DIR, "movements.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            movements = json.load(f)
+    except Exception:
+        return None
+    now = time.time()
+    etas = []
+    for m in movements:
+        if not m.get("isOwn") or m.get("direction") != "->":
+            continue
+        dest = m.get("destination", "")
+        for city_name in pending_cities:
+            if dest.startswith(city_name + " ("):
+                arrival = m.get("arrivalTime", 0)
+                if arrival > now:
+                    etas.append(arrival)
+                break
+    return min(etas) if etas else None
+
+
 def _in_active_hours():
     """Return True if current local hour is within the QUEUE_ACTIVE_HOURS window.
     Always returns True when QUEUE_ACTIVE_HOURS is not set (0–24 default)."""
@@ -375,12 +408,20 @@ def _secs_until_active():
 
 
 def _smart_sleep(last_full_cycle_time, next_full_jitter):
-    """Sleep until the next full empire cycle or the next construction ETA, whichever comes first."""
+    """Sleep until the next full empire cycle, next construction ETA, or next transport arrival, whichever is soonest."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
-    eta = _get_next_construction_eta()
+    construction_eta = _get_next_construction_eta()
+    transport_eta = _get_next_transport_eta()
+
+    # Earliest event: construction completion or transport arrival
+    eta = None
+    if construction_eta:
+        eta = construction_eta
+    if transport_eta:
+        eta = min(eta, transport_eta) if eta else transport_eta
 
     if eta and _in_active_hours():
-        # Wake up 3–8 min after construction ends to start the next level
+        # Wake up 3–8 min after event to give game time to register
         wake_for_queue = eta + random.randint(3, 8) * 60
         sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
         if wake_for_queue < next_full_at:
@@ -651,6 +692,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
 
     island_id = city_data.get("islandId", "")
     first_route = True
+    dispatched = False
 
     for i in range(5):
         if net_missing[i] == 0 or ships_available == 0:
@@ -679,6 +721,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
             success = _dispatch_transport(session, src_id, city_id, island_id,
                                           ships_to_use, send_list)
             if success:
+                dispatched = True
                 remaining -= to_send
                 ships_available -= ships_to_use
                 surplus[i] -= to_send
@@ -695,6 +738,8 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                     }
                 print(lm("queue_transport_failed", city=city_name, origin=src_name))
 
+    return dispatched
+
 
 def _process_building_queue(session, ids, cities):
     print(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
@@ -704,6 +749,7 @@ def _process_building_queue(session, ids, cities):
     transport_errors = data.setdefault("transportErrors", {})
     transport_errors_snapshot = dict(transport_errors)
     changed = False
+    dispatched_any = False
 
     # Build city name → id map
     name_to_id = {cities[cid]["name"]: cid for cid in ids if cid in cities}
@@ -794,8 +840,9 @@ def _process_building_queue(session, ids, cities):
 
         if target_b.get("canUpgrade") is False:
             if _in_active_hours():
-                _try_transport(session, city_name, city_id, city_data, next_item,
-                               target_b, queues, name_to_id, transport_errors)
+                if _try_transport(session, city_name, city_id, city_data, next_item,
+                                  target_b, queues, name_to_id, transport_errors):
+                    dispatched_any = True
             else:
                 print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
@@ -859,6 +906,7 @@ def _process_building_queue(session, ids, cities):
         _save_queue(data)
 
     print(lm("queue_done"))
+    return dispatched_any
 
 
 def _collect_world_scan(session):
@@ -1299,7 +1347,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             if not do_full:
                 if ids and _has_building_queue():
                     print(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
-                    _process_building_queue(session, ids, cities)
+                    if _process_building_queue(session, ids, cities):
+                        print(lm("queue_movements_refresh"))
+                        time.sleep(random.randint(5, 10))
+                        movements = _collect_movements(session, ids[0])
+                        with open(os.path.join(LOGS_DIR, "movements.json"), "w") as f:
+                            json.dump(movements, f, indent=4)
                 _smart_sleep(last_full_cycle_time, next_full_jitter)
                 continue
 
@@ -1490,7 +1543,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
             # ── Building queue (after full cycle) ────────────────────────────
             if _has_building_queue():
-                _process_building_queue(session, ids, cities)
+                if _process_building_queue(session, ids, cities):
+                    print(lm("queue_movements_refresh"))
+                    time.sleep(random.randint(5, 10))
+                    movements = _collect_movements(session, ids[0])
+                    with open(os.path.join(LOGS_DIR, "movements.json"), "w") as f:
+                        json.dump(movements, f, indent=4)
 
             _smart_sleep(last_full_cycle_time, next_full_jitter)
 
