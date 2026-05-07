@@ -23,10 +23,13 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
    - `resources.json` — per-city resource amounts and wine timers
    - `movements.json` — active fleet and army movements
 4. Appends a timestamped snapshot to `history.jsonl` (capped at ~90 days).
-5. If building upgrade costs are due (every 3 days), runs the cost collector inline before sleeping, writing `building_costs.json`.
-6. Otherwise, if the world scan is due (every 7 days), runs it inline before sleeping, writing `world_scan.json` with inactive/vacation players and island summaries (free slots, resource and wonder levels). The previous scan is kept as `world_scan_prev.json` to detect newly inactive players.
+5. Then, one of the following runs inline (mutually exclusive, strictly sequential):
+   - If building upgrade costs are due (every 3 days) → writes `building_costs.json`
+   - Else if world scan is due (every 7 days) → writes `world_scan.json` with inactive/vacation players and island summaries; previous scan kept as `world_scan_prev.json` to detect newly inactive players
+   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from other cities if needed, then starts construction when resources are available
+6. Writes `next_cycle.json` with the exact timestamp of the next wake-up before sleeping. The bot sleeps until the next full cycle or the next construction ETA (whichever is sooner), respecting the `QUEUE_ACTIVE_HOURS` window.
 
-Steps 5 and 6 are mutually exclusive per cycle — only one runs at a time, keeping HTTP requests strictly sequential. All requests use randomised delays to simulate human behaviour (anti-detection).
+All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
 
 The `ikabot-gui` container serves a Flask app on port `5001` that reads those files and exposes them via a REST API, consumed by the React frontend.
 
@@ -71,6 +74,7 @@ Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `3
 | `BUILDING_COSTS_UPDATE_INTERVAL` | `3d` | Interval between building costs refreshes |
 | `WORLD_SCAN_UPDATE_INTERVAL` | `7d` | Interval between world scans |
 | `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the world scan |
+| `QUEUE_ACTIVE_HOURS` | *(all hours)* | Hours during which the building queue may start constructions and dispatch transports — format `H-H`, e.g. `8-23` |
 | `LOG_LANG` | `en` | Language for backend log messages (`en` or `pt`) |
 
 ## API Endpoints
@@ -86,6 +90,10 @@ Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `3
 | `/api/world-scan/status` | GET | Current scan progress |
 | `/api/world-scan/refresh` | POST | Schedules an early world scan |
 | `/api/world-scan/mark` | POST | Save a player mark (`novo`/`visto`/`alvo`/`ignorar`) |
+| `/api/building-queue` | GET | Current queue and active construction per city |
+| `/api/building-queue/add` | POST | Add a building upgrade to a city queue |
+| `/api/building-queue/remove` | POST | Remove an item from a city queue |
+| `/api/building-queue/reorder` | POST | Reorder items in a city queue |
 
 ## Dashboard Tabs
 
@@ -93,14 +101,15 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 
 | Tab | Description |
 |---|---|
-| Home | Empire-wide summary (gold, ships, population) |
+| Home | Empire-wide summary: gold, ships, population, active constructions, gold runway, wine-at-risk cities |
 | Cities | Per-city resources, production, and wine timers |
-| Buildings | Building levels and active constructions per city |
+| Buildings | Building levels and active constructions per city — "+" button on each row to add to the upgrade queue |
 | Movements | Active fleet and army movements |
 | Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | History | Charts of empire stats over the last 7 days |
-| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing (`max(0, totalNeeded − totalAvailable)`) and estimates collection time using empire production. **ROI Sawmill / Quarry**: island vs city building comparator — level selectors for island building (Sawmill / Quarry) and city building (Forest Warden / Stonemason) auto-fill production gain and upgrade costs from built-in game data; comparison metric is amortization (payback time). **Colony ROI**: compares upgrading the Sawmill/Quarry on the current island (1 building cost, gain × N cities) vs colonising a new island — fetches real Palace/Residence levels from building data and only charges cities below the required level; new city Residence costed from hardcoded table; new island production set by a single Sawmill level selector; comparison metric is amortization (payback time) |
-| World | **Inactive**: inactive/vacation players near own cities with new-player detection, expanded scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
+| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing and estimates collection time. **ROI Sawmill / Quarry**: island vs city building comparator. **Colony ROI**: upgrading current island vs colonising a new one — amortization comparison |
+| Construction | Building upgrade queue manager: city pills, building list with "+" per row, queue panel per city with drag-to-reorder, inProgress ETA card, status card with last bot cycle and force-update button |
+| World | **Inactive**: inactive/vacation players near own cities with new-player detection, scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure
 
