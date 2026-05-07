@@ -564,7 +564,7 @@ def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships,
         return False
 
 
-def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id):
+def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id, transport_errors=None):
     """Phase 3: dispatch missing resources from surplus cities toward city_name.
     Surplus is calculated against ALL pending queue items per source city (full
     multi-level costs), not just the next level. Sources are sorted by total
@@ -682,9 +682,17 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                 remaining -= to_send
                 ships_available -= ships_to_use
                 surplus[i] -= to_send
+                if transport_errors is not None:
+                    transport_errors.pop(city_name, None)
                 print(lm("queue_transport_sent", city=city_name, amount=to_send,
                           resource=_RESOURCES_ENG[i], origin=src_name, ships=ships_to_use))
             else:
+                if transport_errors is not None:
+                    transport_errors[city_name] = {
+                        "failedAt": int(time.time()),
+                        "origin": src_name,
+                        "resource": _RESOURCES_ENG[i],
+                    }
                 print(lm("queue_transport_failed", city=city_name, origin=src_name))
 
 
@@ -693,6 +701,8 @@ def _process_building_queue(session, ids, cities):
     data = _load_queue()
     queues = data.get("queues", {})
     in_progress = data.get("inProgress", {})
+    transport_errors = data.setdefault("transportErrors", {})
+    transport_errors_snapshot = dict(transport_errors)
     changed = False
 
     # Build city name → id map
@@ -785,7 +795,7 @@ def _process_building_queue(session, ids, cities):
         if target_b.get("canUpgrade") is False:
             if _in_active_hours():
                 _try_transport(session, city_name, city_id, city_data, next_item,
-                               target_b, queues, name_to_id)
+                               target_b, queues, name_to_id, transport_errors)
             else:
                 print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
@@ -843,7 +853,7 @@ def _process_building_queue(session, ids, cities):
                     next_item["failedAttempts"], next_item["building"]))
                 items.pop(0)
 
-    if changed:
+    if changed or transport_errors != transport_errors_snapshot:
         data["queues"] = queues
         data["inProgress"] = in_progress
         _save_queue(data)

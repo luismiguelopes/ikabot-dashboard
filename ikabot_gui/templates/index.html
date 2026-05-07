@@ -34,6 +34,7 @@
         nav_movements:'Movements', nav_alerts:'Alerts', nav_history:'History',
         nav_calculators:'Calculators', nav_world:'World', nav_construction:'Construction',
         stale_data:'Stale data', refresh_in:'Refresh in {t}', bot_offline:'Bot offline',
+        transport_error:'Transport error', transport_error_detail:'Failed to send {resource} from {origin} at {ts}',
         lang_other:'PT',
         // Shared
         all_cities:'All cities', loading:'Loading…', col_city:'City', col_dist:'Dist.',
@@ -222,6 +223,7 @@
         nav_movements:'Movimentos', nav_alerts:'Alertas', nav_history:'Histórico',
         nav_calculators:'Calculadoras', nav_world:'Mundo', nav_construction:'Construção',
         stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}', bot_offline:'Bot offline',
+        transport_error:'Erro de transporte', transport_error_detail:'Falhou envio de {resource} de {origin} às {ts}',
         lang_other:'EN',
         all_cities:'Todas as cidades', loading:'A carregar…', col_city:'Cidade', col_dist:'Dist.',
         col_alliance:'Aliança', col_mark:'Marcação',
@@ -2758,12 +2760,14 @@
         setTargetLevels(defaults);
       }, [selCity]);
 
-      const queues     = queue?.queues     || {};
-      const inProgress = queue?.inProgress || {};
+      const queues          = queue?.queues          || {};
+      const inProgress      = queue?.inProgress      || {};
+      const transportErrors = queue?.transportErrors || {};
 
-      const cityQueue      = queues[selCity] || [];
-      const cityInProgress = inProgress[selCity];
-      const queuedSet      = new Set(cityQueue.map(i => i.building));
+      const cityQueue        = queues[selCity] || [];
+      const cityInProgress   = inProgress[selCity];
+      const cityError        = transportErrors[selCity];
+      const queuedSet        = new Set(cityQueue.map(i => i.building));
 
       const totalQueued = city =>
         (queues[city]?.length || 0) + (inProgress[city] ? 1 : 0);
@@ -2840,15 +2844,19 @@
           {/* City tab pills */}
           <div className="flex gap-2 flex-wrap">
             {cityNames.map(city => {
-              const count = totalQueued(city);
+              const count    = totalQueued(city);
+              const hasError = !!transportErrors[city];
               return (
                 <button key={city} onClick={() => setSelCity(city)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
                     selCity === city
                       ? 'bg-indigo-600 text-white border-indigo-600 shadow'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      : hasError
+                        ? 'bg-white text-slate-600 border-orange-300 hover:bg-orange-50'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
                 >
+                  {hasError && <i className="fa-solid fa-triangle-exclamation text-orange-400 text-xs" />}
                   {city}
                   {count > 0 && (
                     <span className={`text-xs rounded-full px-1.5 py-0.5 font-semibold ${
@@ -2939,6 +2947,20 @@
                     </span>
                   )}
                 </h3>
+
+                {cityError && (
+                  <div className="mb-3 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 text-xs">
+                    <i className="fa-solid fa-triangle-exclamation mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold">{t('transport_error')}: </span>
+                      {t('transport_error_detail', {
+                        resource: cityError.resource,
+                        origin:   cityError.origin,
+                        ts:       new Date(cityError.failedAt * 1000).toLocaleTimeString(),
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {cityQueue.length === 0 && !cityInProgress ? (
                   <div className="py-6 flex flex-col items-center gap-2 text-slate-400">
