@@ -422,6 +422,42 @@ def _load_empire_json():
         return {}
 
 
+def _get_total_upgrade_cost(costs_cache, city_name, building_name, from_level, to_level):
+    """Sum building_costs.json entries for all levels from_level+1 through to_level.
+    Returns [wood,wine,marble,glass,sulfur] or None if no data found."""
+    bdata = costs_cache.get("cities", {}).get(city_name, {}).get(building_name)
+    if not bdata:
+        return None
+    total = [0, 0, 0, 0, 0]
+    found = False
+    for lv in range(from_level + 1, to_level + 1):
+        entry = bdata.get("costs", {}).get(str(lv))
+        if entry:
+            found = True
+            for j, k in enumerate(("wood", "wine", "marble", "glass", "sulfur")):
+                total[j] += entry.get(k, 0)
+    return total if found else None
+
+
+def _calc_city_reserved(city_name, queues, empire, costs_cache):
+    """Return [wood,wine,marble,glass,sulfur] reserved for ALL pending queue items
+    of city_name, summing full multi-level costs (current level → targetLevel).
+    Cities with longer queues correctly block more of their resources."""
+    reserved = [0, 0, 0, 0, 0]
+    for item in queues.get(city_name, []):
+        bname = item["building"]
+        target_lv = item.get("targetLevel", 0)
+        val = str(empire.get(city_name, {}).get(bname, "0")).replace("+", "")
+        cur_lv = int(val) if val.isdigit() else 0
+        if target_lv <= cur_lv:
+            continue
+        cost = _get_total_upgrade_cost(costs_cache, city_name, bname, cur_lv, target_lv)
+        if cost:
+            for i in range(5):
+                reserved[i] += cost[i]
+    return reserved
+
+
 def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list):
     """Fire one transport dispatch (changeCurrentCity + loadTransportersWithFreight).
     Returns True on server success (type=10), False otherwise. Non-blocking."""
@@ -471,17 +507,29 @@ def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships,
 
 
 def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id):
-    """Phase 2: dispatch missing resources from surplus cities toward city_name.
-    Uses building_costs.json for cost data and resources.json for available amounts —
-    no extra HTTP requests beyond ship count and the transport POSTs themselves."""
+    """Phase 3: dispatch missing resources from surplus cities toward city_name.
+    Surplus is calculated against ALL pending queue items per source city (full
+    multi-level costs), not just the next level. Sources are sorted by total
+    surplus descending so cities with the most slack are tapped first."""
     from ikabot.helpers.naval import getAvailableShips
     from ikabot.helpers.pedirInfo import getShipCapacity
 
     building_name = next_item["building"]
     current_level = target_b["level"]
 
-    # Cost of the next upgrade: try cache first, fall back to live HTTP query
-    cost = _get_upgrade_cost_from_cache(city_name, building_name, current_level)
+    # Load building_costs.json once — reused for destination cost and all surplus calcs
+    costs_path = os.path.join(LOGS_DIR, "building_costs.json")
+    costs_cache = {}
+    if os.path.exists(costs_path):
+        try:
+            with open(costs_path) as f:
+                costs_cache = json.load(f)
+        except Exception:
+            pass
+
+    # Cost of the next upgrade level for the destination city
+    cost = _get_total_upgrade_cost(costs_cache, city_name, building_name,
+                                   current_level, current_level + 1)
     if cost is None:
         print(lm("queue_no_cost_data", city=city_name, building=building_name))
         try:
@@ -524,27 +572,20 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     all_resources = _load_resources_json()
     empire = _load_empire_json()
 
-    # Build surplus list per source city: available minus reserved for own first queue item
+    # Build surplus per source city: available minus full reserved cost for ALL queue items
     sources = []
     for src_name, src_id in name_to_id.items():
         if src_name == city_name:
             continue
         src_res = all_resources.get(src_name, {})
         src_avail = [src_res.get(_RESOURCES_ENG[i], 0) for i in range(5)]
-
-        src_queue = queues.get(src_name, [])
-        if src_queue:
-            src_bname = src_queue[0]["building"]
-            src_val = str(empire.get(src_name, {}).get(src_bname, "0")).replace("+", "")
-            src_level = int(src_val) if src_val.isdigit() else 0
-            src_cost = _get_upgrade_cost_from_cache(src_name, src_bname, src_level)
-            surplus = ([max(0, src_avail[i] - src_cost[i]) for i in range(5)]
-                       if src_cost else src_avail[:])
-        else:
-            surplus = src_avail[:]
-
+        reserved = _calc_city_reserved(src_name, queues, empire, costs_cache)
+        surplus = [max(0, src_avail[i] - reserved[i]) for i in range(5)]
         if any(s > 0 for s in surplus):
             sources.append((src_name, src_id, surplus))
+
+    # Tap cities with the most total surplus first
+    sources.sort(key=lambda x: sum(x[2]), reverse=True)
 
     if not sources:
         print(lm("queue_no_surplus", city=city_name))
