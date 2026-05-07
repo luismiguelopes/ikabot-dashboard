@@ -44,6 +44,21 @@ WORLD_SCAN_UPDATE_INTERVAL = _parse_duration(os.getenv("WORLD_SCAN_UPDATE_INTERV
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 LOG_LANG = os.getenv("LOG_LANG", "en")
 
+def _parse_active_hours(value):
+    """Parse 'H-H' string into (start_hour, end_hour). Returns (0, 24) if unset/invalid."""
+    if not value:
+        return 0, 24
+    try:
+        parts = str(value).strip().split('-')
+        start, end = int(parts[0]), int(parts[1])
+        if 0 <= start < end <= 24:
+            return start, end
+    except Exception:
+        pass
+    return 0, 24
+
+ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(os.getenv("QUEUE_ACTIVE_HOURS"))
+
 _LM = {
     "own_cities_missing": {
         "en": "[world_scan] own_cities.json not found, waiting for next cycle...",
@@ -249,6 +264,14 @@ _LM = {
         "en": "      -> Queue [{city}]: transport from {origin} rejected by server.",
         "pt": "      -> Fila [{city}]: transporte de {origin} recusado pelo servidor.",
     },
+    "queue_outside_hours": {
+        "en": "      -> Queue: outside active hours ({start}h–{end}h), skipping actions.",
+        "pt": "      -> Fila: fora das horas activas ({start}h–{end}h), a saltar acções.",
+    },
+    "queue_sleep_until_hours": {
+        "en": "[+] Outside active hours. Sleeping {mins} min until {start}h.",
+        "pt": "[+] Fora das horas activas. A dormir {mins} min até às {start}h.",
+    },
 }
 
 
@@ -330,12 +353,32 @@ def _get_next_construction_eta():
     return min(etas) if etas else None
 
 
+def _in_active_hours():
+    """Return True if current local hour is within the QUEUE_ACTIVE_HOURS window.
+    Always returns True when QUEUE_ACTIVE_HOURS is not set (0–24 default)."""
+    if ACTIVE_HOURS_START == 0 and ACTIVE_HOURS_END == 24:
+        return True
+    return ACTIVE_HOURS_START <= time.localtime().tm_hour < ACTIVE_HOURS_END
+
+
+def _secs_until_active():
+    """Seconds until the active hours window opens. Returns 0 if already active."""
+    if _in_active_hours():
+        return 0
+    t = time.localtime()
+    h, m, s = t.tm_hour, t.tm_min, t.tm_sec
+    if h < ACTIVE_HOURS_START:
+        return (ACTIVE_HOURS_START - h) * 3600 - m * 60 - s
+    # h >= ACTIVE_HOURS_END — window opens tomorrow
+    return (24 - h + ACTIVE_HOURS_START) * 3600 - m * 60 - s
+
+
 def _smart_sleep(last_full_cycle_time, next_full_jitter):
     """Sleep until the next full empire cycle or the next construction ETA, whichever comes first."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
     eta = _get_next_construction_eta()
 
-    if eta:
+    if eta and _in_active_hours():
         # Wake up 3–8 min after construction ends to start the next level
         wake_for_queue = eta + random.randint(3, 8) * 60
         sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
@@ -344,6 +387,14 @@ def _smart_sleep(last_full_cycle_time, next_full_jitter):
             print(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
     else:
         sleep_secs = max(60, next_full_at - time.time())
+
+    # Outside active hours: sleep until window opens (if sooner than next full cycle)
+    if not _in_active_hours():
+        secs_to_open = _secs_until_active()
+        if 0 < secs_to_open < sleep_secs:
+            sleep_secs = secs_to_open + random.randint(1, 5) * 60
+            print(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
+                      start=ACTIVE_HOURS_START))
 
     print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
     time.sleep(sleep_secs)
@@ -725,12 +776,19 @@ def _process_building_queue(session, ids, cities):
             continue
 
         if target_b.get("canUpgrade") is False:
-            _try_transport(session, city_name, city_id, city_data, next_item,
-                           target_b, queues, name_to_id)
+            if _in_active_hours():
+                _try_transport(session, city_name, city_id, city_data, next_item,
+                               target_b, queues, name_to_id)
+            else:
+                print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
             print(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
+            continue
+
+        if not _in_active_hours():
+            print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
 
         # ── Fire the upgrade POST via expandBuilding (same path as constructionList) ──
