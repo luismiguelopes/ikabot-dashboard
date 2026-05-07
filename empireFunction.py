@@ -22,7 +22,8 @@ getcontext().prec = 30
 import time
 
 LOGS_DIR = "/tmp/ikalogs/"
-QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
+QUEUE_JSON_PATH      = os.path.join(LOGS_DIR, "building_queue.json")
+LAST_ALIVE_JSON_PATH = os.path.join(LOGS_DIR, "last_alive.json")
 
 def _parse_duration(value, default):
     """Converte string de duração (ex: '3h', '2d', '30m') ou segundos inteiros para segundos."""
@@ -1269,9 +1270,18 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     cities = None
     last_full_cycle_time = 0
     next_full_jitter = 0
+    cycle_count = 0
 
     while True:
         try:
+            cycle_count += 1
+            try:
+                os.makedirs(LOGS_DIR, exist_ok=True)
+                with open(LAST_ALIVE_JSON_PATH, "w") as f:
+                    json.dump({"lastAlive": int(time.time()), "cycle": cycle_count}, f)
+            except Exception:
+                pass
+
             now = time.time()
             do_full = ids is None or (now >= last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter)
 

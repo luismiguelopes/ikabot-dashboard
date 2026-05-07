@@ -33,7 +33,7 @@
         nav_home:'Home', nav_cities:'Cities', nav_buildings:'Buildings',
         nav_movements:'Movements', nav_alerts:'Alerts', nav_history:'History',
         nav_calculators:'Calculators', nav_world:'World', nav_construction:'Construction',
-        stale_data:'Stale data', refresh_in:'Refresh in {t}',
+        stale_data:'Stale data', refresh_in:'Refresh in {t}', bot_offline:'Bot offline',
         lang_other:'PT',
         // Shared
         all_cities:'All cities', loading:'Loading…', col_city:'City', col_dist:'Dist.',
@@ -221,7 +221,7 @@
         nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
         nav_movements:'Movimentos', nav_alerts:'Alertas', nav_history:'Histórico',
         nav_calculators:'Calculadoras', nav_world:'Mundo', nav_construction:'Construção',
-        stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}',
+        stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}', bot_offline:'Bot offline',
         lang_other:'EN',
         all_cities:'Todas as cidades', loading:'A carregar…', col_city:'Cidade', col_dist:'Dist.',
         col_alliance:'Aliança', col_mark:'Marcação',
@@ -502,9 +502,10 @@
       );
     }
 
-    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, alertCount, movCount, lang, toggleLang }) {
+    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, lang, toggleLang }) {
       const t = useT();
       const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60;
+      const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > 90 * 60;
 
       const [, setTick] = useState(0);
       useEffect(() => {
@@ -540,7 +541,13 @@
           </nav>
 
           <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
-            {isStale && (
+            {isBotOffline && (
+              <div className="flex items-center gap-1.5 text-red-400 text-xs font-semibold">
+                <i className="fa-solid fa-circle-xmark" />
+                {t('bot_offline')}
+              </div>
+            )}
+            {isStale && !isBotOffline && (
               <div className="flex items-center gap-1.5 text-yellow-400 text-xs">
                 <i className="fa-solid fa-triangle-exclamation" />
                 {t('stale_data')}
@@ -3712,6 +3719,7 @@
             lastUpdated={data.lastUpdated}
             lastUpdatedTs={data.lastUpdatedTs}
             nextCycleAt={data.nextCycleAt}
+            lastAlive={data.lastAlive}
             alertCount={alertCount}
             movCount={movCount}
             lang={lang}
