@@ -27,8 +27,8 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 5. Then, one of the following runs inline (mutually exclusive, strictly sequential):
    - If building upgrade costs are due (every 3 days) → writes `building_costs.json`
    - Else if world scan is due (every 7 days) → writes `world_scan.json` with inactive/vacation players and island summaries; previous scan kept as `world_scan_prev.json` to detect newly inactive players
-   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available
-6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the next full cycle or the next construction ETA (whichever is sooner), respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value.
+   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available. If any transport was dispatched, `movements.json` is immediately refreshed so fleet arrival times are visible to the sleep scheduler.
+6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the earliest of: next full cycle, next construction ETA, or next transport fleet arrival — whichever comes first — respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value.
 
 All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
 
