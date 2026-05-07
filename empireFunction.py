@@ -221,6 +221,34 @@ _LM = {
         "en": "[+] Sleeping {mins} min until next empire cycle.",
         "pt": "[+] A dormir {mins} min até ao próximo ciclo do império.",
     },
+    "queue_no_cost_data": {
+        "en": "      -> Queue [{city}]: no cost data for {building}, retrying next cycle.",
+        "pt": "      -> Fila [{city}]: sem dados de custos para {building}, tenta no próximo ciclo.",
+    },
+    "queue_transport_missing": {
+        "en": "      -> Queue [{city}]: {building} — missing: {missing}",
+        "pt": "      -> Fila [{city}]: {building} — faltam: {missing}",
+    },
+    "queue_transport_waiting": {
+        "en": "      -> Queue [{city}]: resources in transit, waiting for arrival.",
+        "pt": "      -> Fila [{city}]: recursos a caminho, a aguardar chegada.",
+    },
+    "queue_no_ships": {
+        "en": "      -> Queue [{city}]: no ships available, retrying next cycle.",
+        "pt": "      -> Fila [{city}]: sem navios disponíveis, tenta no próximo ciclo.",
+    },
+    "queue_no_surplus": {
+        "en": "      -> Queue [{city}]: no surplus in other cities to send.",
+        "pt": "      -> Fila [{city}]: sem excedentes noutras cidades para enviar.",
+    },
+    "queue_transport_sent": {
+        "en": "      -> Queue [{city}]: sent {amount} {resource} from {origin} ({ships} ships).",
+        "pt": "      -> Fila [{city}]: enviou {amount} {resource} de {origin} ({ships} navios).",
+    },
+    "queue_transport_failed": {
+        "en": "      -> Queue [{city}]: transport from {origin} rejected by server.",
+        "pt": "      -> Fila [{city}]: transporte de {origin} recusado pelo servidor.",
+    },
 }
 
 
@@ -269,7 +297,9 @@ def _dist(x1, y1, x2, y2):
     return ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
 
 
-# ── Building queue (Phase 1) ─────────────────────────────────────────────────
+# ── Building queue ───────────────────────────────────────────────────────────
+
+_RESOURCES_ENG = ['Wood', 'Wine', 'Marble', 'Crystal', 'Sulfur']
 
 def _load_queue():
     if not os.path.exists(QUEUE_JSON_PATH):
@@ -317,6 +347,246 @@ def _smart_sleep(last_full_cycle_time, next_full_jitter):
 
     print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
     time.sleep(sleep_secs)
+
+
+# ── Phase 2 helpers ───────────────────────────────────────────────────────────
+
+def _get_upgrade_cost_from_cache(city_name, building_name, current_level):
+    """Return [wood,wine,marble,glass,sulfur] for the next level from building_costs.json.
+    Returns None if cache is missing or entry not found."""
+    costs_path = os.path.join(LOGS_DIR, "building_costs.json")
+    if not os.path.exists(costs_path):
+        return None
+    try:
+        with open(costs_path) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    bdata = data.get("cities", {}).get(city_name, {}).get(building_name)
+    if not bdata:
+        return None
+    entry = bdata.get("costs", {}).get(str(current_level + 1))
+    if not entry:
+        return None
+    return [entry.get(k, 0) for k in ("wood", "wine", "marble", "glass", "sulfur")]
+
+
+def _get_in_transit_to(city_name):
+    """Return [wood,wine,marble,glass,sulfur] of own fleets already heading to city_name."""
+    path = os.path.join(LOGS_DIR, "movements.json")
+    if not os.path.exists(path):
+        return [0, 0, 0, 0, 0]
+    try:
+        with open(path) as f:
+            movements = json.load(f)
+    except Exception:
+        return [0, 0, 0, 0, 0]
+    totals = [0, 0, 0, 0, 0]
+    for m in movements:
+        if not m.get("isOwn") or m.get("direction") != "->":
+            continue
+        # destination format: "CityName (PlayerName)"
+        if not m.get("destination", "").startswith(city_name + " ("):
+            continue
+        for r in m.get("resources", []):
+            res_name = r.get("resource", "")
+            if res_name not in _RESOURCES_ENG:
+                continue
+            try:
+                amount = int(str(r.get("amount", "0")).replace(",", "").replace(".", ""))
+            except ValueError:
+                continue
+            totals[_RESOURCES_ENG.index(res_name)] += amount
+    return totals
+
+
+def _load_resources_json():
+    path = os.path.join(LOGS_DIR, "resources.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_empire_json():
+    path = os.path.join(LOGS_DIR, "empire.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list):
+    """Fire one transport dispatch (changeCurrentCity + loadTransportersWithFreight).
+    Returns True on server success (type=10), False otherwise. Non-blocking."""
+    html = session.get()
+    current_city = getCity(html)
+    curr_id = current_city["id"]
+
+    session.post(params={
+        "action": "header",
+        "function": "changeCurrentCity",
+        "actionRequest": actionRequest,
+        "oldView": "city",
+        "cityId": str(origin_city_id),
+        "backgroundView": "city",
+        "currentCityId": str(curr_id),
+        "ajax": "1",
+    })
+    time.sleep(random.randint(3, 7))
+
+    data = {
+        "action": "transportOperations",
+        "function": "loadTransportersWithFreight",
+        "destinationCityId": str(dest_city_id),
+        "islandId": str(island_id),
+        "oldView": "", "position": "", "avatar2Name": "", "city2Name": "",
+        "type": "", "activeTab": "",
+        "transportDisplayPrice": "0", "premiumTransporter": "0",
+        "capacity": "5", "max_capacity": "5", "jetPropulsion": "0",
+        "backgroundView": "city",
+        "currentCityId": str(origin_city_id),
+        "templateView": "transport",
+        "currentTab": "tabSendTransporter",
+        "actionRequest": actionRequest,
+        "ajax": "1",
+        "transporters": str(ships),
+    }
+    for i, amount in enumerate(send_list):
+        if amount > 0:
+            key = "cargo_resource" if i == 0 else "cargo_tradegood{:d}".format(i)
+            data[key] = str(amount)
+
+    resp = session.post(params=data)
+    try:
+        return json.loads(resp, strict=False)[3][1][0]["type"] == 10
+    except Exception:
+        return False
+
+
+def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id):
+    """Phase 2: dispatch missing resources from surplus cities toward city_name.
+    Uses building_costs.json for cost data and resources.json for available amounts —
+    no extra HTTP requests beyond ship count and the transport POSTs themselves."""
+    from ikabot.helpers.naval import getAvailableShips
+    from ikabot.helpers.pedirInfo import getShipCapacity
+
+    building_name = next_item["building"]
+    current_level = target_b["level"]
+
+    # Cost of the next upgrade: try cache first, fall back to live HTTP query
+    cost = _get_upgrade_cost_from_cache(city_name, building_name, current_level)
+    if cost is None:
+        print(lm("queue_no_cost_data", city=city_name, building=building_name))
+        try:
+            from ikabot.function.constructionList import getResourcesNeeded
+            cost = getResourcesNeeded(session, city_data, target_b, current_level, current_level + 1)
+        except Exception:
+            import traceback
+            print(traceback.format_exc())
+            return
+        if cost is None or cost == [-1, -1, -1, -1, -1]:
+            return
+
+    available = city_data.get("availableResources", [0] * 5)
+    missing = [max(0, cost[i] - available[i]) for i in range(5)]
+    if all(m == 0 for m in missing):
+        return
+
+    # Subtract what's already heading to this city
+    in_transit = _get_in_transit_to(city_name)
+    net_missing = [max(0, missing[i] - in_transit[i]) for i in range(5)]
+
+    missing_desc = ", ".join(
+        "{} {}".format(net_missing[i], _RESOURCES_ENG[i])
+        for i in range(5) if net_missing[i] > 0
+    )
+    print(lm("queue_transport_missing", city=city_name, building=building_name,
+              missing=missing_desc or "0"))
+
+    if all(m == 0 for m in net_missing):
+        print(lm("queue_transport_waiting", city=city_name))
+        return
+
+    ships_available = getAvailableShips(session)
+    if ships_available == 0:
+        print(lm("queue_no_ships", city=city_name))
+        return
+
+    ship_cap, _ = getShipCapacity(session)
+
+    all_resources = _load_resources_json()
+    empire = _load_empire_json()
+
+    # Build surplus list per source city: available minus reserved for own first queue item
+    sources = []
+    for src_name, src_id in name_to_id.items():
+        if src_name == city_name:
+            continue
+        src_res = all_resources.get(src_name, {})
+        src_avail = [src_res.get(_RESOURCES_ENG[i], 0) for i in range(5)]
+
+        src_queue = queues.get(src_name, [])
+        if src_queue:
+            src_bname = src_queue[0]["building"]
+            src_val = str(empire.get(src_name, {}).get(src_bname, "0")).replace("+", "")
+            src_level = int(src_val) if src_val.isdigit() else 0
+            src_cost = _get_upgrade_cost_from_cache(src_name, src_bname, src_level)
+            surplus = ([max(0, src_avail[i] - src_cost[i]) for i in range(5)]
+                       if src_cost else src_avail[:])
+        else:
+            surplus = src_avail[:]
+
+        if any(s > 0 for s in surplus):
+            sources.append((src_name, src_id, surplus))
+
+    if not sources:
+        print(lm("queue_no_surplus", city=city_name))
+        return
+
+    island_id = city_data.get("islandId", "")
+    first_route = True
+
+    for i in range(5):
+        if net_missing[i] == 0 or ships_available == 0:
+            continue
+        remaining = net_missing[i]
+
+        for src_name, src_id, surplus in sources:
+            if remaining == 0 or ships_available == 0:
+                break
+            if surplus[i] == 0:
+                continue
+
+            to_send = min(surplus[i], remaining)
+            ships_needed = math.ceil(to_send / ship_cap)
+            ships_to_use = min(ships_available, ships_needed)
+            if ships_to_use < ships_needed:
+                to_send = ships_to_use * ship_cap
+
+            send_list = [0, 0, 0, 0, 0]
+            send_list[i] = to_send
+
+            if not first_route:
+                time.sleep(random.randint(12, 30))
+            first_route = False
+
+            success = _dispatch_transport(session, src_id, city_id, island_id,
+                                          ships_to_use, send_list)
+            if success:
+                remaining -= to_send
+                ships_available -= ships_to_use
+                surplus[i] -= to_send
+                print(lm("queue_transport_sent", city=city_name, amount=to_send,
+                          resource=_RESOURCES_ENG[i], origin=src_name, ships=ships_to_use))
+            else:
+                print(lm("queue_transport_failed", city=city_name, origin=src_name))
 
 
 def _process_building_queue(session, ids, cities):
@@ -414,7 +684,8 @@ def _process_building_queue(session, ids, cities):
             continue
 
         if target_b.get("canUpgrade") is False:
-            print(lm("queue_no_resources", city=city_name, building=next_item["building"]))
+            _try_transport(session, city_name, city_id, city_data, next_item,
+                           target_b, queues, name_to_id)
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
