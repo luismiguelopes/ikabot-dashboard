@@ -15,6 +15,7 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 
 `empireFunction.py` runs as a background process inside the ikabot container. Every hour (configurable) it:
 
+0. Writes `last_alive.json` at the very start of each iteration — if the process crashes mid-cycle, this timestamp goes stale and the dashboard shows a "Bot offline" warning.
 1. Iterates over all cities and collects resources, buildings, production rates, and wine status.
 2. Fetches military and fleet movements from the military advisor.
 3. Writes the results to JSON files on the shared volume:
@@ -26,8 +27,8 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 5. Then, one of the following runs inline (mutually exclusive, strictly sequential):
    - If building upgrade costs are due (every 3 days) → writes `building_costs.json`
    - Else if world scan is due (every 7 days) → writes `world_scan.json` with inactive/vacation players and island summaries; previous scan kept as `world_scan_prev.json` to detect newly inactive players
-   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from other cities if needed, then starts construction when resources are available
-6. Writes `next_cycle.json` with the exact timestamp of the next wake-up before sleeping. The bot sleeps until the next full cycle or the next construction ETA (whichever is sooner), respecting the `QUEUE_ACTIVE_HOURS` window.
+   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available
+6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the next full cycle or the next construction ETA (whichever is sooner), respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value.
 
 All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
 
@@ -81,7 +82,7 @@ Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `3
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/data` | GET | Empire-wide status, buildings, and resources |
+| `/api/data` | GET | Empire-wide status, buildings, and resources — includes `lastUpdatedTs`, `nextCycleAt`, `lastAlive` |
 | `/api/movements` | GET | Current fleet and army movements |
 | `/api/history` | GET | Last 7 days of hourly empire snapshots |
 | `/api/building-costs` | GET | Upgrade costs per building per level per city |
@@ -108,7 +109,7 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 | Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | History | Charts of empire stats over the last 7 days |
 | Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing and estimates collection time. **ROI Sawmill / Quarry**: island vs city building comparator. **Colony ROI**: upgrading current island vs colonising a new one — amortization comparison |
-| Construction | Building upgrade queue manager: city pills, building list with "+" per row, queue panel per city with drag-to-reorder, inProgress ETA card, status card with last bot cycle and force-update button |
+| Construction | Building upgrade queue manager: city pills (orange border on transport error), building list with "+" per row, queue panel per city with drag-to-reorder, inProgress ETA card, transport error banner, status card with last bot cycle and force-update button |
 | World | **Inactive**: inactive/vacation players near own cities with new-player detection, scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
 
 ## Project Structure
