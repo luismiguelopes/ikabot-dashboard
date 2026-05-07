@@ -397,6 +397,12 @@ def _smart_sleep(last_full_cycle_time, next_full_jitter):
                       start=ACTIVE_HOURS_START))
 
     print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
+    wake_at = int(time.time() + sleep_secs)
+    try:
+        with open(os.path.join(LOGS_DIR, "next_cycle.json"), "w") as f:
+            json.dump({"nextCycleAt": wake_at}, f)
+    except Exception:
+        pass
     time.sleep(sleep_secs)
 
 

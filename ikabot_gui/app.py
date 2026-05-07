@@ -19,6 +19,7 @@ WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
 PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
+NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 
 
 def get_last_modified_date(filepath):
@@ -56,12 +57,21 @@ def load_all_data():
         if t is not None and t != -1:
             city_data['wineRunsOutIn'] = max(0, t - elapsed)
 
+    next_cycle_at = None
+    if os.path.exists(NEXT_CYCLE_JSON_PATH):
+        try:
+            with open(NEXT_CYCLE_JSON_PATH) as f:
+                next_cycle_at = json.load(f).get("nextCycleAt")
+        except Exception:
+            pass
+
     return {
         "empireData":    empire_data,
         "statusSummary": status_summary,
         "resourcesData": resources_data,
         "lastUpdated":   get_last_modified_date(EMPIRE_JSON_PATH),
         "lastUpdatedTs": get_last_modified_ts(EMPIRE_JSON_PATH),
+        "nextCycleAt":   next_cycle_at,
     }, None
 
 

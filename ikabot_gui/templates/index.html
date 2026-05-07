@@ -502,9 +502,19 @@
       );
     }
 
-    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, alertCount, movCount, countdown, lang, toggleLang }) {
+    function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, alertCount, movCount, lang, toggleLang }) {
       const t = useT();
       const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60;
+
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        const id = setInterval(() => setTick(p => p + 1), 1000);
+        return () => clearInterval(id);
+      }, []);
+
+      const secsUntilUpdate = nextCycleAt
+        ? Math.max(0, nextCycleAt - Math.floor(Date.now() / 1000))
+        : null;
       return (
         <aside className="w-56 flex-shrink-0 bg-slate-900 flex flex-col h-screen">
           <div className="px-5 py-6 border-b border-slate-700/60">
@@ -540,10 +550,10 @@
               <i className="fa-regular fa-clock mr-1" />
               {lastUpdated}
             </p>
-            {countdown !== null && (
+            {secsUntilUpdate !== null && (
               <p className="text-slate-600 text-xs">
                 <i className="fa-solid fa-arrows-rotate mr-1" />
-                {t('refresh_in', { t: fmtCountdown(countdown) })}
+                {t('refresh_in', { t: fmtCountdown(secsUntilUpdate) })}
               </p>
             )}
             <button
@@ -3648,7 +3658,6 @@
       const [page, setPage]       = useState('home');
       const [data, setData]       = useState(null);
       const [error, setError]     = useState(null);
-      const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
       const [thresholds, setThresholds] = useState(loadThresholds);
 
       const saveThresholds = useCallback(t => {
@@ -3666,15 +3675,9 @@
       // Initial load
       useEffect(() => { fetchData(); }, []);
 
-      // Auto-refresh timer
+      // Auto-refresh: poll API every 15 minutes
       useEffect(() => {
-        setCountdown(AUTO_REFRESH_SECONDS);
-        const interval = setInterval(() => {
-          setCountdown(prev => {
-            if (prev <= 1) { fetchData(); return AUTO_REFRESH_SECONDS; }
-            return prev - 1;
-          });
-        }, 1000);
+        const interval = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000);
         return () => clearInterval(interval);
       }, [fetchData]);
 
@@ -3708,9 +3711,9 @@
             setActive={setPage}
             lastUpdated={data.lastUpdated}
             lastUpdatedTs={data.lastUpdatedTs}
+            nextCycleAt={data.nextCycleAt}
             alertCount={alertCount}
             movCount={movCount}
-            countdown={countdown}
             lang={lang}
             toggleLang={toggleLang}
           />
