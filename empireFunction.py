@@ -44,6 +44,21 @@ WORLD_SCAN_UPDATE_INTERVAL = _parse_duration(os.getenv("WORLD_SCAN_UPDATE_INTERV
 WORLD_SCAN_RADIUS = int(os.getenv("WORLD_SCAN_RADIUS", 10))
 LOG_LANG = os.getenv("LOG_LANG", "en")
 
+def _parse_active_hours(value):
+    """Parse 'H-H' string into (start_hour, end_hour). Returns (0, 24) if unset/invalid."""
+    if not value:
+        return 0, 24
+    try:
+        parts = str(value).strip().split('-')
+        start, end = int(parts[0]), int(parts[1])
+        if 0 <= start < end <= 24:
+            return start, end
+    except Exception:
+        pass
+    return 0, 24
+
+ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(os.getenv("QUEUE_ACTIVE_HOURS"))
+
 _LM = {
     "own_cities_missing": {
         "en": "[world_scan] own_cities.json not found, waiting for next cycle...",
@@ -249,6 +264,14 @@ _LM = {
         "en": "      -> Queue [{city}]: transport from {origin} rejected by server.",
         "pt": "      -> Fila [{city}]: transporte de {origin} recusado pelo servidor.",
     },
+    "queue_outside_hours": {
+        "en": "      -> Queue: outside active hours ({start}h–{end}h), skipping actions.",
+        "pt": "      -> Fila: fora das horas activas ({start}h–{end}h), a saltar acções.",
+    },
+    "queue_sleep_until_hours": {
+        "en": "[+] Outside active hours. Sleeping {mins} min until {start}h.",
+        "pt": "[+] Fora das horas activas. A dormir {mins} min até às {start}h.",
+    },
 }
 
 
@@ -330,12 +353,32 @@ def _get_next_construction_eta():
     return min(etas) if etas else None
 
 
+def _in_active_hours():
+    """Return True if current local hour is within the QUEUE_ACTIVE_HOURS window.
+    Always returns True when QUEUE_ACTIVE_HOURS is not set (0–24 default)."""
+    if ACTIVE_HOURS_START == 0 and ACTIVE_HOURS_END == 24:
+        return True
+    return ACTIVE_HOURS_START <= time.localtime().tm_hour < ACTIVE_HOURS_END
+
+
+def _secs_until_active():
+    """Seconds until the active hours window opens. Returns 0 if already active."""
+    if _in_active_hours():
+        return 0
+    t = time.localtime()
+    h, m, s = t.tm_hour, t.tm_min, t.tm_sec
+    if h < ACTIVE_HOURS_START:
+        return (ACTIVE_HOURS_START - h) * 3600 - m * 60 - s
+    # h >= ACTIVE_HOURS_END — window opens tomorrow
+    return (24 - h + ACTIVE_HOURS_START) * 3600 - m * 60 - s
+
+
 def _smart_sleep(last_full_cycle_time, next_full_jitter):
     """Sleep until the next full empire cycle or the next construction ETA, whichever comes first."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
     eta = _get_next_construction_eta()
 
-    if eta:
+    if eta and _in_active_hours():
         # Wake up 3–8 min after construction ends to start the next level
         wake_for_queue = eta + random.randint(3, 8) * 60
         sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
@@ -345,7 +388,21 @@ def _smart_sleep(last_full_cycle_time, next_full_jitter):
     else:
         sleep_secs = max(60, next_full_at - time.time())
 
+    # Outside active hours: sleep until window opens (if sooner than next full cycle)
+    if not _in_active_hours():
+        secs_to_open = _secs_until_active()
+        if 0 < secs_to_open < sleep_secs:
+            sleep_secs = secs_to_open + random.randint(1, 5) * 60
+            print(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
+                      start=ACTIVE_HOURS_START))
+
     print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
+    wake_at = int(time.time() + sleep_secs)
+    try:
+        with open(os.path.join(LOGS_DIR, "next_cycle.json"), "w") as f:
+            json.dump({"nextCycleAt": wake_at}, f)
+    except Exception:
+        pass
     time.sleep(sleep_secs)
 
 
@@ -422,6 +479,42 @@ def _load_empire_json():
         return {}
 
 
+def _get_total_upgrade_cost(costs_cache, city_name, building_name, from_level, to_level):
+    """Sum building_costs.json entries for all levels from_level+1 through to_level.
+    Returns [wood,wine,marble,glass,sulfur] or None if no data found."""
+    bdata = costs_cache.get("cities", {}).get(city_name, {}).get(building_name)
+    if not bdata:
+        return None
+    total = [0, 0, 0, 0, 0]
+    found = False
+    for lv in range(from_level + 1, to_level + 1):
+        entry = bdata.get("costs", {}).get(str(lv))
+        if entry:
+            found = True
+            for j, k in enumerate(("wood", "wine", "marble", "glass", "sulfur")):
+                total[j] += entry.get(k, 0)
+    return total if found else None
+
+
+def _calc_city_reserved(city_name, queues, empire, costs_cache):
+    """Return [wood,wine,marble,glass,sulfur] reserved for ALL pending queue items
+    of city_name, summing full multi-level costs (current level → targetLevel).
+    Cities with longer queues correctly block more of their resources."""
+    reserved = [0, 0, 0, 0, 0]
+    for item in queues.get(city_name, []):
+        bname = item["building"]
+        target_lv = item.get("targetLevel", 0)
+        val = str(empire.get(city_name, {}).get(bname, "0")).replace("+", "")
+        cur_lv = int(val) if val.isdigit() else 0
+        if target_lv <= cur_lv:
+            continue
+        cost = _get_total_upgrade_cost(costs_cache, city_name, bname, cur_lv, target_lv)
+        if cost:
+            for i in range(5):
+                reserved[i] += cost[i]
+    return reserved
+
+
 def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list):
     """Fire one transport dispatch (changeCurrentCity + loadTransportersWithFreight).
     Returns True on server success (type=10), False otherwise. Non-blocking."""
@@ -471,17 +564,29 @@ def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships,
 
 
 def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id):
-    """Phase 2: dispatch missing resources from surplus cities toward city_name.
-    Uses building_costs.json for cost data and resources.json for available amounts —
-    no extra HTTP requests beyond ship count and the transport POSTs themselves."""
+    """Phase 3: dispatch missing resources from surplus cities toward city_name.
+    Surplus is calculated against ALL pending queue items per source city (full
+    multi-level costs), not just the next level. Sources are sorted by total
+    surplus descending so cities with the most slack are tapped first."""
     from ikabot.helpers.naval import getAvailableShips
     from ikabot.helpers.pedirInfo import getShipCapacity
 
     building_name = next_item["building"]
     current_level = target_b["level"]
 
-    # Cost of the next upgrade: try cache first, fall back to live HTTP query
-    cost = _get_upgrade_cost_from_cache(city_name, building_name, current_level)
+    # Load building_costs.json once — reused for destination cost and all surplus calcs
+    costs_path = os.path.join(LOGS_DIR, "building_costs.json")
+    costs_cache = {}
+    if os.path.exists(costs_path):
+        try:
+            with open(costs_path) as f:
+                costs_cache = json.load(f)
+        except Exception:
+            pass
+
+    # Cost of the next upgrade level for the destination city
+    cost = _get_total_upgrade_cost(costs_cache, city_name, building_name,
+                                   current_level, current_level + 1)
     if cost is None:
         print(lm("queue_no_cost_data", city=city_name, building=building_name))
         try:
@@ -524,27 +629,20 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     all_resources = _load_resources_json()
     empire = _load_empire_json()
 
-    # Build surplus list per source city: available minus reserved for own first queue item
+    # Build surplus per source city: available minus full reserved cost for ALL queue items
     sources = []
     for src_name, src_id in name_to_id.items():
         if src_name == city_name:
             continue
         src_res = all_resources.get(src_name, {})
         src_avail = [src_res.get(_RESOURCES_ENG[i], 0) for i in range(5)]
-
-        src_queue = queues.get(src_name, [])
-        if src_queue:
-            src_bname = src_queue[0]["building"]
-            src_val = str(empire.get(src_name, {}).get(src_bname, "0")).replace("+", "")
-            src_level = int(src_val) if src_val.isdigit() else 0
-            src_cost = _get_upgrade_cost_from_cache(src_name, src_bname, src_level)
-            surplus = ([max(0, src_avail[i] - src_cost[i]) for i in range(5)]
-                       if src_cost else src_avail[:])
-        else:
-            surplus = src_avail[:]
-
+        reserved = _calc_city_reserved(src_name, queues, empire, costs_cache)
+        surplus = [max(0, src_avail[i] - reserved[i]) for i in range(5)]
         if any(s > 0 for s in surplus):
             sources.append((src_name, src_id, surplus))
+
+    # Tap cities with the most total surplus first
+    sources.sort(key=lambda x: sum(x[2]), reverse=True)
 
     if not sources:
         print(lm("queue_no_surplus", city=city_name))
@@ -684,12 +782,19 @@ def _process_building_queue(session, ids, cities):
             continue
 
         if target_b.get("canUpgrade") is False:
-            _try_transport(session, city_name, city_id, city_data, next_item,
-                           target_b, queues, name_to_id)
+            if _in_active_hours():
+                _try_transport(session, city_name, city_id, city_data, next_item,
+                               target_b, queues, name_to_id)
+            else:
+                print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
             print(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
+            continue
+
+        if not _in_active_hours():
+            print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
             continue
 
         # ── Fire the upgrade POST via expandBuilding (same path as constructionList) ──
