@@ -423,7 +423,7 @@
       { pt: 'Enxofre',  en: 'Sulfur',  icon: 'fa-flask',       color: 'text-yellow-400' },
     ];
 
-    const AUTO_REFRESH_SECONDS = 900; // 15 minutes
+    const AUTO_REFRESH_SECONDS = 300; // 5-minute fallback (SSE handles live updates)
 
     const ALERT_DEFAULTS = {
       wineWarning:  8,   // hours
@@ -3704,10 +3704,12 @@
       // Initial load
       useEffect(() => { fetchData(); }, []);
 
-      // Auto-refresh: poll API every 15 minutes
+      // Auto-refresh: SSE for immediate updates on file change, 5-min fallback if connection drops
       useEffect(() => {
-        const interval = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000);
-        return () => clearInterval(interval);
+        const es = new EventSource('/api/stream');
+        es.addEventListener('update', fetchData);
+        const fallback = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000);
+        return () => { es.close(); clearInterval(fallback); };
       }, [fetchData]);
 
       const alertCount = useMemo(() => {

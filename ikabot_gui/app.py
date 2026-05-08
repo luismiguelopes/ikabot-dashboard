@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 import json
 import os
 import time
@@ -308,5 +308,37 @@ def api_building_queue_reorder():
     return jsonify({"ok": True, "queue": city_queue})
 
 
+@app.route("/api/stream")
+def api_stream():
+    """SSE endpoint — emits 'update' whenever any data file on the shared volume changes."""
+    watched = [
+        EMPIRE_JSON_PATH, RESOURCES_JSON_PATH, STATUS_SUMMARY_JSON_PATH,
+        MOVEMENTS_JSON_PATH, BUILDING_QUEUE_JSON_PATH, NEXT_CYCLE_JSON_PATH,
+        LAST_ALIVE_JSON_PATH,
+    ]
+
+    def generate():
+        last_mtimes = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in watched}
+        yield ": connected\n\n"
+        while True:
+            time.sleep(2)
+            changed = False
+            for p in watched:
+                mtime = os.path.getmtime(p) if os.path.exists(p) else 0
+                if mtime != last_mtimes[p]:
+                    last_mtimes[p] = mtime
+                    changed = True
+            if changed:
+                yield "event: update\ndata: {}\n\n"
+            else:
+                yield ": keepalive\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)
