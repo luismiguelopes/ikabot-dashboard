@@ -52,6 +52,29 @@ def load_all_data():
     with open(RESOURCES_JSON_PATH) as f:
         resources_data = json.load(f)
 
+    # Patch empire_data with inProgress from building_queue.json so constructions
+    # started by the queue processor are visible before the next full cycle writes
+    # empire.json (which only happens hourly).
+    now_ts = time.time()
+    if os.path.exists(BUILDING_QUEUE_JSON_PATH):
+        try:
+            with open(BUILDING_QUEUE_JSON_PATH) as f:
+                queue_data = json.load(f)
+            for city_name, ip in queue_data.get("inProgress", {}).items():
+                eta = ip.get("eta", 0)
+                building = ip.get("building", "")
+                from_level = ip.get("fromLevel", 0)
+                if not building or eta <= now_ts or city_name not in empire_data:
+                    continue
+                city_entry = empire_data[city_name]
+                current = str(city_entry.get(building, ""))
+                if not current.endswith("+"):
+                    city_entry[building] = "{}+".format(from_level)
+                if not city_entry.get("_constructionEnds"):
+                    city_entry["_constructionEnds"] = eta
+        except Exception:
+            pass
+
     elapsed = int(time.time() - get_last_modified_ts(RESOURCES_JSON_PATH))
     for city_data in resources_data.values():
         t = city_data.get('wineRunsOutIn')
