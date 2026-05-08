@@ -39,8 +39,19 @@ services:
     working_dir: /gui
     command: >
       bash -c "pip install flask && python app.py"
+
+  frontend:
+    image: node:20-alpine
+    container_name: ikabot-frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
     ports:
-      - "5001:5000"
+      - "5001:5173"
+    depends_on:
+      - ikabot-gui
 
 volumes:
   ikalogs_volume:
