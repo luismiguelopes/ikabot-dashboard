@@ -248,7 +248,10 @@ def _calc_city_reserved(city_name, queues, empire, costs_cache):
 
 # ── Transport dispatch ────────────────────────────────────────────────────────
 
-def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list):
+_FREIGHTER_THRESHOLD_WAVES = 8  # use freighters only when total need exceeds this many transporter ship-loads
+
+
+def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list, use_freighters=False):
     """Fire one transport dispatch. Returns True on server success (type=10), False otherwise."""
     html = session.get()
     current_city = getCity(html)
@@ -281,8 +284,13 @@ def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships,
         "currentTab": "tabSendTransporter",
         "actionRequest": actionRequest,
         "ajax": "1",
-        "transporters": str(ships),
     }
+    if use_freighters:
+        data["usedFreightersShips"] = str(ships)
+        data["transporters"] = "0"
+    else:
+        data["transporters"] = str(ships)
+
     for i, amount in enumerate(send_list):
         if amount > 0:
             key = "cargo_resource" if i == 0 else "cargo_tradegood{:d}".format(i)
@@ -295,10 +303,49 @@ def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships,
         return False
 
 
+def _build_send_list(surplus, remaining, ship_cap, ships_available):
+    """Build a send_list (5 resources) and ships_to_use from surplus and remaining need.
+    Returns (send_list, ships_to_use) where send_list sums to 0 if nothing can be sent."""
+    send_list = [0, 0, 0, 0, 0]
+    for i in range(5):
+        if remaining[i] == 0 or surplus[i] == 0:
+            continue
+        to_send = min(surplus[i], remaining[i])
+        to_send = math.ceil(to_send / 1000) * 1000
+        to_send = min(to_send, surplus[i])
+        if to_send > 0:
+            send_list[i] = to_send
+
+    total = sum(send_list)
+    if total == 0:
+        return send_list, 0
+
+    ships_needed = math.ceil(total / ship_cap)
+    ships_to_use = min(ships_available, ships_needed)
+
+    if ships_to_use < ships_needed:
+        # Capacity-constrained: fill available capacity across resources in order
+        capacity = ships_to_use * ship_cap
+        scaled = [0, 0, 0, 0, 0]
+        for i in range(5):
+            if send_list[i] == 0 or capacity <= 0:
+                continue
+            fits = min(send_list[i], capacity)
+            fits = (fits // 1000) * 1000
+            scaled[i] = fits
+            capacity -= fits
+        send_list = scaled
+        total = sum(scaled)
+
+    return send_list, ships_to_use
+
+
 def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id, transport_errors=None):
     """Dispatch missing resources from surplus cities toward city_name.
+    One bundled fleet per source city (all resources in one dispatch).
+    Freighters used as a fallback only when total need is very large.
     Returns True if at least one transport was successfully dispatched."""
-    from ikabot.helpers.naval import getAvailableShips
+    from ikabot.helpers.naval import getAvailableShips, getAvailableFreighters
     from ikabot.helpers.pedirInfo import getShipCapacity
 
     building_name = next_item["building"]
@@ -351,7 +398,8 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         print(lm("queue_no_ships", city=city_name))
         return False
 
-    ship_cap, _ = getShipCapacity(session)
+    ship_cap, freighter_cap = getShipCapacity(session)
+    total_need = sum(net_missing)
 
     all_resources = _load_resources_json()
     empire = _load_empire_json()
@@ -376,59 +424,88 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     island_id = city_data.get("islandId", "")
     first_route = True
     dispatched = False
+    remaining = list(net_missing)
+    used_sources = set()
 
-    for i in range(5):
-        if net_missing[i] == 0 or ships_available == 0:
+    # ── Transporter pass: one bundled fleet per source city ───────────────────
+    for src_name, src_id, surplus in sources:
+        if ships_available == 0 or all(r == 0 for r in remaining):
+            break
+
+        send_list, ships_to_use = _build_send_list(surplus, remaining, ship_cap, ships_available)
+        if sum(send_list) == 0:
             continue
-        remaining = net_missing[i]
 
-        for src_name, src_id, surplus in sources:
-            if remaining == 0 or ships_available == 0:
-                break
-            if surplus[i] == 0:
-                continue
+        if not first_route:
+            time.sleep(random.randint(12, 30))
+        first_route = False
 
-            to_send = min(surplus[i], remaining)
-            # Round UP to nearest 1000 so destination always has enough resources
-            to_send = math.ceil(to_send / 1000) * 1000
-            # Cap at available surplus (can't round up beyond what the source has)
-            to_send = min(to_send, surplus[i])
+        success = _dispatch_transport(session, src_id, city_id, island_id,
+                                      ships_to_use, send_list)
+        if success:
+            dispatched = True
+            used_sources.add(src_name)
+            for i in range(5):
+                remaining[i] = max(0, remaining[i] - send_list[i])
+                surplus[i] = max(0, surplus[i] - send_list[i])
+            ships_available -= ships_to_use
+            if transport_errors is not None:
+                transport_errors.pop(city_name, None)
+            sent_desc = ", ".join(
+                "{} {}".format(send_list[i], _RESOURCES_ENG[i])
+                for i in range(5) if send_list[i] > 0
+            )
+            print(lm("queue_transport_sent_bundle", city=city_name, resources=sent_desc,
+                      origin=src_name, ships=ships_to_use))
+        else:
+            if transport_errors is not None:
+                transport_errors[city_name] = {
+                    "failedAt": int(time.time()),
+                    "origin": src_name,
+                    "resource": next((_RESOURCES_ENG[i] for i in range(5) if send_list[i] > 0), "?"),
+                }
+            print(lm("queue_transport_failed", city=city_name, origin=src_name))
 
-            ships_needed = math.ceil(to_send / ship_cap)
-            ships_to_use = min(ships_available, ships_needed)
-            if ships_to_use < ships_needed:
-                # Capacity-constrained: floor to nearest 1000 (partial delivery)
-                to_send = (ships_to_use * ship_cap // 1000) * 1000
+    # ── Freighter pass: only when total need is very large ────────────────────
+    # Skip if total need is small — transporter waves are faster (8 min vs 2h40m)
+    if total_need > ship_cap * _FREIGHTER_THRESHOLD_WAVES and sum(remaining) > 0:
+        try:
+            freighters_available = getAvailableFreighters(session)
+        except Exception:
+            freighters_available = 0
 
-            if to_send <= 0:
-                continue
+        if freighters_available > 0 and freighter_cap > 0:
+            # Prefer source cities that haven't dispatched transporters this cycle (avoid port queue)
+            freighter_sources = [s for s in sources if s[0] not in used_sources]
+            for src_name, src_id, surplus in freighter_sources:
+                if all(r == 0 for r in remaining):
+                    break
 
-            send_list = [0, 0, 0, 0, 0]
-            send_list[i] = to_send
+                send_list, freighters_to_use = _build_send_list(
+                    surplus, remaining, freighter_cap, freighters_available
+                )
+                if sum(send_list) == 0:
+                    continue
 
-            if not first_route:
-                time.sleep(random.randint(12, 30))
-            first_route = False
+                if not first_route:
+                    time.sleep(random.randint(12, 30))
+                first_route = False
 
-            success = _dispatch_transport(session, src_id, city_id, island_id,
-                                          ships_to_use, send_list)
-            if success:
-                dispatched = True
-                remaining = max(0, remaining - to_send)
-                ships_available -= ships_to_use
-                surplus[i] -= to_send
-                if transport_errors is not None:
-                    transport_errors.pop(city_name, None)
-                print(lm("queue_transport_sent", city=city_name, amount=to_send,
-                          resource=_RESOURCES_ENG[i], origin=src_name, ships=ships_to_use))
-            else:
-                if transport_errors is not None:
-                    transport_errors[city_name] = {
-                        "failedAt": int(time.time()),
-                        "origin": src_name,
-                        "resource": _RESOURCES_ENG[i],
-                    }
-                print(lm("queue_transport_failed", city=city_name, origin=src_name))
+                success = _dispatch_transport(session, src_id, city_id, island_id,
+                                              freighters_to_use, send_list, use_freighters=True)
+                if success:
+                    dispatched = True
+                    for i in range(5):
+                        remaining[i] = max(0, remaining[i] - send_list[i])
+                    sent_desc = ", ".join(
+                        "{} {}".format(send_list[i], _RESOURCES_ENG[i])
+                        for i in range(5) if send_list[i] > 0
+                    )
+                    print(lm("queue_freighter_sent", city=city_name, resources=sent_desc,
+                              origin=src_name, ships=freighters_to_use))
+                else:
+                    print(lm("queue_freighter_failed", city=city_name, origin=src_name))
+                break  # one freighter fleet per cycle
 
     return dispatched
 

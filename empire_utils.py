@@ -247,6 +247,18 @@ _LM = {
         "en": "      -> Queue [{city}]: sent {amount} {resource} from {origin} ({ships} ships).",
         "pt": "      -> Fila [{city}]: enviou {amount} {resource} de {origin} ({ships} navios).",
     },
+    "queue_transport_sent_bundle": {
+        "en": "      -> Queue [{city}]: sent {resources} from {origin} ({ships} ships).",
+        "pt": "      -> Fila [{city}]: enviou {resources} de {origin} ({ships} navios).",
+    },
+    "queue_freighter_sent": {
+        "en": "      -> Queue [{city}]: freighters — sent {resources} from {origin} ({ships} freighters).",
+        "pt": "      -> Fila [{city}]: cargueiros — enviou {resources} de {origin} ({ships} cargueiros).",
+    },
+    "queue_freighter_failed": {
+        "en": "      -> Queue [{city}]: freighter dispatch from {origin} rejected by server.",
+        "pt": "      -> Fila [{city}]: despacho de cargueiro de {origin} recusado pelo servidor.",
+    },
     "queue_transport_failed": {
         "en": "      -> Queue [{city}]: transport from {origin} rejected by server.",
         "pt": "      -> Fila [{city}]: transporte de {origin} recusado pelo servidor.",
