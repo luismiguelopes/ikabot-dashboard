@@ -20,7 +20,7 @@ from empire_utils import LOGS_DIR, BUILDING_COSTS_UPDATE_INTERVAL, lm
 
 from ikabot.config import materials_names_tec
 from ikabot.helpers.getJson import getCity
-from ikabot.helpers.varios import actionRequest
+from ikabot.config import actionRequest
 
 
 def should_update_building_costs():

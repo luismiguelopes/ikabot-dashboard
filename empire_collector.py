@@ -18,7 +18,7 @@ from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, lm
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
-from ikabot.helpers.varios import actionRequest
+from ikabot.config import actionRequest
 
 
 def _trim_history(path):

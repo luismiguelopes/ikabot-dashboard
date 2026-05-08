@@ -18,7 +18,7 @@ from empire_utils import (
 )
 
 from ikabot.helpers.getJson import getCity
-from ikabot.helpers.varios import actionRequest
+from ikabot.config import actionRequest
 
 
 _RESOURCES_ENG = ['Wood', 'Wine', 'Marble', 'Crystal', 'Sulfur']
