@@ -9,8 +9,14 @@ services:
     env_file:
       - .env
     volumes:
-      # Pega no ficheiro ./empireFunction.py que está ao lado do compose e injeta na diretoria correta do bot
+      # Main loop — thin orchestrator
       - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py
+      # Módulos de suporte injectados na mesma pasta para importação relativa
+      - ./empire_utils.py:/ikabot/ikabot/function/empire_utils.py
+      - ./empire_collector.py:/ikabot/ikabot/function/empire_collector.py
+      - ./costs_collector.py:/ikabot/ikabot/function/costs_collector.py
+      - ./scan_collector.py:/ikabot/ikabot/function/scan_collector.py
+      - ./queue_processor.py:/ikabot/ikabot/function/queue_processor.py
       # Substitui o helper de rotas por versão com delays humanos entre envios consecutivos
       - ./planRoutes_patched.py:/ikabot/ikabot/helpers/planRoutes.py
       # Pasta Virtual Partilhada
