@@ -389,10 +389,19 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                 continue
 
             to_send = min(surplus[i], remaining)
+            # Round UP to nearest 1000 so destination always has enough resources
+            to_send = math.ceil(to_send / 1000) * 1000
+            # Cap at available surplus (can't round up beyond what the source has)
+            to_send = min(to_send, surplus[i])
+
             ships_needed = math.ceil(to_send / ship_cap)
             ships_to_use = min(ships_available, ships_needed)
             if ships_to_use < ships_needed:
-                to_send = ships_to_use * ship_cap
+                # Capacity-constrained: floor to nearest 1000 (partial delivery)
+                to_send = (ships_to_use * ship_cap // 1000) * 1000
+
+            if to_send <= 0:
+                continue
 
             send_list = [0, 0, 0, 0, 0]
             send_list[i] = to_send
@@ -405,7 +414,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                                           ships_to_use, send_list)
             if success:
                 dispatched = True
-                remaining -= to_send
+                remaining = max(0, remaining - to_send)
                 ships_available -= ships_to_use
                 surplus[i] -= to_send
                 if transport_errors is not None:
