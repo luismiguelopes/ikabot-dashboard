@@ -9,7 +9,8 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 | Container | Description |
 |---|---|
 | `ikabot` | Runs the ikabot automation bot with custom files injected via volume mounts |
-| `ikabot-gui` | Flask web dashboard that reads the collected JSON data |
+| `ikabot-gui` | Flask REST API that reads the collected JSON data (internal, port 5000) |
+| `frontend` | Vite dev server that serves the React/TypeScript SPA on port 5001, proxying `/api/*` to `ikabot-gui` |
 
 ### How it works
 
@@ -32,7 +33,7 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 
 All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
 
-The `ikabot-gui` container serves a Flask app on port `5001` that reads those files and exposes them via a REST API, consumed by the React frontend.
+The `ikabot-gui` container runs a Flask app (internal port 5000) that reads those files and exposes them via a REST API and a Server-Sent Events stream (`/api/stream`). The `frontend` container runs a Vite dev server (port 5001) that serves the React/TypeScript SPA and proxies all `/api/*` requests to Flask. The SSE stream pushes live updates to the browser within ~2 seconds of any data file changing.
 
 ## Requirements
 
@@ -117,12 +118,25 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 ```
 .
 ├── docker-compose.yml
-├── empireFunction.py        # Custom empire data collector (injected into ikabot)
+├── empireFunction.py        # Main loop orchestrator (injected into ikabot)
+├── empire_utils.py          # Constants, duration parser, i18n strings
+├── empire_collector.py      # City data collection, movements refresh
+├── costs_collector.py       # Building costs collection
+├── scan_collector.py        # World scan collection
+├── queue_processor.py       # Building queue processor, transport dispatch, smart sleep
 ├── planRoutes_patched.py    # Patched transport helper with anti-detection delays
-├── ikabot_gui/              # Flask dashboard
-│   ├── app.py
-│   └── templates/
-│       └── index.html       # Single-file React SPA (no build step)
+├── ikabot_gui/              # Flask REST API
+│   └── app.py
+├── frontend/                # Vite + React + TypeScript SPA
+│   ├── src/
+│   │   ├── App.tsx          # Root component (SSE, routing, language)
+│   │   ├── types.ts         # TypeScript interfaces for all JSON data
+│   │   ├── i18n.tsx         # EN/PT translations + hooks
+│   │   ├── utils.ts         # Formatting helpers
+│   │   ├── constants.ts     # MATERIALS, COST_KEYS, resource icons/colours
+│   │   └── components/      # One file per tab/feature
+│   ├── vite.config.ts       # Proxy /api/* → ikabot-gui:5000
+│   └── package.json
 └── .env                     # Credentials — never commit this
 ```
 
