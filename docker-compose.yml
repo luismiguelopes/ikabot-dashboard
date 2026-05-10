@@ -1,7 +1,7 @@
 
 services:
   ikabot:
-    image: ghcr.io/ikabot-collective/ikabot:latest
+    image: ghcr.io/luismiguelopes/ikabot:latest
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
