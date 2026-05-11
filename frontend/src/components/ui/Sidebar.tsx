@@ -34,11 +34,9 @@ interface SidebarProps {
   lastAlive: number | null
   alertCount: number
   movCount: number
-  lang: string
-  toggleLang: () => void
 }
 
-export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, toggleLang }: SidebarProps) {
+export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount }: SidebarProps) {
   const t = useT()
   const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60
   const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > 90 * 60
@@ -66,16 +64,21 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <NavItem icon="fa-house"        label={t('nav_home')}        active={active === 'home'}       onClick={() => setActive('home')}       />
-        <NavItem icon="fa-city"         label={t('nav_cities')}      active={active === 'cities'}     onClick={() => setActive('cities')}     />
-        <NavItem icon="fa-landmark"     label={t('nav_buildings')}   active={active === 'buildings'}  onClick={() => setActive('buildings')}  />
-        <NavItem icon="fa-ship"         label={t('nav_movements')}   active={active === 'movements'}  onClick={() => setActive('movements')}  badge={movCount} />
-        <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')} active={active === 'alerts'} onClick={() => setActive('alerts')}     badge={alertCount} />
-        <NavItem icon="fa-chart-line"   label={t('nav_history')}     active={active === 'history'}    onClick={() => setActive('history')}    />
-        <NavItem icon="fa-calculator"   label={t('nav_calculators')} active={active === 'calc'}       onClick={() => setActive('calc')}       />
-        <NavItem icon="fa-list-check"   label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
-        <NavItem icon="fa-earth-europe" label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
+        <NavItem icon="fa-house"                label={t('nav_home')}         active={active === 'home'}         onClick={() => setActive('home')}         />
+        <NavItem icon="fa-city"                 label={t('nav_cities')}       active={active === 'cities'}       onClick={() => setActive('cities')}       />
+        <NavItem icon="fa-landmark"             label={t('nav_buildings')}    active={active === 'buildings'}    onClick={() => setActive('buildings')}    />
+        <NavItem icon="fa-ship"                 label={t('nav_movements')}    active={active === 'movements'}    onClick={() => setActive('movements')}    badge={movCount} />
+        <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')}       active={active === 'alerts'}       onClick={() => setActive('alerts')}       badge={alertCount} />
+        <NavItem icon="fa-chart-line"           label={t('nav_history')}      active={active === 'history'}      onClick={() => setActive('history')}      />
+        <NavItem icon="fa-calculator"           label={t('nav_calculators')}  active={active === 'calc'}         onClick={() => setActive('calc')}         />
+        <NavItem icon="fa-list-check"           label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
+        <NavItem icon="fa-earth-europe"         label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
       </nav>
+
+      {/* Settings — visually separated, above status footer */}
+      <div className="px-3 py-2 border-t border-slate-700/60">
+        <NavItem icon="fa-gear" label={t('settings')} active={active === 'settings'} onClick={() => setActive('settings')} />
+      </div>
 
       <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
         {isBotOffline && (
@@ -100,13 +103,6 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
             {t('refresh_in', { t: fmtCountdown(secsUntilUpdate) })}
           </p>
         )}
-        <button
-          onClick={toggleLang}
-          className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white text-xs font-semibold transition-colors"
-          title="Switch language"
-        >
-          <i className="fa-solid fa-language" /> {t('lang_other')}
-        </button>
       </div>
     </aside>
   )

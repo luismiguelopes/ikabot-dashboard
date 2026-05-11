@@ -13,6 +13,7 @@ import { HistoryPage } from './components/HistoryPage'
 import { CalculadorasPage } from './components/calculadoras/CalculadorasPage'
 import { BuildingQueueTab } from './components/Construction'
 import { MundoPage } from './components/mundo/MundoPage'
+import { SettingsPage } from './components/SettingsPage'
 
 function LoadingScreen() {
   return (
@@ -55,7 +56,17 @@ export default function App() {
     })
   }, [])
 
-  const [page, setPage] = useState('home')
+  const [defaultTab, setDefaultTab] = useState(() => {
+    try { return localStorage.getItem('ikabot_default_tab') || 'home' } catch { return 'home' }
+  })
+  const saveDefaultTab = useCallback((tab: string) => {
+    setDefaultTab(tab)
+    try { localStorage.setItem('ikabot_default_tab', tab) } catch {}
+  }, [])
+
+  const [page, setPage] = useState(() => {
+    try { return localStorage.getItem('ikabot_default_tab') || 'home' } catch { return 'home' }
+  })
   const [data, setData] = useState<ApiData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [thresholds, setThresholds] = useState<AlertThresholds>(loadThresholds)
@@ -131,19 +142,18 @@ export default function App() {
           lastAlive={data.lastAlive}
           alertCount={alertCount}
           movCount={movCount}
-          lang={lang}
-          toggleLang={toggleLang}
         />
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
           {page === 'home'         && <HomePage      data={data} />}
-          {page === 'cities'       && <CitiesPage    data={data} />}
-          {page === 'buildings'    && <BuildingsPage data={data} />}
+          {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
+          {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
           {page === 'movements'    && <MovementsPage />}
-          {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} onSaveThresholds={saveThresholds} />}
+          {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
           {page === 'history'      && <HistoryPage />}
           {page === 'calc'         && <CalculadorasPage data={data} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage />}
+          {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} />}
         </main>
       </div>
     </LangContext.Provider>

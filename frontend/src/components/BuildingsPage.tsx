@@ -5,9 +5,10 @@ import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { Td } from './ui/TableCells'
 import { CitySelect } from './ui/CitySelect'
+import { RefreshButton } from './ui/RefreshButton'
 import type { ApiData, BuildingQueue } from '../types'
 
-export function BuildingsPage({ data }: { data: ApiData }) {
+export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: () => void }) {
   const t = useT()
   const { empireData } = data
   const cities = Object.keys(empireData)
@@ -63,7 +64,10 @@ export function BuildingsPage({ data }: { data: ApiData }) {
   return (
     <div>
       <PageHeader icon="fa-landmark" title={t('buildings_title')}>
-        <CitySelect cities={cities} value={filter} onChange={setFilter} />
+        <div className="flex items-center gap-2">
+          {onRefresh && <RefreshButton onRefresh={onRefresh} />}
+          <CitySelect cities={cities} value={filter} onChange={setFilter} />
+        </div>
       </PageHeader>
 
       <Card>

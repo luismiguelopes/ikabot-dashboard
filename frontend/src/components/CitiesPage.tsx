@@ -7,9 +7,10 @@ import { PageHeader } from './ui/PageHeader'
 import { Th, Td } from './ui/TableCells'
 import { CitySelect } from './ui/CitySelect'
 import { StorageBar } from './StorageBar'
+import { RefreshButton } from './ui/RefreshButton'
 import type { ApiData } from '../types'
 
-export function CitiesPage({ data }: { data: ApiData }) {
+export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () => void }) {
   const t = useT()
   const lang = useLang() as 'pt' | 'en'
   const { resourcesData } = data
@@ -38,6 +39,7 @@ export function CitiesPage({ data }: { data: ApiData }) {
     <div>
       <PageHeader icon="fa-city" title={t('cities_title')}>
         <div className="flex items-center gap-2">
+          {onRefresh && <RefreshButton onRefresh={onRefresh} />}
           <CitySelect cities={cities} value={filter} onChange={setFilter} />
           <button
             onClick={handleExport}
