@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useT } from '../../i18n'
 import { PageHeader } from '../ui/PageHeader'
 import { BuildingUpgradeCalc } from './BuildingUpgradeCalc'
@@ -6,9 +6,19 @@ import { ROICalc } from './ROICalc'
 import { ColonyROICalc } from './ColonyROICalc'
 import type { ApiData } from '../../types'
 
-export function CalculadorasPage({ data }: { data: ApiData | null }) {
+export interface IslandPreset {
+  resType: 'wood' | 'marble'
+  level: number
+}
+
+export function CalculadorasPage({ data, islandPreset }: { data: ApiData | null; islandPreset?: IslandPreset | null }) {
   const t = useT()
   const [tab, setTab] = useState('upgrade')
+
+  useEffect(() => {
+    if (islandPreset) setTab('colony')
+  }, [islandPreset])
+
   const tabs = [
     { key: 'upgrade', label: t('tab_upgrade'), icon: 'fa-building-columns' },
     { key: 'roi',     label: t('tab_roi'),     icon: 'fa-scale-balanced'   },
@@ -35,7 +45,7 @@ export function CalculadorasPage({ data }: { data: ApiData | null }) {
       </div>
       {tab === 'upgrade' && data && <BuildingUpgradeCalc data={data} />}
       {tab === 'roi'     && data && <ROICalc data={data} />}
-      {tab === 'colony'  && data && <ColonyROICalc data={data} />}
+      {tab === 'colony'  && data && <ColonyROICalc data={data} islandPreset={islandPreset} />}
     </div>
   )
 }

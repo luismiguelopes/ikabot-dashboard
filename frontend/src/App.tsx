@@ -3,6 +3,7 @@ import { LangContext, loadLang } from './i18n'
 import { loadThresholds } from './utils'
 import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
 import type { ApiData, AlertThresholds, CityResources } from './types'
+import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
@@ -80,6 +81,12 @@ export default function App() {
   const [notifEnabled, setNotifEnabled] = useState(loadBrowserNotifEnabled)
   useNotifications(data, thresholds, notifEnabled)
 
+  const [calcIslandPreset, setCalcIslandPreset] = useState<IslandPreset | null>(null)
+  const handleSelectIsland = useCallback((preset: IslandPreset) => {
+    setCalcIslandPreset(preset)
+    setPage('calc')
+  }, [])
+
   const fetchData = useCallback(() => {
     fetch('/api/data')
       .then(r => r.json())
@@ -154,9 +161,9 @@ export default function App() {
           {page === 'movements'    && <MovementsPage />}
           {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
           {page === 'history'      && <HistoryPage />}
-          {page === 'calc'         && <CalculadorasPage data={data} />}
+          {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
-          {page === 'mundo'        && <MundoPage />}
+          {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
           {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
         </main>
       </div>

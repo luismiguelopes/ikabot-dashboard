@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useT, useLang } from '../i18n'
-import { fmtTs, fmtDuration } from '../utils'
+import { fmt, fmtTs, fmtDuration } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
+import { MATERIALS, COST_KEYS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
+import { ConstructionTemplate } from './ConstructionTemplate'
 import type { ApiData, BuildingQueue, BuildingCostsData } from '../types'
 
 interface BuildingInCity {
@@ -12,10 +14,140 @@ interface BuildingInCity {
   isBusy: boolean
 }
 
+function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; costsData: BuildingCostsData | null; data: ApiData }) {
+  const t    = useT()
+  const lang = useLang() as 'pt' | 'en'
+
+  const budget = useMemo(() => {
+    if (!costsData) return null
+    const total = [0, 0, 0, 0, 0]
+    const empireData = data.empireData
+    let itemCount = 0
+
+    for (const [city, items] of Object.entries(queue?.queues || {})) {
+      const cityBuildings = empireData[city] || {}
+      const cityCosts = costsData.cities[city] || {}
+      for (const item of items) {
+        const currentLevel = parseInt(String(cityBuildings[item.building] || '0')) || 0
+        const bCosts = cityCosts[item.building]
+        if (!bCosts) continue
+        for (let lv = currentLevel + 1; lv <= item.targetLevel; lv++) {
+          const c = bCosts.costs[String(lv)]
+          if (!c) continue
+          total[0] += c.wood   || 0
+          total[1] += c.wine   || 0
+          total[2] += c.marble || 0
+          total[3] += c.glass  || 0
+          total[4] += c.sulfur || 0
+        }
+        itemCount++
+      }
+    }
+
+    const available = [0, 0, 0, 0, 0]
+    Object.values(data.resourcesData).forEach(city => {
+      available[0] += city.Wood    || 0
+      available[1] += city.Wine    || 0
+      available[2] += city.Marble  || 0
+      available[3] += city.Crystal || 0
+      available[4] += city.Sulfur  || 0
+    })
+
+    const production = data.statusSummary.resources.production
+    return { total, available, production, itemCount }
+  }, [queue, costsData, data])
+
+  const totalQueued = Object.values(queue?.queues || {}).reduce((s, v) => s + v.length, 0)
+
+  if (totalQueued === 0) return null
+
+  if (!costsData) return (
+    <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">
+      <i className="fa-solid fa-circle-info shrink-0" />
+      {t('budget_no_costs')}
+    </div>
+  )
+
+  if (!budget) return null
+
+  const activeResources = MATERIALS.map((m, i) => ({
+    ...m,
+    needed:    budget.total[i],
+    available: budget.available[i],
+    missing:   Math.max(0, budget.total[i] - budget.available[i]),
+    prodPerH:  budget.production[i],
+  })).filter(r => r.needed > 0)
+
+  const etaSecs = activeResources.reduce<number | null>((worst, r) => {
+    if (r.missing <= 0) return worst
+    if (r.prodPerH <= 0) return null
+    const secs = (r.missing / r.prodPerH) * 3600
+    if (worst === null) return secs
+    return Math.max(worst, secs)
+  }, 0)
+
+  return (
+    <Card>
+      <div className="px-5 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
+            <i className="fa-solid fa-sack-dollar text-indigo-400" /> {t('budget_title')}
+          </p>
+          <span className="text-xs text-slate-400">{t('budget_total_items', { n: String(budget.itemCount) })}</span>
+        </div>
+        {activeResources.length === 0 ? (
+          <p className="text-sm text-emerald-600 flex items-center gap-1.5">
+            <i className="fa-solid fa-circle-check" /> {t('budget_ready')}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {activeResources.map(r => {
+              const pct = Math.min(100, Math.round((r.available / r.needed) * 100))
+              return (
+                <div key={r.en} className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className={`flex items-center gap-1 w-24 shrink-0 font-medium text-slate-600`}>
+                      <i className={`fa-solid ${r.icon} ${r.color}`} /> {r[lang]}
+                    </span>
+                    <span className="text-slate-400 w-20 text-right font-mono">{fmt(r.available)}</span>
+                    <span className="text-slate-300">/</span>
+                    <span className="text-slate-600 font-mono w-20">{fmt(r.needed)}</span>
+                    <span className={`ml-auto font-semibold font-mono w-20 text-right ${r.missing > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                      {r.missing > 0 ? `-${fmt(r.missing)}` : '✓'}
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${pct >= 100 ? 'bg-emerald-400' : pct >= 60 ? 'bg-yellow-400' : 'bg-red-400'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+            {etaSecs !== null && etaSecs > 0 && (
+              <p className="text-xs text-indigo-500 font-medium pt-1">
+                <i className="fa-solid fa-hourglass-half mr-1" />
+                {t('budget_eta')}: {fmtDuration(etaSecs)} {COST_KEYS.length > 0 ? `(${t('budget_available').toLowerCase()}: ${t('empire_prod_only').toLowerCase()})` : ''}
+              </p>
+            )}
+            {etaSecs === 0 && (
+              <p className="text-xs text-emerald-600 font-medium pt-1">
+                <i className="fa-solid fa-circle-check mr-1" /> {t('budget_ready')}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   const t    = useT()
   const lang = useLang()
   const now  = useLiveClock()
+  const [activeTab, setActiveTab]       = useState<'queue' | 'template'>('queue')
   const [queue, setQueue]               = useState<BuildingQueue | null>(null)
   const [selCity, setSelCity]           = useState('')
   const [targetLevels, setTargetLevels] = useState<Record<string, number>>({})
@@ -143,6 +275,32 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
           </div>
         </div>
       </Card>
+
+      {/* Sub-tab pills */}
+      <div className="flex gap-2">
+        {(['queue', 'template'] as const).map(key => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+              activeTab === key
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <i className={`fa-solid ${key === 'queue' ? 'fa-list-check' : 'fa-layer-group'}`} />
+            {key === 'queue' ? t('queue_panel') : t('template_tab')}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'template' && (
+        <ConstructionTemplate data={data} queue={queue} costsData={costsData} />
+      )}
+
+      {activeTab === 'queue' && <>
+      {/* Queue budget */}
+      <QueueBudget queue={queue} costsData={costsData} data={data} />
 
       {/* City tab pills */}
       <div className="flex gap-2 flex-wrap">
@@ -328,6 +486,7 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
 
         </div>
       )}
+      </>}
     </div>
   )
 }

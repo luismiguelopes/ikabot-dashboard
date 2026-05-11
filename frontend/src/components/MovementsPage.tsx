@@ -20,6 +20,11 @@ export function MovementsPage() {
       .then(setMovements)
       .catch(e => setError(e.message))
 
+  const handleRefresh = () => {
+    fetch('/api/movements/refresh', { method: 'POST' }).catch(() => {})
+    fetchMovements()
+  }
+
   useEffect(() => { fetchMovements() }, [])
 
   if (error)     return <p className="text-red-500 text-sm">{error}</p>
@@ -76,7 +81,7 @@ export function MovementsPage() {
   return (
     <div>
       <PageHeader icon="fa-ship" title={t('movements_title')}>
-        <RefreshButton onRefresh={fetchMovements} />
+        <RefreshButton onRefresh={handleRefresh} />
       </PageHeader>
       {movements.length === 0 ? (
         <Card className="p-8 text-center text-slate-400">

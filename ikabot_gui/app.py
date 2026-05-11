@@ -17,7 +17,8 @@ WORLD_SCAN_JSON_PATH    = os.path.join(LOGS_DIR, "world_scan.json")
 WORLD_SCAN_PREV_PATH    = os.path.join(LOGS_DIR, "world_scan_prev.json")
 WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
 PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
-FORCE_WORLD_SCAN_FLAG   = os.path.join(LOGS_DIR, ".force_world_scan")
+FORCE_WORLD_SCAN_FLAG       = os.path.join(LOGS_DIR, ".force_world_scan")
+FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
@@ -160,6 +161,13 @@ def api_building_costs_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)
     open(FORCE_COSTS_FLAG_PATH, "w").close()
     return jsonify({"ok": True, "message": "Extração forçada agendada para o próximo ciclo do bot."})
+
+
+@app.route("/api/movements/refresh", methods=["POST"])
+def api_movements_refresh():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_MOVEMENTS_FLAG_PATH, "w").close()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/world-scan")

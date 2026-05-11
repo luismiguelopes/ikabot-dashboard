@@ -328,9 +328,10 @@ interface IlhasTabProps {
   loading: boolean
   error: string | null
   onForceRefresh: () => void
+  onSelectIsland?: (preset: { resType: 'wood' | 'marble', level: number }) => void
 }
 
-function IlhasTab({ scanData, loading, error, onForceRefresh }: IlhasTabProps) {
+function IlhasTab({ scanData, loading, error, onForceRefresh, onSelectIsland }: IlhasTabProps) {
   const t    = useT()
   const RESOURCE_LABELS = useResourceLabels()
   const [filterDist,     setFilterDist]     = useState(0)
@@ -457,6 +458,7 @@ function IlhasTab({ scanData, loading, error, onForceRefresh }: IlhasTabProps) {
                   <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_wonder')}</th>
                   <SortTh colKey="freeSlots">{t('col_free_slots')}</SortTh>
                   <SortTh colKey="distance">{t('col_dist')}</SortTh>
+                  {onSelectIsland && <th className="px-3 py-3 font-semibold text-center whitespace-nowrap" />}
                 </tr>
               </thead>
               <tbody>
@@ -499,6 +501,22 @@ function IlhasTab({ scanData, loading, error, onForceRefresh }: IlhasTabProps) {
                       <span className="font-mono text-slate-700 text-sm font-semibold">{isl.distance}</span>
                       <br /><span className="text-slate-400 text-xs">{isl.nearestOwnCity}</span>
                     </Td>
+                    {onSelectIsland && (
+                      <Td className="text-center">
+                        <button
+                          onClick={() => {
+                            const resType = isl.resourceType === 2 ? 'marble' : 'wood'
+                            const level = parseInt(isl.resourceType === 2 ? (isl.luxuryLevel || '1') : (isl.woodLevel || '1')) || 1
+                            onSelectIsland({ resType, level })
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200 transition-colors whitespace-nowrap"
+                          title={t('use_in_calc')}
+                        >
+                          <i className="fa-solid fa-calculator text-[10px]" />
+                          {t('use_in_calc')}
+                        </button>
+                      </Td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -513,7 +531,7 @@ function IlhasTab({ scanData, loading, error, onForceRefresh }: IlhasTabProps) {
   )
 }
 
-export function MundoPage() {
+export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resType: 'wood' | 'marble', level: number }) => void }) {
   const t    = useT()
   const lang = useLang()
   const [tab,        setTab]        = useState('inactivos')
@@ -656,6 +674,7 @@ export function MundoPage() {
           loading={loading}
           error={error}
           onForceRefresh={handleForceRefresh}
+          onSelectIsland={onSelectIsland}
         />
       )}
     </div>

@@ -25,7 +25,7 @@ function LevelSelect({ label, value, onChange, options }: {
   )
 }
 
-export function ColonyROICalc({ data }: { data: ApiData | null }) {
+export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; islandPreset?: { resType: 'wood' | 'marble', level: number } | null }) {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
 
@@ -37,6 +37,12 @@ export function ColonyROICalc({ data }: { data: ApiData | null }) {
   const [upFrom,         setUpFrom]         = useState(1)
   const [upTo,           setUpTo]           = useState(2)
   const [newIslandLevel, setNewIslandLevel] = useState(10)
+
+  useEffect(() => {
+    if (!islandPreset) return
+    setResType(islandPreset.resType)
+    setNewIslandLevel(islandPreset.level || 1)
+  }, [islandPreset])
   const [costsData,      setCostsData]      = useState<any>(null)
   const [costsLoading,   setCostsLoading]   = useState(true)
 
