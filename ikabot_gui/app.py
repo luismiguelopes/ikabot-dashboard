@@ -20,6 +20,7 @@ PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG       = os.path.join(LOGS_DIR, ".force_world_scan")
 FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
+FORCE_QUEUE_FLAG_PATH       = os.path.join(LOGS_DIR, ".force_queue_check")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
@@ -351,6 +352,13 @@ def api_building_queue_clear():
     else:
         data["queues"] = {c: [] for c in data.get("queues", {})}
     _save_building_queue(data)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/building-queue/check", methods=["POST"])
+def api_building_queue_check():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_QUEUE_FLAG_PATH, "w").close()
     return jsonify({"ok": True})
 
 

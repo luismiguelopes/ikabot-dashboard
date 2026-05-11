@@ -174,6 +174,12 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
       .catch(() => setRefreshMsg('error'))
   }
 
+  const handleForceQueue = () => {
+    fetch('/api/building-queue/check', { method: 'POST' }).catch(() => {})
+    setRefreshMsg('ok')
+    setTimeout(() => setRefreshMsg(''), 3000)
+  }
+
   const handleToggleEnabled = () => {
     const newEnabled = !(queue?.enabled ?? true)
     fetch('/api/building-queue/enabled', {
@@ -311,6 +317,13 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
             >
               <i className="fa-solid fa-trash-can text-xs" />
               {t('queue_clear_all')}
+            </button>
+            <button
+              onClick={handleForceQueue}
+              className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className="fa-solid fa-bolt" />
+              {t('queue_force_check')}
             </button>
             <button
               onClick={handleForceRefresh}
