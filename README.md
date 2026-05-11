@@ -28,8 +28,8 @@ Two containers run side by side and share a volume (`ikalogs_volume`) to exchang
 5. Then, one of the following runs inline (mutually exclusive, strictly sequential):
    - If building upgrade costs are due (every 3 days) → writes `building_costs.json`
    - Else if world scan is due (every 7 days) → writes `world_scan.json` with inactive/vacation players and island summaries; previous scan kept as `world_scan_prev.json` to detect newly inactive players
-   - Else if building queue has pending items → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available. Transport dispatch bundles all needed resources into a single fleet per source city (no port loading queue), with freighters used as a supplementary dispatch only when the total resource gap is very large (> 8 transporter ship-loads). If any transport was dispatched, `movements.json` is immediately refreshed so fleet arrival times are visible to the sleep scheduler.
-6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the earliest of: next full cycle, next construction ETA, or next transport fleet arrival — whichever comes first — respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value.
+   - Else if building queue has pending items and the queue is **enabled** → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available. Transport dispatch bundles all needed resources into a single fleet per source city (no port loading queue), with freighters used as a supplementary dispatch only when the total resource gap is very large (> 8 transporter ship-loads). If any transport was dispatched, `movements.json` is immediately refreshed so fleet arrival times are visible to the sleep scheduler.
+6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the earliest of: next full cycle, next construction ETA, or next transport fleet arrival — whichever comes first — respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value. A `.force_empire_update` flag (created by `POST /api/data/refresh`) causes the bot to break out of the sleep immediately and run a full empire cycle, writing per-city progress to `empire_scan_status.json` as it goes.
 
 All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
 
@@ -84,18 +84,24 @@ Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `3
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/data` | GET | Empire-wide status, buildings, and resources — includes `lastUpdatedTs`, `nextCycleAt`, `lastAlive` |
+| `/api/data/refresh` | POST | Creates `.force_empire_update` flag — bot breaks from sleep and runs a full cycle immediately |
+| `/api/data/status` | GET | Live empire scan progress `{status, phase, progress, total, message}` |
 | `/api/movements` | GET | Current fleet and army movements |
+| `/api/movements/refresh` | POST | Creates `.force_movements_update` flag — bot refreshes movements on next wake |
 | `/api/history` | GET | Last 7 days of hourly empire snapshots |
 | `/api/building-costs` | GET | Upgrade costs per building per level per city |
 | `/api/building-costs/refresh` | POST | Schedules an early building costs refresh |
-| `/api/world-scan` | GET | Inactive/vacation players near own cities, with marks merged |
+| `/api/world-scan` | GET | Inactive/vacation players near own cities, with marks and action logs merged |
 | `/api/world-scan/status` | GET | Current scan progress |
 | `/api/world-scan/refresh` | POST | Schedules an early world scan |
-| `/api/world-scan/mark` | POST | Save a player mark (`novo`/`visto`/`alvo`/`ignorar`) |
-| `/api/building-queue` | GET | Current queue and active construction per city |
+| `/api/world-scan/mark` | POST | Save a player mark (`novo`/`visto`/`alvo`/`ignorar`) and note |
+| `/api/world-scan/action` | POST | Append a timestamped action log entry for a player |
+| `/api/building-queue` | GET | Current queue, active construction, transport errors, and `enabled` flag per city |
 | `/api/building-queue/add` | POST | Add a building upgrade to a city queue |
 | `/api/building-queue/remove` | POST | Remove an item from a city queue |
 | `/api/building-queue/reorder` | POST | Reorder items in a city queue |
+| `/api/building-queue/clear` | POST | Clear all items for one city (`{cityName}`) or all cities (no body) |
+| `/api/building-queue/enabled` | POST | Enable or pause the building queue (`{enabled: bool}`) |
 
 ## Dashboard Tabs
 
@@ -103,15 +109,15 @@ The dashboard defaults to **English**. A language toggle button in the sidebar f
 
 | Tab | Description |
 |---|---|
-| Home | Empire-wide summary: gold, ships, population, active constructions, gold runway, wine-at-risk cities |
-| Cities | Per-city resources, production, and wine timers |
-| Buildings | Building levels and active constructions per city — "+" button on each row to add to the upgrade queue |
-| Movements | Active fleet and army movements |
+| Home | Empire-wide summary: gold, ships, population, active constructions, gold runway, wine-at-risk cities, **resource balance matrix** (cities × resources vs. queue reservations — green/yellow/red) |
+| Cities | Per-city resources, production, and wine timers — **force-refresh button** triggers a live bot cycle with per-city progress indicator |
+| Buildings | Building levels and active constructions per city — "+" per row to add to queue — **force-refresh button** with live progress |
+| Movements | Active fleet and army movements with live countdowns — refresh button requests immediate movement fetch from the game |
 | Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
 | History | Charts of empire stats over the last 7 days |
-| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing and estimates collection time. **ROI Sawmill / Quarry**: island vs city building comparator. **Colony ROI**: upgrading current island vs colonising a new one — amortization comparison |
-| Construction | Building upgrade queue manager: city pills (orange border on transport error), building list with "+" per row, queue panel per city with drag-to-reorder, inProgress ETA card, transport error banner, status card with last bot cycle and force-update button |
-| World | **Inactive**: inactive/vacation players near own cities with new-player detection, scores, and per-player marks. **Islands**: nearby islands ranked by free slots, resource and wonder levels for colonisation planning |
+| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing and estimates collection time. **ROI Sawmill / Quarry**: island vs city building comparator. **Colony ROI**: upgrading current island vs colonising a new one — pre-filled from the Islands tab via "Use in Calc." button |
+| Construction | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear per city or globally, city pills, building list, queue panel with drag-to-reorder, inProgress ETA, transport error banner, queue budget card. **Template** sub-tab: set target levels per building type and apply to all cities at once |
+| World | **Inactive**: inactive/vacation players with new-player detection, sortable scores, and per-player marks — expandable rows show an editable note field and a timestamped action log. **Islands**: nearby islands ranked by free slots, resource and wonder levels, "Use in Calc." button |
 
 ## Project Structure
 
