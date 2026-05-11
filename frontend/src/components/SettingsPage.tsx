@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useT, useLang } from '../i18n'
+import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
 import { ALERT_DEFAULTS } from '../constants'
 import { PageHeader } from './ui/PageHeader'
 import { Card } from './ui/Card'
@@ -138,17 +139,80 @@ function AlertasTab({ thresholds, onSaveThresholds }: {
   )
 }
 
-function NotificacoesTab() {
+function NotificacoesTab({ notifEnabled, onToggleNotif }: {
+  notifEnabled: boolean
+  onToggleNotif: (v: boolean) => void
+}) {
   const t = useT()
+  const [permission, setPermission] = useState<NotificationPermission>(
+    'Notification' in window ? Notification.permission : 'denied'
+  )
+
+  const handleEnable = async () => {
+    if (!('Notification' in window)) return
+    const result = await Notification.requestPermission()
+    setPermission(result)
+    if (result === 'granted') onToggleNotif(true)
+  }
+
   const notifItems = [
+    'settings_notif_wine_critical',
     'settings_notif_offline',
     'settings_notif_construction',
     'settings_notif_transport_error',
-    'settings_notif_wine_critical',
   ] as const
 
   return (
     <div className="grid gap-4 max-w-lg">
+      {/* Browser notifications */}
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
+            <i className="fa-solid fa-bell text-indigo-500" /> {t('notif_browser_title')}
+          </p>
+
+          {!('Notification' in window) ? (
+            <p className="text-sm text-slate-400">Não suportado neste browser.</p>
+          ) : permission === 'denied' ? (
+            <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+              <i className="fa-solid fa-ban shrink-0" />
+              {t('notif_browser_denied')}
+            </div>
+          ) : permission === 'default' ? (
+            <button
+              onClick={handleEnable}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className="fa-solid fa-bell" /> {t('notif_allow_btn')}
+            </button>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-emerald-600 font-medium flex items-center gap-1.5">
+                  <i className="fa-solid fa-circle-check" /> {t('notif_browser_granted')}
+                </span>
+                <button
+                  onClick={() => onToggleNotif(!notifEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${notifEnabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${notifEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              <div className="space-y-2 pl-1">
+                {notifItems.map(key => (
+                  <div key={key} className="flex items-center gap-2 text-sm text-slate-500">
+                    <i className="fa-solid fa-check text-xs text-indigo-400 w-3" />
+                    {t(key)}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400">{t('notif_browser_note')}</p>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Telegram skeleton */}
       <Card>
         <div className="px-5 py-4">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
@@ -157,57 +221,40 @@ function NotificacoesTab() {
           <div className="space-y-3 opacity-50 pointer-events-none">
             <div>
               <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_token')}</label>
-              <input
-                type="text"
-                disabled
-                placeholder="123456:ABC-DEF…"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-              />
+              <input type="text" disabled placeholder="123456:ABC-DEF…"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
             </div>
             <div>
               <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_chatid')}</label>
-              <input
-                type="text"
-                disabled
-                placeholder="-100123456789"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-              />
+              <input type="text" disabled placeholder="-100123456789"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
             </div>
           </div>
-        </div>
-      </Card>
-
-      <Card>
-        <div className="px-5 py-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Alertas</p>
-          <div className="space-y-3 opacity-50 pointer-events-none">
-            {notifItems.map(key => (
-              <label key={key} className="flex items-center gap-3">
-                <input type="checkbox" disabled className="rounded accent-indigo-600 w-4 h-4" />
-                <span className="text-sm text-slate-600">{t(key)}</span>
-              </label>
-            ))}
+          <div className="mt-3 flex items-center gap-2 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            <i className="fa-solid fa-clock shrink-0" /> {t('settings_telegram_note')}
           </div>
         </div>
       </Card>
-
-      <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-        <i className="fa-solid fa-clock flex-shrink-0" />
-        {t('settings_telegram_note')}
-      </div>
     </div>
   )
 }
 
-export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, defaultTab, onSaveDefaultTab }: {
+export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, defaultTab, onSaveDefaultTab, notifEnabled, onToggleNotif }: {
   thresholds: AlertThresholds
   onSaveThresholds: (t: AlertThresholds) => void
   toggleLang: () => void
   defaultTab: string
   onSaveDefaultTab: (tab: string) => void
+  notifEnabled: boolean
+  onToggleNotif: (v: boolean) => void
 }) {
   const t = useT()
   const [tab, setTab] = useState('geral')
+
+  const handleToggleNotif = (v: boolean) => {
+    onToggleNotif(v)
+    saveBrowserNotifEnabled(v)
+  }
 
   const tabs = [
     { key: 'geral',        label: t('settings_tab_general'),       icon: 'fa-sliders'    },
@@ -237,7 +284,7 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
 
       {tab === 'geral'        && <GeralTab        toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={onSaveDefaultTab} />}
       {tab === 'alertas'      && <AlertasTab      thresholds={thresholds} onSaveThresholds={onSaveThresholds} />}
-      {tab === 'notificacoes' && <NotificacoesTab />}
+      {tab === 'notificacoes' && <NotificacoesTab notifEnabled={notifEnabled} onToggleNotif={handleToggleNotif} />}
     </div>
   )
 }

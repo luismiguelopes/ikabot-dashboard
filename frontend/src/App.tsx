@@ -4,6 +4,7 @@ import { loadThresholds } from './utils'
 import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
 import type { ApiData, AlertThresholds, CityResources } from './types'
 import { Sidebar } from './components/ui/Sidebar'
+import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
 import { CitiesPage } from './components/CitiesPage'
 import { BuildingsPage } from './components/BuildingsPage'
@@ -76,6 +77,9 @@ export default function App() {
     try { localStorage.setItem('ikabot_alert_thresholds', JSON.stringify(t)) } catch {}
   }, [])
 
+  const [notifEnabled, setNotifEnabled] = useState(loadBrowserNotifEnabled)
+  useNotifications(data, thresholds, notifEnabled)
+
   const fetchData = useCallback(() => {
     fetch('/api/data')
       .then(r => r.json())
@@ -144,7 +148,7 @@ export default function App() {
           movCount={movCount}
         />
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
-          {page === 'home'         && <HomePage      data={data} />}
+          {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
           {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
           {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
           {page === 'movements'    && <MovementsPage />}
@@ -153,7 +157,7 @@ export default function App() {
           {page === 'calc'         && <CalculadorasPage data={data} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage />}
-          {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} />}
+          {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
         </main>
       </div>
     </LangContext.Provider>

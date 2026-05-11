@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useT, useLang } from '../i18n'
-import { fmtTs } from '../utils'
+import { fmtTs, fmtDuration } from '../utils'
+import { useLiveClock } from '../hooks/useLiveClock'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import type { ApiData, BuildingQueue, BuildingCostsData } from '../types'
@@ -14,6 +15,7 @@ interface BuildingInCity {
 export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   const t    = useT()
   const lang = useLang()
+  const now  = useLiveClock()
   const [queue, setQueue]               = useState<BuildingQueue | null>(null)
   const [selCity, setSelCity]           = useState('')
   const [targetLevels, setTargetLevels] = useState<Record<string, number>>({})
@@ -278,8 +280,10 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
                           {cityInProgress.fromLevel} → {cityInProgress.toLevel}
                         </span>
                       </div>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-200 text-blue-700 font-medium">
-                        {t('queue_status_building')}
+                      <span className="text-xs font-mono font-semibold text-blue-700 shrink-0">
+                        {cityInProgress.eta
+                          ? (cityInProgress.eta <= now ? t('home_constr_done') : fmtDuration(Math.max(0, cityInProgress.eta - now)))
+                          : t('queue_status_building')}
                       </span>
                     </div>
                   )}
