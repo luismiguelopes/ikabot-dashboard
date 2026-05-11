@@ -19,9 +19,11 @@ WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
 PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG       = os.path.join(LOGS_DIR, ".force_world_scan")
 FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
+FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
+EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 
 
 def get_last_modified_date(filepath):
@@ -170,6 +172,21 @@ def api_movements_refresh():
     return jsonify({"ok": True})
 
 
+@app.route("/api/data/refresh", methods=["POST"])
+def api_data_refresh():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_EMPIRE_FLAG_PATH, "w").close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/data/status")
+def api_data_status():
+    if not os.path.exists(EMPIRE_SCAN_STATUS_PATH):
+        return jsonify({"status": "idle", "phase": "", "progress": 0, "total": 0, "message": ""})
+    with open(EMPIRE_SCAN_STATUS_PATH) as f:
+        return jsonify(json.load(f))
+
+
 @app.route("/api/world-scan")
 def api_world_scan():
     if not os.path.exists(WORLD_SCAN_JSON_PATH):
@@ -189,8 +206,10 @@ def api_world_scan():
     for player in scan.get("players", []):
         pid = player["playerId"]
         mk = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
-        player["mark"] = marks.get(mk, {}).get("status", "novo")
-        player["markNote"] = marks.get(mk, {}).get("note", "")
+        entry = marks.get(mk, {})
+        player["mark"] = entry.get("status", "novo")
+        player["markNote"] = entry.get("note", "")
+        player["markActions"] = entry.get("actions", [])
         player["isNew"] = pid not in prev_inactive_ids
     return jsonify(scan)
 
@@ -225,7 +244,36 @@ def api_world_scan_mark():
     if os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
-    marks[mark_key] = {"status": status, "note": note, "updatedAt": int(time.time())}
+    existing = marks.get(mark_key, {})
+    marks[mark_key] = {
+        "status": status,
+        "note": note,
+        "updatedAt": int(time.time()),
+        "actions": existing.get("actions", []),
+    }
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(PLAYER_MARKS_JSON_PATH, "w") as f:
+        json.dump(marks, f, indent=2)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/world-scan/action", methods=["POST"])
+def api_world_scan_action():
+    body = request.get_json(force=True)
+    player_id = str(body.get("playerId", ""))
+    island_x  = str(body.get("islandX", ""))
+    island_y  = str(body.get("islandY", ""))
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    mark_key = f"{player_id}_{island_x}_{island_y}"
+    marks = {}
+    if os.path.exists(PLAYER_MARKS_JSON_PATH):
+        with open(PLAYER_MARKS_JSON_PATH) as f:
+            marks = json.load(f)
+    entry = marks.setdefault(mark_key, {"status": "novo", "note": "", "updatedAt": int(time.time()), "actions": []})
+    entry.setdefault("actions", []).append({"ts": int(time.time()), "text": text})
+    entry["updatedAt"] = int(time.time())
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(PLAYER_MARKS_JSON_PATH, "w") as f:
         json.dump(marks, f, indent=2)
@@ -291,6 +339,29 @@ def api_building_queue_remove():
     data["queues"][city_name] = city_queue
     _save_building_queue(data)
     return jsonify({"ok": True, "queue": city_queue})
+
+
+@app.route("/api/building-queue/clear", methods=["POST"])
+def api_building_queue_clear():
+    body = request.get_json(force=True) or {}
+    city_name = str(body.get("cityName", "")).strip()
+    data = _load_building_queue()
+    if city_name:
+        data.setdefault("queues", {})[city_name] = []
+    else:
+        data["queues"] = {c: [] for c in data.get("queues", {})}
+    _save_building_queue(data)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/building-queue/enabled", methods=["POST"])
+def api_building_queue_enabled():
+    body = request.get_json(force=True) or {}
+    enabled = bool(body.get("enabled", True))
+    data = _load_building_queue()
+    data["enabled"] = enabled
+    _save_building_queue(data)
+    return jsonify({"ok": True, "enabled": enabled})
 
 
 @app.route("/api/building-queue/reorder", methods=["POST"])

@@ -174,6 +174,33 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
       .catch(() => setRefreshMsg('error'))
   }
 
+  const handleToggleEnabled = () => {
+    const newEnabled = !(queue?.enabled ?? true)
+    fetch('/api/building-queue/enabled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: newEnabled }),
+    }).then(fetchQueue)
+  }
+
+  const handleClearCity = (city: string) => {
+    if (!confirm(t('queue_clear_confirm', { city }))) return
+    fetch('/api/building-queue/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cityName: city }),
+    }).then(fetchQueue)
+  }
+
+  const handleClearAll = () => {
+    if (!confirm(t('queue_clear_all_confirm'))) return
+    fetch('/api/building-queue/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(fetchQueue)
+  }
+
   const empireData = data?.empireData || {}
   const cityNames  = Object.keys(empireData).sort()
 
@@ -261,13 +288,33 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
               }
             </p>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {refreshMsg === 'sending' && <span className="text-xs text-slate-400">{t('sending_request')}</span>}
             {refreshMsg === 'ok'      && <span className="text-xs text-emerald-600 font-medium">{t('scheduled_ok')}</span>}
             {refreshMsg === 'error'   && <span className="text-xs text-red-500">{t('schedule_error')}</span>}
             <button
+              onClick={handleToggleEnabled}
+              title={(queue?.enabled ?? true) ? t('queue_toggle_disable') : t('queue_toggle_enable')}
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                (queue?.enabled ?? true)
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100'
+              }`}
+            >
+              <i className={`fa-solid ${(queue?.enabled ?? true) ? 'fa-play' : 'fa-pause'} text-xs`} />
+              {(queue?.enabled ?? true) ? t('queue_enabled') : t('queue_disabled')}
+            </button>
+            <button
+              onClick={handleClearAll}
+              title={t('queue_clear_all')}
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className="fa-solid fa-trash-can text-xs" />
+              {t('queue_clear_all')}
+            </button>
+            <button
               onClick={handleForceRefresh}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <i className="fa-solid fa-rotate" />
               {t('force_update')}
@@ -308,25 +355,39 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
           const count    = totalQueued(city)
           const hasError = !!transportErrors[city]
           return (
-            <button
-              key={city}
-              onClick={() => setSelCity(city)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-                selCity === city
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow'
-                  : hasError
-                    ? 'bg-white text-slate-600 border-orange-300 hover:bg-orange-50'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {hasError && <i className="fa-solid fa-triangle-exclamation text-orange-400 text-xs" />}
-              {city}
+            <div key={city} className="flex items-center gap-0.5">
+              <button
+                onClick={() => setSelCity(city)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-y border-l transition-colors ${count > 0 ? 'rounded-l-lg' : 'rounded-lg border-r'} ${
+                  selCity === city
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow'
+                    : hasError
+                      ? 'bg-white text-slate-600 border-orange-300 hover:bg-orange-50'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {hasError && <i className="fa-solid fa-triangle-exclamation text-orange-400 text-xs" />}
+                {city}
+                {count > 0 && (
+                  <span className={`text-xs rounded-full px-1.5 py-0.5 font-semibold ${
+                    selCity === city ? 'bg-white text-indigo-600' : 'bg-indigo-100 text-indigo-700'
+                  }`}>{count}</span>
+                )}
+              </button>
               {count > 0 && (
-                <span className={`text-xs rounded-full px-1.5 py-0.5 font-semibold ${
-                  selCity === city ? 'bg-white text-indigo-600' : 'bg-indigo-100 text-indigo-700'
-                }`}>{count}</span>
+                <button
+                  onClick={() => handleClearCity(city)}
+                  title={t('queue_clear_city')}
+                  className={`px-1.5 py-1.5 rounded-r-lg border transition-colors ${
+                    selCity === city
+                      ? 'bg-indigo-700 hover:bg-red-600 text-white border-indigo-600'
+                      : 'bg-white text-red-400 border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200'
+                  }`}
+                >
+                  <i className="fa-solid fa-xmark text-xs" />
+                </button>
               )}
-            </button>
+            </div>
           )
         })}
       </div>

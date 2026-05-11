@@ -6,10 +6,12 @@ import { PageHeader } from './ui/PageHeader'
 import { Td } from './ui/TableCells'
 import { CitySelect } from './ui/CitySelect'
 import { RefreshButton } from './ui/RefreshButton'
+import { useEmpireRefresh } from '../hooks/useEmpireRefresh'
 import type { ApiData, BuildingQueue } from '../types'
 
 export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: () => void }) {
   const t = useT()
+  const { trigger: forceUpdate, state: refreshState, status: refreshStatus } = useEmpireRefresh(onRefresh)
   const { empireData } = data
   const cities = Object.keys(empireData)
   const [filter, setFilter] = useState('all')
@@ -64,8 +66,23 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
   return (
     <div>
       <PageHeader icon="fa-landmark" title={t('buildings_title')}>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {onRefresh && <RefreshButton onRefresh={onRefresh} />}
+          <button
+            onClick={forceUpdate}
+            disabled={refreshState === 'running'}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg transition-colors ${
+              refreshState === 'running' ? 'bg-indigo-100 text-indigo-600 border border-indigo-300 cursor-wait' :
+              refreshState === 'done'    ? 'bg-emerald-50 text-emerald-700 border border-emerald-300' :
+              'bg-indigo-600 hover:bg-indigo-700 text-white'
+            }`}
+          >
+            <i className={`fa-solid ${refreshState === 'running' ? 'fa-spinner fa-spin' : refreshState === 'done' ? 'fa-check' : 'fa-arrows-rotate'}`} />
+            {refreshState === 'running'
+              ? t('empire_refresh_running', { progress: refreshStatus?.progress ?? 0, total: refreshStatus?.total ?? 0 })
+              : refreshState === 'done' ? t('empire_refresh_done')
+              : t('empire_refresh_btn')}
+          </button>
           <CitySelect cities={cities} value={filter} onChange={setFilter} />
         </div>
       </PageHeader>

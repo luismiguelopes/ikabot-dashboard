@@ -14,7 +14,7 @@ if _here not in sys.path:
 
 from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, UPDATE_INTERVAL,
-    ACTIVE_HOURS_START, ACTIVE_HOURS_END, lm,
+    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, lm,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -41,6 +41,8 @@ def _save_queue(data):
 
 def has_building_queue():
     data = _load_queue()
+    if not data.get("enabled", True):
+        return False
     return any(len(items) > 0 for items in data.get("queues", {}).values())
 
 
@@ -139,7 +141,11 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
             json.dump({"nextCycleAt": wake_at}, f)
     except Exception:
         pass
-    time.sleep(sleep_secs)
+    end_time = time.time() + sleep_secs
+    while time.time() < end_time:
+        if os.path.exists(FORCE_EMPIRE_FLAG):
+            break
+        time.sleep(min(60, end_time - time.time()))
 
 
 # ── Cost helpers ──────────────────────────────────────────────────────────────
@@ -516,6 +522,8 @@ def process_building_queue(session, ids, cities):
     """Process one queue cycle. Returns True if any transport was dispatched."""
     print(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
     data = _load_queue()
+    if not data.get("enabled", True):
+        return False
     queues = data.get("queues", {})
     in_progress = data.get("inProgress", {})
     transport_errors = data.setdefault("transportErrors", {})

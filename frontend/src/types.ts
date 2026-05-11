@@ -92,6 +92,7 @@ export interface BuildingQueue {
   queues: Record<string, QueueItem[]>
   inProgress: Record<string, InProgressItem>
   transportErrors?: Record<string, TransportError>
+  enabled?: boolean
 }
 
 export interface BuildingCostEntry {
@@ -118,6 +119,7 @@ export interface WorldScanPlayer {
   scores?: { building?: string; research?: string; army?: string; trader?: string; rank?: string }
   mark: string
   markNote?: string
+  markActions?: Array<{ ts: number; text: string }>
   isNew: boolean
 }
 

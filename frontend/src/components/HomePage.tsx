@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration } from '../utils'
-import { MATERIALS } from '../constants'
+import { MATERIALS, COST_KEYS } from '../constants'
 import { useLiveClock } from '../hooks/useLiveClock'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { Th, Td } from './ui/TableCells'
 import { StatBadge } from './ui/StatBadge'
-import type { ApiData, AlertThresholds, BuildingQueue } from '../types'
+import type { ApiData, AlertThresholds, BuildingQueue, BuildingCostsData } from '../types'
 
 export function HomePage({ data, thresholds }: { data: ApiData; thresholds: AlertThresholds }) {
   const t    = useT()
@@ -19,8 +19,12 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
   const totalProd  = res.production.reduce((a, b) => a + b, 0)
 
   const [queue, setQueue] = useState<BuildingQueue | null>(null)
+  const [costsData, setCostsData] = useState<BuildingCostsData | null>(null)
   useEffect(() => {
     fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
+    fetch('/api/building-costs').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && !(d as any).error) setCostsData(d)
+    }).catch(() => {})
   }, [data])
 
   const goldProd   = s.gold.production
@@ -205,6 +209,110 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
         </Card>
 
       </div>
+
+      {/* Resource Balance Matrix */}
+      <ResourceMatrix data={data} queue={queue} costsData={costsData} />
+
     </div>
+  )
+}
+
+function ResourceMatrix({ data, queue, costsData }: {
+  data: ApiData
+  queue: BuildingQueue | null
+  costsData: BuildingCostsData | null
+}) {
+  const t    = useT()
+  const lang = useLang() as 'pt' | 'en'
+
+  const cityNames = Object.keys(data.resourcesData).sort()
+
+  const reserved = useMemo((): Record<string, number[]> => {
+    if (!costsData || !queue) return {}
+    const out: Record<string, number[]> = {}
+    for (const city of cityNames) {
+      const res = [0, 0, 0, 0, 0]
+      const items = queue.queues?.[city] || []
+      const cityBldgs = data.empireData[city] || {}
+      const cityCosts = costsData.cities?.[city] || {}
+      for (const item of items) {
+        const curLv = parseInt(String(cityBldgs[item.building] || '0')) || 0
+        const bCosts = cityCosts[item.building]
+        if (!bCosts) continue
+        for (let lv = curLv + 1; lv <= item.targetLevel; lv++) {
+          const c = bCosts.costs?.[String(lv)]
+          if (!c) continue
+          COST_KEYS.forEach((k, i) => { res[i] += c[k] || 0 })
+        }
+      }
+      out[city] = res
+    }
+    return out
+  }, [costsData, queue, cityNames, data.empireData])
+
+  const hasAnyReserved = Object.values(reserved).some(r => r.some(v => v > 0))
+  if (!hasAnyReserved) return null
+
+  const totalAvail  = COST_KEYS.map((_, i) => cityNames.reduce((s, c) => s + (data.resourcesData[c]?.[MATERIALS[i].en as keyof typeof data.resourcesData[string]] as number || 0), 0))
+  const totalReserved = COST_KEYS.map((_, i) => cityNames.reduce((s, c) => s + (reserved[c]?.[i] || 0), 0))
+
+  return (
+    <Card className="mt-4">
+      <CardHeader icon="fa-table-cells" title={t('matrix_title')} />
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-slate-800 text-white uppercase tracking-wide">
+              <th className="px-4 py-2.5 text-left font-semibold whitespace-nowrap">{t('col_city')}</th>
+              {MATERIALS.map(m => (
+                <th key={m.en} className="px-3 py-2.5 text-center font-semibold whitespace-nowrap">
+                  <i className={`fa-solid ${m.icon} ${m.color} mr-1`} /> {m[lang]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {cityNames.map((city, ri) => {
+              const cityRes = data.resourcesData[city]
+              const res = reserved[city] || [0, 0, 0, 0, 0]
+              return (
+                <tr key={city} className={`border-b border-slate-100 hover:bg-slate-50 ${ri % 2 ? 'bg-slate-50/40' : ''}`}>
+                  <td className="px-4 py-2 font-semibold text-slate-700 whitespace-nowrap">{city}</td>
+                  {MATERIALS.map((m, i) => {
+                    const avail = (cityRes?.[m.en as keyof typeof cityRes] as number) || 0
+                    const need  = res[i] || 0
+                    if (need === 0) return <td key={m.en} className="px-3 py-2 text-center text-slate-300">—</td>
+                    const balance = avail - need
+                    const pct = need > 0 ? Math.min(100, Math.round((avail / need) * 100)) : 100
+                    const cls = balance >= 0
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : pct >= 50 ? 'bg-yellow-50 text-yellow-700' : 'bg-red-50 text-red-700'
+                    return (
+                      <td key={m.en} className={`px-3 py-2 text-center font-mono ${cls}`}>
+                        <div>{balance >= 0 ? `+${fmt(balance)}` : fmt(balance)}</div>
+                        <div className="text-[10px] opacity-60">{pct}%</div>
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+            <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold">
+              <td className="px-4 py-2 text-slate-600 whitespace-nowrap">{t('matrix_total')}</td>
+              {MATERIALS.map((m, i) => {
+                const balance = totalAvail[i] - totalReserved[i]
+                if (totalReserved[i] === 0) return <td key={m.en} className="px-3 py-2 text-center text-slate-300">—</td>
+                const cls = balance >= 0 ? 'text-emerald-700' : 'text-red-700'
+                return (
+                  <td key={m.en} className={`px-3 py-2 text-center font-mono ${cls}`}>
+                    {balance >= 0 ? `+${fmt(balance)}` : fmt(balance)}
+                  </td>
+                )
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }

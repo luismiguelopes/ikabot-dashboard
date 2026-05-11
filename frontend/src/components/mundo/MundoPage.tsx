@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useT, useLang, getLocale } from '../../i18n'
 import { fmtScore, exportCsv } from '../../utils'
 import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
@@ -95,9 +95,18 @@ interface InactivosTabProps {
   marks: Record<string, string>
   setMarks: React.Dispatch<React.SetStateAction<Record<string, string>>>
   onForceRefresh: () => void
+  onRefreshScan: () => void
 }
 
-function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh }: InactivosTabProps) {
+function parseMarkKey(markKey: string): { playerId: string; islandX: string; islandY: string } {
+  const parts   = markKey.split('_')
+  const islandY = parts.pop()!
+  const islandX = parts.pop()!
+  const playerId = parts.join('_')
+  return { playerId, islandX, islandY }
+}
+
+function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan }: InactivosTabProps) {
   const t    = useT()
   const lang = useLang()
   const [filterDist, setFilterDist] = useState(20)
@@ -106,19 +115,51 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
   const [search,     setSearch]     = useState('')
   const [sortKey,    setSortKey]    = useState<PlayerSortKey>('distance')
   const [sortAsc,    setSortAsc]    = useState(true)
+  const [expandedKey,  setExpandedKey]  = useState<string | null>(null)
+  const [noteInputs,   setNoteInputs]   = useState<Record<string, string>>({})
+  const [actionInputs, setActionInputs] = useState<Record<string, string>>({})
 
   const handleMark = useCallback((markKey: string, status: string) => {
     setMarks(prev => ({ ...prev, [markKey]: status }))
-    const parts    = markKey.split('_')
-    const islandY  = parts.pop()
-    const islandX  = parts.pop()
-    const playerId = parts.join('_')
+    const { playerId, islandX, islandY } = parseMarkKey(markKey)
     fetch('/api/world-scan/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playerId, islandX, islandY, status }),
     }).catch(() => {})
   }, [setMarks])
+
+  const handleToggleExpand = useCallback((markKey: string, currentNote: string) => {
+    setExpandedKey(prev => {
+      if (prev === markKey) return null
+      setNoteInputs(n => ({ ...n, [markKey]: n[markKey] ?? currentNote ?? '' }))
+      return markKey
+    })
+  }, [])
+
+  const handleSaveNote = useCallback((markKey: string, currentStatus: string) => {
+    const { playerId, islandX, islandY } = parseMarkKey(markKey)
+    const note = noteInputs[markKey] ?? ''
+    fetch('/api/world-scan/mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId, islandX, islandY, status: currentStatus, note }),
+    }).then(() => onRefreshScan()).catch(() => {})
+  }, [noteInputs, onRefreshScan])
+
+  const handleAddAction = useCallback((markKey: string) => {
+    const text = (actionInputs[markKey] || '').trim()
+    if (!text) return
+    const { playerId, islandX, islandY } = parseMarkKey(markKey)
+    fetch('/api/world-scan/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId, islandX, islandY, text }),
+    }).then(() => {
+      setActionInputs(prev => ({ ...prev, [markKey]: '' }))
+      onRefreshScan()
+    }).catch(() => {})
+  }, [actionInputs, onRefreshScan])
 
   const players = useMemo((): PlayerWithMark[] => {
     if (!scanData?.players) return []
@@ -269,18 +310,31 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                 </tr>
               </thead>
               <tbody>
-                {players.map((p, idx) => (
+                {players.map((p, idx) => {
+                  const isExpanded = expandedKey === p.markKey
+                  const actions = p.markActions || []
+                  return (
+                  <React.Fragment key={p.markKey}>
                   <tr
-                    key={p.markKey}
-                    className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${p.mark === 'ignorar' ? 'opacity-40' : ''} ${idx % 2 ? 'bg-slate-50/40' : ''}`}
+                    className={`border-b ${isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100'} hover:bg-slate-50 transition-colors ${p.mark === 'ignorar' ? 'opacity-40' : ''} ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}
                   >
                     <Td className="font-medium text-slate-800">
                       <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleToggleExpand(p.markKey, p.markNote || '')}
+                          className={`w-5 h-5 rounded flex items-center justify-center text-[10px] transition-colors ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-500'}`}
+                          title={t('action_log_title')}
+                        >
+                          <i className={`fa-solid ${isExpanded ? 'fa-chevron-up' : 'fa-chevron-down'}`} />
+                        </button>
                         {p.playerName}
                         {p.isNew && (
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
                             <i className="fa-solid fa-star text-[8px]" /> {t('new_badge')}
                           </span>
+                        )}
+                        {actions.length > 0 && (
+                          <span className="text-[10px] font-semibold text-indigo-500 bg-indigo-50 px-1.5 rounded-full border border-indigo-200">{actions.length}</span>
                         )}
                       </div>
                     </Td>
@@ -309,7 +363,64 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                       <MarkSelect markKey={p.markKey} current={p.mark} onChange={handleMark} />
                     </Td>
                   </tr>
-                ))}
+                  {isExpanded && (
+                    <tr className="bg-indigo-50/40 border-b border-indigo-200">
+                      <td colSpan={7} className="px-5 py-3">
+                        <div className="flex flex-col gap-3">
+                          <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide">{t('action_log_title')}</p>
+                          <div className="flex gap-2 items-start">
+                            <textarea
+                              value={noteInputs[p.markKey] ?? p.markNote ?? ''}
+                              onChange={e => setNoteInputs(prev => ({ ...prev, [p.markKey]: e.target.value }))}
+                              placeholder={t('action_log_note_lbl')}
+                              rows={2}
+                              className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none bg-white"
+                            />
+                            <button
+                              onClick={() => handleSaveNote(p.markKey, p.mark)}
+                              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
+                            >
+                              {t('action_log_save')}
+                            </button>
+                          </div>
+                          <div>
+                            {actions.length === 0 ? (
+                              <p className="text-xs text-slate-400 italic">{t('action_log_empty')}</p>
+                            ) : (
+                              <ul className="space-y-1 mb-2">
+                                {actions.map((a, ai) => (
+                                  <li key={ai} className="flex gap-2 text-xs">
+                                    <span className="text-slate-400 shrink-0 font-mono">{new Date(a.ts * 1000).toLocaleDateString()}</span>
+                                    <span className="text-slate-700">{a.text}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            <div className="flex gap-2 mt-2">
+                              <input
+                                type="text"
+                                value={actionInputs[p.markKey] || ''}
+                                onChange={e => setActionInputs(prev => ({ ...prev, [p.markKey]: e.target.value }))}
+                                onKeyDown={e => { if (e.key === 'Enter') handleAddAction(p.markKey) }}
+                                placeholder={t('action_log_placeholder')}
+                                className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+                              />
+                              <button
+                                onClick={() => handleAddAction(p.markKey)}
+                                disabled={!(actionInputs[p.markKey] || '').trim()}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
+                              >
+                                {t('action_log_add')}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -666,6 +777,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           marks={marks}
           setMarks={setMarks}
           onForceRefresh={handleForceRefresh}
+          onRefreshScan={fetchScan}
         />
       )}
       {tab === 'ilhas' && (

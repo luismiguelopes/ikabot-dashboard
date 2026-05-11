@@ -12,7 +12,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, lm
+from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, lm
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_update_world_scan, collect_world_scan
@@ -53,6 +53,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 pass
 
             now = time.time()
+            if os.path.exists(FORCE_EMPIRE_FLAG):
+                try:
+                    os.remove(FORCE_EMPIRE_FLAG)
+                except Exception:
+                    pass
+                ids = None
             do_full = ids is None or (now >= last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter)
 
             # ── Queue-only wake-up ───────────────────────────────────────────

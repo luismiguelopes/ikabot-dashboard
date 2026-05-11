@@ -8,6 +8,7 @@ import { Th, Td } from './ui/TableCells'
 import { CitySelect } from './ui/CitySelect'
 import { StorageBar } from './StorageBar'
 import { RefreshButton } from './ui/RefreshButton'
+import { useEmpireRefresh } from '../hooks/useEmpireRefresh'
 import type { ApiData } from '../types'
 
 export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () => void }) {
@@ -17,6 +18,7 @@ export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () 
   const cities = Object.keys(resourcesData)
   const [filter, setFilter] = useState('all')
   const visible = filter === 'all' ? cities : cities.filter(c => c === filter)
+  const { trigger: forceUpdate, state: refreshState, status: refreshStatus } = useEmpireRefresh(onRefresh)
 
   const handleExport = () => {
     const header = [t('col_city'), ...MATERIALS.map(m => m[lang]), t('col_warehouse'), t('csv_wine_prod'), t('csv_wine_cons'), t('csv_wine_ends')]
@@ -38,8 +40,23 @@ export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () 
   return (
     <div>
       <PageHeader icon="fa-city" title={t('cities_title')}>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {onRefresh && <RefreshButton onRefresh={onRefresh} />}
+          <button
+            onClick={forceUpdate}
+            disabled={refreshState === 'running'}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg transition-colors ${
+              refreshState === 'running' ? 'bg-indigo-100 text-indigo-600 border border-indigo-300 cursor-wait' :
+              refreshState === 'done'    ? 'bg-emerald-50 text-emerald-700 border border-emerald-300' :
+              'bg-indigo-600 hover:bg-indigo-700 text-white'
+            }`}
+          >
+            <i className={`fa-solid ${refreshState === 'running' ? 'fa-spinner fa-spin' : refreshState === 'done' ? 'fa-check' : 'fa-arrows-rotate'}`} />
+            {refreshState === 'running'
+              ? t('empire_refresh_running', { progress: refreshStatus?.progress ?? 0, total: refreshStatus?.total ?? 0 })
+              : refreshState === 'done' ? t('empire_refresh_done')
+              : t('empire_refresh_btn')}
+          </button>
           <CitySelect cities={cities} value={filter} onChange={setFilter} />
           <button
             onClick={handleExport}

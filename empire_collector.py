@@ -14,7 +14,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, lm
+from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -95,10 +95,21 @@ def _collect_movements(session, city_id):
         return []
 
 
+def _write_scan_status(status, phase, progress, total, message=""):
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(EMPIRE_SCAN_STATUS_PATH, "w") as f:
+            json.dump({"status": status, "phase": phase, "progress": progress, "total": total, "message": message}, f)
+    except Exception:
+        pass
+
+
 def collect_city_data(session, ids, cities):
     """Per-city data collection loop. Returns (status_summary, formatted_empire, resources_data)
     and writes own_cities.json."""
     from ikabot.config import materials_names
+
+    _write_scan_status("running", "cities", 0, len(ids), "")
 
     total_resources = [0] * len(materials_names)
     total_production = [0] * len(materials_names)
@@ -164,6 +175,7 @@ def collect_city_data(session, ids, cities):
         island_y = int(city_data.get("islandYCoord", city_data.get("y", 0)) or 0)
         own_cities_list.append({"name": city_name, "x": island_x, "y": island_y})
         print(lm("city_done", city=city_name))
+        _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 
         storage_capacity = int(city_data.get("storageCapacity", 0))
         wine_consumption_hr = int(city_data.get("wineConsumptionPerHour", 0))
@@ -262,6 +274,8 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
     with open(history_path, "a") as f:
         f.write(json.dumps(history_entry) + "\n")
     _trim_history(history_path)
+
+    _write_scan_status("done", "cities", 0, 0, "")
 
 
 def refresh_movements(session, first_city_id):
