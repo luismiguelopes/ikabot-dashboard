@@ -10,6 +10,7 @@ LAST_ALIVE_JSON_PATH      = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH   = os.path.join(LOGS_DIR, "empire_scan_status.json")
 FORCE_EMPIRE_FLAG         = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG          = os.path.join(LOGS_DIR, ".force_queue_check")
+FORCE_MOVEMENTS_FLAG      = os.path.join(LOGS_DIR, ".force_movements_update")
 
 
 def _parse_duration(value, default):

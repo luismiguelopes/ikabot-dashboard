@@ -147,8 +147,8 @@ def collect_city_data(session, ids, cities):
         total_production[typeGood] += good * 3600
         total_wine_consumption += json_data["wineSpendings"]
 
-        housing_space = int(json_data["currentResources"]["population"])
-        citizens = int(json_data["currentResources"]["citizens"])
+        housing_space = int(float(json_data["currentResources"]["population"]))
+        citizens = int(float(json_data["currentResources"]["citizens"]))
         total_housing_space += housing_space
         total_citizens += citizens
 

@@ -14,7 +14,7 @@ if _here not in sys.path:
 
 from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, UPDATE_INTERVAL,
-    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, lm,
+    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -126,6 +126,9 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
             print(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
     else:
         sleep_secs = max(60, next_full_at - time.time())
+        # Se há itens em queue mas sem ETA conhecido, acorda em 30 min para re-tentar
+        if has_building_queue() and _in_active_hours():
+            sleep_secs = min(sleep_secs, 1800)
 
     if not _in_active_hours():
         secs_to_open = _secs_until_active()
@@ -150,6 +153,8 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
                 os.remove(FORCE_QUEUE_FLAG)
             except Exception:
                 pass
+            break
+        if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
         time.sleep(min(60, end_time - time.time()))
 

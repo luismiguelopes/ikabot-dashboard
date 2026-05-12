@@ -12,7 +12,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, lm
+from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, lm
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_update_world_scan, collect_world_scan
@@ -63,6 +63,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
             # ── Queue-only wake-up ───────────────────────────────────────────
             if not do_full:
+                if ids and os.path.exists(FORCE_MOVEMENTS_FLAG):
+                    try:
+                        os.remove(FORCE_MOVEMENTS_FLAG)
+                    except Exception:
+                        pass
+                    refresh_movements(session, ids[0])
                 if ids and has_building_queue():
                     print(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
                     if process_building_queue(session, ids, cities):
