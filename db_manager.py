@@ -152,24 +152,23 @@ def insert_history(ts, status_summary, resources_data):
                 ts,
                 gold.get("total", 0), gold.get("production", 0),
                 ships.get("available", 0), ships.get("total", 0),
-                housing.get("wineConsumption", 0),
+                status_summary.get("wine_consumption", 0),
                 housing.get("citizens", 0), housing.get("space", 0),
                 json.dumps(resources.get("available", [])),
                 json.dumps(resources.get("production", [])),
             ))
             for city, city_data in resources_data.items():
-                avail = city_data.get("availableResources", [0, 0, 0, 0, 0])
                 conn.execute("""
                     INSERT OR REPLACE INTO history_cities
                     (ts, city, wood, wine, marble, crystal, sulfur, wine_runs_out)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     ts, city,
-                    avail[0] if len(avail) > 0 else 0,
-                    avail[1] if len(avail) > 1 else 0,
-                    avail[2] if len(avail) > 2 else 0,
-                    avail[3] if len(avail) > 3 else 0,
-                    avail[4] if len(avail) > 4 else 0,
+                    city_data.get("Wood", 0),
+                    city_data.get("Wine", 0),
+                    city_data.get("Marble", 0),
+                    city_data.get("Crystal", 0),
+                    city_data.get("Sulfur", 0),
                     city_data.get("wineRunsOutIn", -1),
                 ))
     finally:

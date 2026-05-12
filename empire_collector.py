@@ -269,11 +269,18 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
     with open(os.path.join(LOGS_DIR, "movements.json"), "w") as f:
         json.dump(movements, f, indent=4)
 
-    history_path = os.path.join(LOGS_DIR, "history.jsonl")
-    history_entry = {"timestamp": int(time.time()), **status_summary}
-    with open(history_path, "a") as f:
-        f.write(json.dumps(history_entry) + "\n")
-    _trim_history(history_path)
+    ts = int(time.time())
+    try:
+        from db_manager import insert_history
+        insert_history(ts, status_summary, resources_data)
+    except Exception:
+        import traceback
+        print("[db] insert_history error:", traceback.format_exc())
+        history_path = os.path.join(LOGS_DIR, "history.jsonl")
+        history_entry = {"timestamp": ts, **status_summary}
+        with open(history_path, "a") as f:
+            f.write(json.dumps(history_entry) + "\n")
+        _trim_history(history_path)
 
     _write_scan_status("done", "cities", 0, 0, "")
 

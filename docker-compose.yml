@@ -18,6 +18,7 @@ services:
       - ./scan_collector.py:/ikabot/ikabot/function/scan_collector.py
       - ./queue_processor.py:/ikabot/ikabot/function/queue_processor.py
       - ./db_manager.py:/ikabot/ikabot/function/db_manager.py
+      - ./telegram_notifier.py:/ikabot/ikabot/function/telegram_notifier.py
       # Substitui o helper de rotas por versão com delays humanos entre envios consecutivos
       - ./planRoutes_patched.py:/ikabot/ikabot/helpers/planRoutes.py
       # Pasta Virtual Partilhada
