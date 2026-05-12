@@ -268,7 +268,12 @@ function ResourceMatrix({ data, queue, costsData }: {
   const hasAnyReserved = Object.values(reserved).some(r => r.some(v => v > 0))
   if (!hasAnyReserved) return null
 
-  const totalAvail  = COST_KEYS.map((_, i) => cityNames.reduce((s, c) => s + (data.resourcesData[c]?.[MATERIALS[i].en as keyof typeof data.resourcesData[string]] as number || 0), 0))
+  const buf = queue?.resourceBuffer ?? [0, 0, 0, 0, 0]
+
+  const totalAvail = COST_KEYS.map((_, i) => cityNames.reduce((s, c) => {
+    const raw = (data.resourcesData[c]?.[MATERIALS[i].en as keyof typeof data.resourcesData[string]] as number || 0)
+    return s + Math.max(0, raw - (buf[i] || 0))
+  }, 0))
   const totalReserved = COST_KEYS.map((_, i) => cityNames.reduce((s, c) => s + (reserved[c]?.[i] || 0), 0))
 
   return (
@@ -294,7 +299,8 @@ function ResourceMatrix({ data, queue, costsData }: {
                 <tr key={city} className={`border-b border-slate-100 hover:bg-slate-50 ${ri % 2 ? 'bg-slate-50/40' : ''}`}>
                   <td className="px-4 py-2 font-semibold text-slate-700 whitespace-nowrap">{city}</td>
                   {MATERIALS.map((m, i) => {
-                    const avail = (cityRes?.[m.en as keyof typeof cityRes] as number) || 0
+                    const raw   = (cityRes?.[m.en as keyof typeof cityRes] as number) || 0
+                    const avail = Math.max(0, raw - (buf[i] || 0))
                     const need  = res[i] || 0
                     if (need === 0) return <td key={m.en} className="px-3 py-2 text-center text-slate-300">—</td>
                     const balance = avail - need

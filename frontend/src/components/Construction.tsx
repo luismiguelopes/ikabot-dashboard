@@ -24,14 +24,21 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
     const empireData = data.empireData
     let itemCount = 0
 
+    const inProg = queue?.inProgress || {}
     for (const [city, items] of Object.entries(queue?.queues || {})) {
       const cityBuildings = empireData[city] || {}
       const cityCosts = costsData.cities[city] || {}
+      const cityInProg = inProg[city]
       for (const item of items) {
         const currentLevel = parseInt(String(cityBuildings[item.building] || '0')) || 0
+        // If this exact building is already under construction, its first level cost is already
+        // paid — start from the next level to avoid overcounting.
+        const startLevel = (cityInProg?.building === item.building)
+          ? cityInProg.fromLevel + 2
+          : currentLevel + 1
         const bCosts = cityCosts[item.building]
         if (!bCosts) continue
-        for (let lv = currentLevel + 1; lv <= item.targetLevel; lv++) {
+        for (let lv = startLevel; lv <= item.targetLevel; lv++) {
           const c = bCosts.costs[String(lv)]
           if (!c) continue
           total[0] += c.wood   || 0
