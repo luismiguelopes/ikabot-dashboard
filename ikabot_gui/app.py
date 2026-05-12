@@ -372,6 +372,30 @@ def api_building_queue_enabled():
     return jsonify({"ok": True, "enabled": enabled})
 
 
+@app.route("/api/building-queue/settings", methods=["POST"])
+def api_building_queue_settings():
+    body = request.get_json(force=True) or {}
+    data = _load_building_queue()
+    if "activeHours" in body:
+        ah = body["activeHours"]
+        if isinstance(ah, dict):
+            try:
+                s, e = int(ah.get("start", 0)), int(ah.get("end", 24))
+                if 0 <= s < e <= 24:
+                    data["activeHours"] = {"start": s, "end": e}
+            except (ValueError, TypeError):
+                pass
+    if "resourceBuffer" in body:
+        buf = body["resourceBuffer"]
+        if isinstance(buf, list) and len(buf) == 5:
+            try:
+                data["resourceBuffer"] = [max(0, int(b)) for b in buf]
+            except (ValueError, TypeError):
+                pass
+    _save_building_queue(data)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/building-queue/reorder", methods=["POST"])
 def api_building_queue_reorder():
     body = request.get_json(force=True)

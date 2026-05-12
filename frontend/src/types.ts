@@ -93,6 +93,8 @@ export interface BuildingQueue {
   inProgress: Record<string, InProgressItem>
   transportErrors?: Record<string, TransportError>
   enabled?: boolean
+  activeHours?: { start: number; end: number }
+  resourceBuffer?: number[]
 }
 
 export interface BuildingCostEntry {

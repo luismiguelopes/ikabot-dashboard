@@ -236,6 +236,13 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     action_log_save:'Save', action_log_add:'Add action',
     action_log_placeholder:'Enter action log entry…',
     action_log_empty:'No actions recorded.',
+    queue_settings_tab:'Settings',
+    queue_active_hours_title:'Active Hours',
+    queue_active_hours_from:'From', queue_active_hours_to:'to',
+    queue_active_hours_hint:'Outside this window the queue will not start constructions or dispatch transports.',
+    queue_buffer_title:'Resource Buffer',
+    queue_buffer_hint:'Minimum reserve per city. The queue will not build or dispatch if it would leave the city below this amount.',
+    queue_settings_save:'Save', queue_settings_saved:'✓ Saved',
   },
   pt: {
     nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
@@ -472,6 +479,13 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     action_log_save:'Guardar', action_log_add:'Adicionar acção',
     action_log_placeholder:'Regista uma acção…',
     action_log_empty:'Sem acções registadas.',
+    queue_settings_tab:'Definições',
+    queue_active_hours_title:'Janela Horária',
+    queue_active_hours_from:'Das', queue_active_hours_to:'às',
+    queue_active_hours_hint:'Fora desta janela a queue não inicia construções nem despacha transportes.',
+    queue_buffer_title:'Buffer de Recursos',
+    queue_buffer_hint:'Reserva mínima por cidade. A queue não constrói nem transporta se deixar a cidade abaixo deste valor.',
+    queue_settings_save:'Guardar', queue_settings_saved:'✓ Guardado',
   },
 }
 

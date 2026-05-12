@@ -88,22 +88,50 @@ def _get_next_transport_eta():
     return min(etas) if etas else None
 
 
+def _get_active_hours():
+    """Return (start, end) from queue settings JSON, falling back to env var."""
+    data = _load_queue()
+    ah = data.get("activeHours")
+    if ah and isinstance(ah, dict):
+        try:
+            s, e = int(ah.get("start", ACTIVE_HOURS_START)), int(ah.get("end", ACTIVE_HOURS_END))
+            if 0 <= s < e <= 24:
+                return s, e
+        except (ValueError, TypeError):
+            pass
+    return ACTIVE_HOURS_START, ACTIVE_HOURS_END
+
+
+def _get_resource_buffer():
+    """Return [wood,wine,marble,glass,sulfur] minimum reserves from queue settings."""
+    data = _load_queue()
+    buf = data.get("resourceBuffer")
+    if isinstance(buf, list) and len(buf) == 5:
+        try:
+            return [max(0, int(b)) for b in buf]
+        except (ValueError, TypeError):
+            pass
+    return [0, 0, 0, 0, 0]
+
+
 def _in_active_hours():
-    """Return True if current local hour is within the QUEUE_ACTIVE_HOURS window."""
-    if ACTIVE_HOURS_START == 0 and ACTIVE_HOURS_END == 24:
+    """Return True if current local hour is within the active hours window."""
+    start, end = _get_active_hours()
+    if start == 0 and end == 24:
         return True
-    return ACTIVE_HOURS_START <= time.localtime().tm_hour < ACTIVE_HOURS_END
+    return start <= time.localtime().tm_hour < end
 
 
 def _secs_until_active():
     """Seconds until the active hours window opens. Returns 0 if already active."""
     if _in_active_hours():
         return 0
+    start, _ = _get_active_hours()
     t = time.localtime()
     h, m, s = t.tm_hour, t.tm_min, t.tm_sec
-    if h < ACTIVE_HOURS_START:
-        return (ACTIVE_HOURS_START - h) * 3600 - m * 60 - s
-    return (24 - h + ACTIVE_HOURS_START) * 3600 - m * 60 - s
+    if h < start:
+        return (start - h) * 3600 - m * 60 - s
+    return (24 - h + start) * 3600 - m * 60 - s
 
 
 def smart_sleep(last_full_cycle_time, next_full_jitter):
@@ -135,7 +163,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
         if 0 < secs_to_open < sleep_secs:
             sleep_secs = secs_to_open + random.randint(1, 5) * 60
             print(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
-                      start=ACTIVE_HOURS_START))
+                      start=_get_active_hours()[0]))
 
     print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
     wake_at = int(time.time() + sleep_secs)
@@ -392,7 +420,8 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
             return False
 
     available = city_data.get("availableResources", [0] * 5)
-    missing = [max(0, cost[i] - available[i]) for i in range(5)]
+    buf = _get_resource_buffer()
+    missing = [max(0, cost[i] + buf[i] - available[i]) for i in range(5)]
     if all(m == 0 for m in missing):
         return False
 
@@ -428,7 +457,8 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         src_res = all_resources.get(src_name, {})
         src_avail = [src_res.get(_RESOURCES_ENG[i], 0) for i in range(5)]
         reserved = _calc_city_reserved(src_name, queues, empire, costs_cache)
-        surplus = [max(0, src_avail[i] - reserved[i]) for i in range(5)]
+        src_buf = _get_resource_buffer()
+        surplus = [max(0, src_avail[i] - reserved[i] - src_buf[i]) for i in range(5)]
         if any(s > 0 for s in surplus):
             sources.append((src_name, src_id, surplus))
 
@@ -625,13 +655,25 @@ def process_building_queue(session, ids, cities):
             changed = True
             continue
 
-        if target_b.get("canUpgrade") is False:
+        # ── Determine if transport is needed (server + buffer check) ─────────
+        need_transport = target_b.get("canUpgrade") is False
+        if not need_transport:
+            buf = _get_resource_buffer()
+            if any(b > 0 for b in buf):
+                cost_check = _get_upgrade_cost_from_cache(city_name, next_item["building"], target_b["level"])
+                if cost_check is not None:
+                    avail_check = city_data.get("availableResources", [0] * 5)
+                    if any(avail_check[i] - cost_check[i] < buf[i] for i in range(5)):
+                        need_transport = True
+
+        if need_transport:
             if _in_active_hours():
                 if _try_transport(session, city_name, city_id, city_data, next_item,
                                   target_b, queues, name_to_id, transport_errors):
                     dispatched_any = True
             else:
-                print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
+                _ah_s, _ah_e = _get_active_hours()
+                print(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
@@ -639,7 +681,8 @@ def process_building_queue(session, ids, cities):
             continue
 
         if not _in_active_hours():
-            print(lm("queue_outside_hours", start=ACTIVE_HOURS_START, end=ACTIVE_HOURS_END))
+            _ah_s, _ah_e = _get_active_hours()
+            print(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         # ── Fire the upgrade POST ─────────────────────────────────────────────
