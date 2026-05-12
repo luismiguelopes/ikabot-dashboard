@@ -30,26 +30,41 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
   const goldProd   = s.gold.production
   const goldRunway = goldProd < 0 ? s.gold.total / Math.abs(goldProd) / 24 : null
 
-  // Active constructions from empireData (buildings marked with '+')
-  const activeConstructions = Object.entries(empireData)
-    .map(([city, buildings]) => {
-      const busyEntry = Object.entries(buildings)
-        .find(([k, v]) => k !== '_constructionEnds' && String(v).endsWith('+'))
-      if (!busyEntry) return null
-      const [building, levelStr] = busyEntry
-      const fromLevel = parseInt(String(levelStr))
-      const eta = (buildings._constructionEnds as number) || 0
-      return { city, building, fromLevel, toLevel: fromLevel + 1, eta,
-               timeLeft: Math.max(0, eta - now) }
-    })
-    .filter(Boolean)
-    .sort((a, b) => a!.timeLeft - b!.timeLeft) as Array<{
-      city: string; building: string; fromLevel: number; toLevel: number; eta: number; timeLeft: number
-    }>
-
-  // Cities queued but not yet in construction
   const queues     = queue?.queues      || {}
   const inProgress = queue?.inProgress  || {}
+
+  // Active constructions — merges empire.json (isBusy flag) with queue inProgress (accurate ETA).
+  // empire._constructionEnds is 0 when construction started after the last full empire cycle,
+  // so we prefer inProgress.eta when available and in the future.
+  const activeConstructions = useMemo(() => {
+    type Entry = { city: string; building: string; fromLevel: number; toLevel: number; eta: number; timeLeft: number }
+    const result: Entry[] = []
+    const added = new Set<string>()
+
+    Object.entries(empireData).forEach(([city, buildings]) => {
+      const busyEntry = Object.entries(buildings)
+        .find(([k, v]) => k !== '_constructionEnds' && String(v).endsWith('+'))
+      if (!busyEntry) return
+      const [building, levelStr] = busyEntry
+      const fromLevel = parseInt(String(levelStr))
+      const queueEta  = inProgress[city]?.eta ?? 0
+      const empireEta = (buildings._constructionEnds as number) || 0
+      const eta = (queueEta > now) ? queueEta : empireEta
+      result.push({ city, building, fromLevel, toLevel: fromLevel + 1, eta,
+                    timeLeft: Math.max(0, eta - now) })
+      added.add(city)
+    })
+
+    // Cities where queue has inProgress but empire.json not yet updated (stale data)
+    Object.entries(inProgress).forEach(([city, ip]) => {
+      if (added.has(city) || !ip.eta) return
+      result.push({ city, building: ip.building, fromLevel: ip.fromLevel,
+                    toLevel: ip.toLevel ?? ip.fromLevel + 1, eta: ip.eta,
+                    timeLeft: Math.max(0, ip.eta - now) })
+    })
+
+    return result.sort((a, b) => a.timeLeft - b.timeLeft)
+  }, [empireData, inProgress, now])
   const queuedCities = Object.entries(queues)
     .filter(([city, items]) => items.length > 0 && !inProgress[city])
     .map(([city, items]) => ({ city, building: items[0].building, targetLevel: items[0].targetLevel, extra: items.length - 1 }))
