@@ -39,8 +39,9 @@ def _save_queue(data):
         json.dump(data, f, indent=2)
 
 
-def has_building_queue():
-    data = _load_queue()
+def has_building_queue(data=None):
+    if data is None:
+        data = _load_queue()
     if not data.get("enabled", True):
         return False
     return any(len(items) > 0 for items in data.get("queues", {}).values())
@@ -48,9 +49,10 @@ def has_building_queue():
 
 # ── Sleep scheduling ──────────────────────────────────────────────────────────
 
-def _get_next_construction_eta():
+def _get_next_construction_eta(data=None):
     """Return the earliest construction completion timestamp across all in-progress cities, or None."""
-    data = _load_queue()
+    if data is None:
+        data = _load_queue()
     etas = [
         entry["eta"]
         for entry in data.get("inProgress", {}).values()
@@ -59,9 +61,10 @@ def _get_next_construction_eta():
     return min(etas) if etas else None
 
 
-def _get_next_transport_eta():
+def _get_next_transport_eta(data=None):
     """Return earliest arrival timestamp for own transports heading to cities with pending queue items, or None."""
-    data = _load_queue()
+    if data is None:
+        data = _load_queue()
     pending_cities = {name for name, items in data.get("queues", {}).items() if items}
     if not pending_cities:
         return None
@@ -150,8 +153,9 @@ def _secs_until_active():
 def smart_sleep(last_full_cycle_time, next_full_jitter):
     """Sleep until the next full empire cycle, next construction ETA, or next transport arrival, whichever is soonest."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
-    construction_eta = _get_next_construction_eta()
-    transport_eta = _get_next_transport_eta()
+    q = _load_queue()  # single load — reused by all helpers below
+    construction_eta = _get_next_construction_eta(q)
+    transport_eta = _get_next_transport_eta(q)
 
     eta = None
     if construction_eta:
@@ -168,7 +172,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
     else:
         sleep_secs = max(60, next_full_at - time.time())
         # Se há itens em queue mas sem ETA conhecido, acorda em 30 min para re-tentar
-        if has_building_queue() and _in_active_hours():
+        if has_building_queue(q) and _in_active_hours():
             sleep_secs = min(sleep_secs, 1800)
 
     if not _in_active_hours():
@@ -517,12 +521,18 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
             print(lm("queue_transport_sent_bundle", city=city_name, resources=sent_desc,
                       origin=src_name, ships=ships_to_use))
         else:
+            failed_resource = next((_RESOURCES_ENG[i] for i in range(5) if send_list[i] > 0), "?")
             if transport_errors is not None:
                 transport_errors[city_name] = {
                     "failedAt": int(time.time()),
                     "origin": src_name,
-                    "resource": next((_RESOURCES_ENG[i] for i in range(5) if send_list[i] > 0), "?"),
+                    "resource": failed_resource,
                 }
+            try:
+                from telegram_notifier import notify_transport_error
+                notify_transport_error(city_name, failed_resource, src_name)
+            except Exception:
+                pass
             print(lm("queue_transport_failed", city=city_name, origin=src_name))
 
     # ── Freighter pass: only when total need is very large ────────────────────
@@ -616,6 +626,11 @@ def process_building_queue(session, ids, cities):
                 )
             if not still_busy:
                 print(lm("queue_construction_done", city=city_name, building=ip["building"]))
+                try:
+                    from telegram_notifier import notify_construction_done
+                    notify_construction_done(city_name, ip["building"], ip.get("toLevel", ip.get("fromLevel", 0) + 1))
+                except Exception:
+                    pass
                 if items and items[0]["building"] == ip["building"]:
                     b_done = (city_data["position"][ip_pos]
                               if ip_pos is not None and ip_pos < len(city_data["position"])

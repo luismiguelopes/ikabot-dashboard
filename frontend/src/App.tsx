@@ -165,7 +165,7 @@ export default function App() {
           {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
           {page === 'movements'    && <MovementsPage />}
           {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
-          {page === 'history'      && <HistoryPage />}
+          {page === 'history'      && <HistoryPage data={data} />}
           {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
