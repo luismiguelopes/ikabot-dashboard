@@ -99,13 +99,6 @@ export default function App() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  useEffect(() => {
-    const es = new EventSource('/api/stream')
-    es.addEventListener('update', fetchData)
-    const fallback = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000)
-    return () => { es.close(); clearInterval(fallback) }
-  }, [fetchData])
-
   const alertCount = useMemo(() => {
     if (!data) return 0
     let n = 0
@@ -121,6 +114,17 @@ export default function App() {
     if (data.statusSummary.gold.production < 0) n++
     return n
   }, [data, thresholds])
+
+  const [sseConnected, setSseConnected] = useState(true)
+
+  useEffect(() => {
+    const es = new EventSource('/api/stream')
+    es.onopen = () => setSseConnected(true)
+    es.onerror = () => setSseConnected(false)
+    es.addEventListener('update', fetchData)
+    const fallback = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000)
+    return () => { es.close(); clearInterval(fallback) }
+  }, [fetchData])
 
   const [movCount, setMovCount] = useState(0)
   useEffect(() => {
@@ -153,6 +157,7 @@ export default function App() {
           lastAlive={data.lastAlive}
           alertCount={alertCount}
           movCount={movCount}
+          sseConnected={sseConnected}
         />
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
           {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}

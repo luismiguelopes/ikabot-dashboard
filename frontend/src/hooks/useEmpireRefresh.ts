@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { ScanStatus } from '../types'
 
 export type EmpireRefreshState = 'idle' | 'running' | 'done'
@@ -7,11 +7,19 @@ export function useEmpireRefresh(onDone?: () => void) {
   const [state, setState] = useState<EmpireRefreshState>('idle')
   const [status, setStatus] = useState<ScanStatus | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const trigger = () => {
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    }
+  }, [])
+
+  const trigger = useCallback(() => {
     setState('running')
     fetch('/api/data/refresh', { method: 'POST' }).catch(() => {})
-  }
+  }, [])
 
   useEffect(() => {
     if (state !== 'running') return
@@ -20,10 +28,10 @@ export function useEmpireRefresh(onDone?: () => void) {
         .then(r => r.json())
         .then((s: ScanStatus) => {
           setStatus(s)
-          if (s.status === 'done' || s.status === 'idle') {
+          if (s.status === 'done' || s.status === 'idle' || s.status === 'error') {
             setState('done')
             if (onDone) onDone()
-            setTimeout(() => setState('idle'), 3000)
+            timeoutRef.current = setTimeout(() => setState('idle'), 3000)
           }
         })
         .catch(() => {})

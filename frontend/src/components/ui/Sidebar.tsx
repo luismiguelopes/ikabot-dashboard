@@ -34,9 +34,10 @@ interface SidebarProps {
   lastAlive: number | null
   alertCount: number
   movCount: number
+  sseConnected: boolean
 }
 
-export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount }: SidebarProps) {
+export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, sseConnected }: SidebarProps) {
   const t = useT()
   const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60
   const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > 90 * 60
@@ -81,6 +82,12 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
       </div>
 
       <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
+        {!sseConnected && (
+          <div className="flex items-center gap-1.5 text-orange-400 text-xs">
+            <i className="fa-solid fa-plug-circle-xmark" />
+            {t('sse_offline')}
+          </div>
+        )}
         {isBotOffline && (
           <div className="flex items-center gap-1.5 text-red-400 text-xs font-semibold">
             <i className="fa-solid fa-circle-xmark" />
