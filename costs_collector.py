@@ -181,9 +181,14 @@ def collect_building_costs(session, ids):
                 import traceback
                 print(lm("costs_city_error", id=city_id), traceback.format_exc())
 
-        costs_path = os.path.join(LOGS_DIR, "building_costs.json")
-        with open(costs_path, "w") as f:
-            json.dump({"lastUpdated": int(time.time()), "cities": all_costs}, f, indent=4)
+        costs_data = {"lastUpdated": int(time.time()), "cities": all_costs}
+        try:
+            from db_manager import save_building_costs
+            save_building_costs(costs_data)
+        except Exception:
+            costs_path = os.path.join(LOGS_DIR, "building_costs.json")
+            with open(costs_path, "w") as f:
+                json.dump(costs_data, f, indent=4)
 
         print(lm("costs_done", ts=time.strftime('%H:%M:%S')))
 

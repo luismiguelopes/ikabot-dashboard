@@ -1,7 +1,14 @@
 from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 import json
 import os
+import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import db_manager as _db
+except Exception:
+    _db = None
 
 app = Flask(__name__)
 
@@ -154,6 +161,13 @@ def api_history():
 
 @app.route("/api/building-costs")
 def api_building_costs():
+    if _db:
+        try:
+            ts = _db.costs_last_updated()
+            if ts > 0:
+                return jsonify(_db.get_building_costs())
+        except Exception:
+            pass
     if not os.path.exists(BUILDING_COSTS_JSON_PATH):
         return jsonify({"error": "building_costs.json não encontrado. Aguarda o próximo ciclo do bot."}), 404
     with open(BUILDING_COSTS_JSON_PATH) as f:
@@ -207,8 +221,14 @@ def api_world_scan():
         return jsonify({"error": "world_scan.json não encontrado. Aguarda o primeiro scan semanal ou força um."}), 404
     with open(WORLD_SCAN_JSON_PATH) as f:
         scan = json.load(f)
+    # Load marks from SQLite with JSON fallback
     marks = {}
-    if os.path.exists(PLAYER_MARKS_JSON_PATH):
+    if _db:
+        try:
+            marks = _db.get_all_marks()
+        except Exception:
+            pass
+    if not marks and os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
     # Build set of player IDs that were already inactive in the previous scan
@@ -254,16 +274,21 @@ def api_world_scan_mark():
     note = body.get("note", "")
     if status not in ("novo", "visto", "alvo", "ignorar"):
         return jsonify({"error": "Status inválido"}), 400
+    if _db:
+        try:
+            _db.save_mark(mark_key, player_id, island_x, island_y, status, note)
+            return jsonify({"ok": True})
+        except Exception:
+            pass
+    # JSON fallback
     marks = {}
     if os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
     existing = marks.get(mark_key, {})
     marks[mark_key] = {
-        "status": status,
-        "note": note,
-        "updatedAt": int(time.time()),
-        "actions": existing.get("actions", []),
+        "status": status, "note": note,
+        "updatedAt": int(time.time()), "actions": existing.get("actions", []),
     }
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(PLAYER_MARKS_JSON_PATH, "w") as f:
@@ -281,11 +306,20 @@ def api_world_scan_action():
     if not text:
         return jsonify({"error": "text is required"}), 400
     mark_key = f"{player_id}_{island_x}_{island_y}"
+    if _db:
+        try:
+            _db.append_action(mark_key, player_id, island_x, island_y, text)
+            return jsonify({"ok": True})
+        except Exception:
+            pass
+    # JSON fallback
     marks = {}
     if os.path.exists(PLAYER_MARKS_JSON_PATH):
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
-    entry = marks.setdefault(mark_key, {"status": "novo", "note": "", "updatedAt": int(time.time()), "actions": []})
+    entry = marks.setdefault(mark_key, {
+        "status": "novo", "note": "", "updatedAt": int(time.time()), "actions": []
+    })
     entry.setdefault("actions", []).append({"ts": int(time.time()), "text": text})
     entry["updatedAt"] = int(time.time())
     os.makedirs(LOGS_DIR, exist_ok=True)
@@ -295,13 +329,24 @@ def api_world_scan_action():
 
 
 def _load_building_queue():
+    if _db:
+        try:
+            return _db.load_queue()
+        except Exception:
+            pass
     if not os.path.exists(BUILDING_QUEUE_JSON_PATH):
-        return {"queues": {}, "inProgress": {}}
+        return {"queues": {}, "inProgress": {}, "transportErrors": {}}
     with open(BUILDING_QUEUE_JSON_PATH) as f:
         return json.load(f)
 
 
 def _save_building_queue(data):
+    if _db:
+        try:
+            _db.save_queue(data)
+            return
+        except Exception:
+            pass
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(BUILDING_QUEUE_JSON_PATH, "w") as f:
         json.dump(data, f, indent=2)
