@@ -185,7 +185,19 @@ def api_data_status():
     if not os.path.exists(EMPIRE_SCAN_STATUS_PATH):
         return jsonify({"status": "idle", "phase": "", "progress": 0, "total": 0, "message": ""})
     with open(EMPIRE_SCAN_STATUS_PATH) as f:
-        return jsonify(json.load(f))
+        data = json.load(f)
+    if data.get("status") == "running":
+        last_alive = None
+        if os.path.exists(LAST_ALIVE_JSON_PATH):
+            try:
+                with open(LAST_ALIVE_JSON_PATH) as f:
+                    last_alive = json.load(f).get("lastAlive")
+            except Exception:
+                pass
+        if last_alive is None or (time.time() - last_alive) > 600:
+            data["status"] = "error"
+            data["message"] = "Bot offline"
+    return jsonify(data)
 
 
 @app.route("/api/world-scan")

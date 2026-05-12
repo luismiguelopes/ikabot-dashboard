@@ -45,12 +45,12 @@ def _collect_movements(session, city_id):
         resp = session.post(url)
         data = json.loads(resp, strict=False)
         movements_raw = data[1][1][2]["viewScriptParams"]["militaryAndFleetMovements"]
-        time_now = int(data[0][1]["time"])
+        time_now = int(float(data[0][1]["time"]))
 
         movements = []
         for m in movements_raw:
-            time_left = int(m["eventTime"]) - time_now
-            arrival_ts = int(m["eventTime"])
+            time_left = int(float(m["eventTime"])) - time_now
+            arrival_ts = int(float(m["eventTime"]))
             is_returning = m["event"].get("isFleetReturning", False)
 
             entry = {
@@ -142,24 +142,24 @@ def collect_city_data(session, ids, cities):
 
         wood = Decimal(json_data["resourceProduction"])
         good = Decimal(json_data["tradegoodProduction"])
-        typeGood = int(json_data["producedTradegood"])
+        typeGood = int(float(json_data["producedTradegood"]))
         total_production[0] += wood * 3600
         total_production[typeGood] += good * 3600
-        total_wine_consumption += json_data["wineSpendings"]
+        total_wine_consumption += float(json_data["wineSpendings"])
 
         housing_space = int(float(json_data["currentResources"]["population"]))
         citizens = int(float(json_data["currentResources"]["citizens"]))
         total_housing_space += housing_space
         total_citizens += citizens
 
-        total_resources[0] += json_data["currentResources"]["resource"]
-        total_resources[1] += json_data["currentResources"]["1"]
-        total_resources[2] += json_data["currentResources"]["2"]
-        total_resources[3] += json_data["currentResources"]["3"]
-        total_resources[4] += json_data["currentResources"]["4"]
+        total_resources[0] += float(json_data["currentResources"]["resource"])
+        total_resources[1] += float(json_data["currentResources"]["1"])
+        total_resources[2] += float(json_data["currentResources"]["2"])
+        total_resources[3] += float(json_data["currentResources"]["3"])
+        total_resources[4] += float(json_data["currentResources"]["4"])
 
-        available_ships = json_data["freeTransporters"]
-        total_ships = json_data["maxTransporters"]
+        available_ships = int(float(json_data["freeTransporters"]))
+        total_ships = int(float(json_data["maxTransporters"]))
 
         total_gold = int(Decimal(json_data["gold"]))
         total_gold_production = int(
@@ -171,14 +171,14 @@ def collect_city_data(session, ids, cities):
         )
 
         city_name = city_data.get("cityName", city_data.get("name", "Unknown"))
-        island_x = int(city_data.get("islandXCoord", city_data.get("x", 0)) or 0)
-        island_y = int(city_data.get("islandYCoord", city_data.get("y", 0)) or 0)
+        island_x = int(float(city_data.get("islandXCoord", city_data.get("x", 0)) or 0))
+        island_y = int(float(city_data.get("islandYCoord", city_data.get("y", 0)) or 0))
         own_cities_list.append({"name": city_name, "x": island_x, "y": island_y})
         print(lm("city_done", city=city_name))
         _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 
-        storage_capacity = int(city_data.get("storageCapacity", 0))
-        wine_consumption_hr = int(city_data.get("wineConsumptionPerHour", 0))
+        storage_capacity = int(float(city_data.get("storageCapacity") or 0))
+        wine_consumption_hr = int(float(city_data.get("wineConsumptionPerHour") or 0))
         wine_production_hr = int(good * 3600) if typeGood == 1 else 0
 
         city_resources = {}
@@ -204,7 +204,7 @@ def collect_city_data(session, ids, cities):
         resources_data[city_name] = city_resources
 
         city_buildings = {}
-        construction_ends = int(city_data.get("endUpgradeTime", 0) or 0)
+        construction_ends = int(float(city_data.get("endUpgradeTime") or 0))
 
         if "position" in city_data:
             for b in city_data["position"]:
