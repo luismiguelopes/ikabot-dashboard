@@ -13,7 +13,7 @@ if _here not in sys.path:
     sys.path.insert(0, _here)
 
 from empire_utils import (
-    LOGS_DIR, QUEUE_JSON_PATH, UPDATE_INTERVAL,
+    LOGS_DIR, QUEUE_JSON_PATH, QUEUE_SETTINGS_PATH, UPDATE_INTERVAL,
     ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm,
 )
 
@@ -88,10 +88,23 @@ def _get_next_transport_eta():
     return min(etas) if etas else None
 
 
-def _get_active_hours():
-    """Return (start, end) from queue settings JSON, falling back to env var."""
+def _load_queue_settings():
+    """Load active hours and resource buffer from queue_settings.json.
+    Falls back to building_queue.json for backwards compatibility."""
+    if os.path.exists(QUEUE_SETTINGS_PATH):
+        try:
+            with open(QUEUE_SETTINGS_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
     data = _load_queue()
-    ah = data.get("activeHours")
+    return {k: data[k] for k in ("activeHours", "resourceBuffer") if k in data}
+
+
+def _get_active_hours():
+    """Return (start, end) from queue_settings.json, falling back to env var."""
+    settings = _load_queue_settings()
+    ah = settings.get("activeHours")
     if ah and isinstance(ah, dict):
         try:
             s, e = int(ah.get("start", ACTIVE_HOURS_START)), int(ah.get("end", ACTIVE_HOURS_END))
@@ -103,9 +116,9 @@ def _get_active_hours():
 
 
 def _get_resource_buffer():
-    """Return [wood,wine,marble,glass,sulfur] minimum reserves from queue settings."""
-    data = _load_queue()
-    buf = data.get("resourceBuffer")
+    """Return [wood,wine,marble,glass,sulfur] minimum reserves from queue_settings.json."""
+    settings = _load_queue_settings()
+    buf = settings.get("resourceBuffer")
     if isinstance(buf, list) and len(buf) == 5:
         try:
             return [max(0, int(b)) for b in buf]
@@ -457,8 +470,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         src_res = all_resources.get(src_name, {})
         src_avail = [src_res.get(_RESOURCES_ENG[i], 0) for i in range(5)]
         reserved = _calc_city_reserved(src_name, queues, empire, costs_cache)
-        src_buf = _get_resource_buffer()
-        surplus = [max(0, src_avail[i] - reserved[i] - src_buf[i]) for i in range(5)]
+        surplus = [max(0, src_avail[i] - reserved[i] - buf[i]) for i in range(5)]
         if any(s > 0 for s in surplus):
             sources.append((src_name, src_id, surplus))
 

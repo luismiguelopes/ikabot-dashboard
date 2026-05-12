@@ -22,6 +22,7 @@ FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG_PATH       = os.path.join(LOGS_DIR, ".force_queue_check")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
+QUEUE_SETTINGS_JSON_PATH = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
@@ -306,9 +307,29 @@ def _save_building_queue(data):
         json.dump(data, f, indent=2)
 
 
+def _load_queue_settings():
+    """Load settings from queue_settings.json, falling back to building_queue.json."""
+    if os.path.exists(QUEUE_SETTINGS_JSON_PATH):
+        try:
+            with open(QUEUE_SETTINGS_JSON_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    q = _load_building_queue()
+    return {k: q[k] for k in ("activeHours", "resourceBuffer") if k in q}
+
+
+def _save_queue_settings(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(QUEUE_SETTINGS_JSON_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 @app.route("/api/building-queue")
 def api_building_queue():
-    return jsonify(_load_building_queue())
+    data = _load_building_queue()
+    data.update(_load_queue_settings())
+    return jsonify(data)
 
 
 @app.route("/api/building-queue/add", methods=["POST"])
@@ -387,24 +408,24 @@ def api_building_queue_enabled():
 @app.route("/api/building-queue/settings", methods=["POST"])
 def api_building_queue_settings():
     body = request.get_json(force=True) or {}
-    data = _load_building_queue()
+    settings = _load_queue_settings()
     if "activeHours" in body:
         ah = body["activeHours"]
         if isinstance(ah, dict):
             try:
                 s, e = int(ah.get("start", 0)), int(ah.get("end", 24))
                 if 0 <= s < e <= 24:
-                    data["activeHours"] = {"start": s, "end": e}
+                    settings["activeHours"] = {"start": s, "end": e}
             except (ValueError, TypeError):
                 pass
     if "resourceBuffer" in body:
         buf = body["resourceBuffer"]
         if isinstance(buf, list) and len(buf) == 5:
             try:
-                data["resourceBuffer"] = [max(0, int(b)) for b in buf]
+                settings["resourceBuffer"] = [max(0, int(b)) for b in buf]
             except (ValueError, TypeError):
                 pass
-    _save_building_queue(data)
+    _save_queue_settings(settings)
     return jsonify({"ok": True})
 
 

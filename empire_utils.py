@@ -6,6 +6,7 @@ import re
 
 LOGS_DIR = "/tmp/ikalogs/"
 QUEUE_JSON_PATH           = os.path.join(LOGS_DIR, "building_queue.json")
+QUEUE_SETTINGS_PATH       = os.path.join(LOGS_DIR, "queue_settings.json")
 LAST_ALIVE_JSON_PATH      = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH   = os.path.join(LOGS_DIR, "empire_scan_status.json")
 FORCE_EMPIRE_FLAG         = os.path.join(LOGS_DIR, ".force_empire_update")
