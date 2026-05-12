@@ -12,7 +12,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, lm
+from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_update_world_scan, collect_world_scan
@@ -41,6 +41,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     last_full_cycle_time = 0
     next_full_jitter = 0
     cycle_count = 0
+
+    try:
+        from telegram_notifier import notify_started
+        notify_started(1)
+    except Exception:
+        pass
 
     while True:
         try:
@@ -89,6 +95,17 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 collect_world_scan(session)
 
             finalize_empire_cycle(session, ids, status_summary, formatted_empire, resources_data)
+
+            try:
+                from telegram_notifier import notify_wine_critical, clear_wine_critical
+                for city_name, city_res in resources_data.items():
+                    t = city_res.get("wineRunsOutIn", -1)
+                    if t != -1 and 0 < t < WINE_CRITICAL_NOTIFY_SECS:
+                        notify_wine_critical(city_name, t / 3600)
+                    else:
+                        clear_wine_critical(city_name)
+            except Exception:
+                pass
 
             print(lm("cycle_done"))
             last_full_cycle_time = time.time()

@@ -1,6 +1,7 @@
 from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 import json
 import os
+import sqlite3
 import time
 
 app = Flask(__name__)
@@ -22,6 +23,7 @@ FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG_PATH       = os.path.join(LOGS_DIR, ".force_queue_check")
 BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
+DB_PATH                  = os.path.join(LOGS_DIR, "ikabot.db")
 QUEUE_SETTINGS_JSON_PATH = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
@@ -134,15 +136,68 @@ def api_movements():
         return jsonify(json.load(f))
 
 
+def _db_connect():
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 @app.route("/api/history")
 def api_history():
-    """Return the last 168 history entries (≈7 days at 1h interval)."""
+    """Return the last 168 history entries. ?city=Name returns per-city resource history."""
+    limit = min(int(request.args.get("limit", 168)), 2160)
+    city  = request.args.get("city", "").strip()
+
+    if city:
+        if not os.path.exists(DB_PATH):
+            return jsonify([])
+        try:
+            with _db_connect() as conn:
+                rows = conn.execute(
+                    "SELECT ts, wood, wine, marble, crystal, sulfur, wine_runs_out "
+                    "FROM history_cities WHERE city=? ORDER BY ts DESC LIMIT ?",
+                    (city, limit)
+                ).fetchall()
+            return jsonify([{
+                "timestamp": r["ts"],
+                "resources": {"available": [r["wood"], r["wine"], r["marble"], r["crystal"], r["sulfur"]]},
+                "wineRunsOutIn": r["wine_runs_out"],
+            } for r in reversed(rows)])
+        except Exception:
+            return jsonify([])
+
+    # Empire-wide: try SQLite first, fall back to JSONL
+    if os.path.exists(DB_PATH):
+        try:
+            with _db_connect() as conn:
+                rows = conn.execute(
+                    "SELECT ts, gold, gold_production, ships_avail, ships_total, "
+                    "wine_consumption, citizens, housing_space, resources_avail, resources_prod "
+                    "FROM history ORDER BY ts DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            return jsonify([{
+                "timestamp": r["ts"],
+                "gold":     {"total": r["gold"], "production": r["gold_production"]},
+                "ships":    {"available": r["ships_avail"], "total": r["ships_total"]},
+                "housing":  {"citizens": r["citizens"], "space": r["housing_space"]},
+                "wine_consumption": r["wine_consumption"],
+                "resources": {
+                    "available": json.loads(r["resources_avail"] or "[]"),
+                    "production": json.loads(r["resources_prod"] or "[]"),
+                },
+            } for r in reversed(rows)])
+        except Exception:
+            pass
+
+    # JSONL fallback
     if not os.path.exists(HISTORY_JSONL_PATH):
         return jsonify([])
     with open(HISTORY_JSONL_PATH) as f:
         lines = f.readlines()
     entries = []
-    for line in lines[-168:]:
+    for line in lines[-limit:]:
         line = line.strip()
         if line:
             try:
@@ -150,6 +205,18 @@ def api_history():
             except Exception:
                 pass
     return jsonify(entries)
+
+
+@app.route("/api/history/cities")
+def api_history_cities():
+    if not os.path.exists(DB_PATH):
+        return jsonify([])
+    try:
+        with _db_connect() as conn:
+            rows = conn.execute("SELECT DISTINCT city FROM history_cities ORDER BY city").fetchall()
+        return jsonify([r["city"] for r in rows])
+    except Exception:
+        return jsonify([])
 
 
 @app.route("/api/building-costs")

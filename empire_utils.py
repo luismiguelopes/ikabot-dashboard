@@ -50,6 +50,7 @@ def _parse_active_hours(value):
 
 
 ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(os.getenv("QUEUE_ACTIVE_HOURS"))
+WINE_CRITICAL_NOTIFY_SECS = _parse_duration(os.getenv("WINE_CRITICAL_NOTIFY_HOURS", "2h"), 7200)
 
 _LM = {
     "own_cities_missing": {

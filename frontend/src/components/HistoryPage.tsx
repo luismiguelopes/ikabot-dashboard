@@ -4,40 +4,53 @@ import { MATERIALS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import Chart from 'chart.js/auto'
+import type { ApiData } from '../types'
 
-export function HistoryPage() {
-  const t = useT()
+interface Props {
+  data: ApiData
+}
+
+export function HistoryPage({ data }: Props) {
+  const t    = useT()
   const lang = useLang()
-  const [history, setHistory] = useState<any[] | null>(null)
-  const [metric, setMetric]   = useState('gold')
-  const chartRef = useRef<HTMLCanvasElement | null>(null)
+  const cityNames = Object.keys(data.empireData).sort()
+
+  const [history, setHistory]   = useState<any[] | null>(null)
+  const [metric,  setMetric]    = useState('gold')
+  const [city,    setCity]      = useState('')   // '' = empire-wide
+  const chartRef      = useRef<HTMLCanvasElement | null>(null)
   const chartInstance = useRef<Chart | null>(null)
 
+  // Fetch history whenever city changes; reset metric when switching to per-city
   useEffect(() => {
-    fetch('/api/history')
+    setHistory(null)
+    const url = city ? `/api/history?city=${encodeURIComponent(city)}` : '/api/history'
+    fetch(url)
       .then(r => r.json())
       .then(setHistory)
       .catch(() => setHistory([]))
-  }, [])
+    if (city && metric !== 'resources') setMetric('resources')
+  }, [city])
 
   useEffect(() => {
     if (!history || history.length === 0 || !chartRef.current) return
-    if (chartInstance.current) { chartInstance.current.destroy() }
+    if (chartInstance.current) chartInstance.current.destroy()
 
-    const labels = history.map(h => {
+    const locale   = getLocale(lang)
+    const labels   = history.map(h => {
       const d = new Date(h.timestamp * 1000)
-      return d.toLocaleString(getLocale(lang), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      return d.toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     })
 
     const datasets: any[] = []
     const colors = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7']
 
     if (metric === 'gold') {
-      datasets.push({ label: t('chart_gold'), data: history.map(h => h.gold.total), borderColor: colors[0], backgroundColor: colors[0]+'22', tension: 0.3, fill: true })
+      datasets.push({ label: t('chart_gold'),      data: history.map(h => h.gold.total),      borderColor: colors[0], backgroundColor: colors[0]+'22', tension: 0.3, fill: true })
       datasets.push({ label: t('chart_gold_prod'), data: history.map(h => h.gold.production), borderColor: colors[1], backgroundColor: colors[1]+'22', tension: 0.3, fill: false, yAxisID: 'y2' })
     } else if (metric === 'resources') {
       MATERIALS.forEach((m, i) => {
-        datasets.push({ label: m[lang as 'pt' | 'en'], data: history.map(h => h.resources.available[i]), borderColor: colors[i % colors.length], tension: 0.3, fill: false })
+        datasets.push({ label: m[lang as 'pt' | 'en'], data: history.map(h => h.resources.available[i] ?? 0), borderColor: colors[i % colors.length], tension: 0.3, fill: false })
       })
     } else if (metric === 'ships') {
       datasets.push({ label: t('chart_ships_avail'), data: history.map(h => h.ships.available), borderColor: colors[0], tension: 0.3, fill: false })
@@ -66,26 +79,45 @@ export function HistoryPage() {
     })
   }, [history, metric, lang])
 
-  const METRICS = [
-    { key: 'gold',      label: t('metric_gold')      },
-    { key: 'resources', label: t('metric_resources') },
-    { key: 'ships',     label: t('metric_ships')     },
-    { key: 'citizens',  label: t('metric_citizens')  },
-  ]
+  // Metrics available differ by view mode
+  const METRICS = city
+    ? [{ key: 'resources', label: t('metric_resources') }]
+    : [
+        { key: 'gold',      label: t('metric_gold')      },
+        { key: 'resources', label: t('metric_resources') },
+        { key: 'ships',     label: t('metric_ships')     },
+        { key: 'citizens',  label: t('metric_citizens')  },
+      ]
 
   return (
     <div>
       <PageHeader icon="fa-chart-line" title={t('history_title')}>
-        <div className="flex gap-1">
-          {METRICS.map(m => (
-            <button
-              key={m.key}
-              onClick={() => setMetric(m.key)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${metric === m.key ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* City selector */}
+          <div className="flex items-center gap-1.5">
+            <i className="fa-solid fa-city text-slate-400 text-xs" />
+            <select
+              value={city}
+              onChange={e => setCity(e.target.value)}
+              className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             >
-              {m.label}
-            </button>
-          ))}
+              <option value="">{t('history_city_all')}</option>
+              {cityNames.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {/* Metric pills */}
+          <div className="flex gap-1">
+            {METRICS.map(m => (
+              <button
+                key={m.key}
+                onClick={() => setMetric(m.key)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${metric === m.key ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
       </PageHeader>
 
@@ -94,9 +126,7 @@ export function HistoryPage() {
           {!history ? (
             <div className="flex items-center justify-center h-full text-slate-400 text-sm">{t('loading_history')}</div>
           ) : history.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-slate-400 text-sm">
-              {t('no_history')}
-            </div>
+            <div className="flex items-center justify-center h-full text-slate-400 text-sm">{t('no_history')}</div>
           ) : (
             <canvas ref={chartRef} />
           )}
@@ -106,9 +136,9 @@ export function HistoryPage() {
       {history && history.length > 0 && (
         <p className="text-xs text-slate-400 mt-2">
           {t('history_note', {
-            n: String(history.length),
+            n:    String(history.length),
             from: new Date(history[0].timestamp * 1000).toLocaleDateString(getLocale(lang)),
-            to: new Date(history[history.length-1].timestamp * 1000).toLocaleDateString(getLocale(lang)),
+            to:   new Date(history[history.length - 1].timestamp * 1000).toLocaleDateString(getLocale(lang)),
           })}
         </p>
       )}
