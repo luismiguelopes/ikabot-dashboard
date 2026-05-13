@@ -29,7 +29,8 @@ export function HistoryPage({ data }: Props) {
       .then(r => r.json())
       .then(setHistory)
       .catch(() => setHistory([]))
-    if (city && metric !== 'resources') setMetric('resources')
+    if (city && metric !== 'resources' && metric !== 'wine_timer') setMetric('resources')
+    if (!city && (metric === 'wine_timer')) setMetric('gold')
   }, [city])
 
   useEffect(() => {
@@ -52,6 +53,8 @@ export function HistoryPage({ data }: Props) {
       MATERIALS.forEach((m, i) => {
         datasets.push({ label: m[lang as 'pt' | 'en'], data: history.map(h => h.resources.available[i] ?? 0), borderColor: colors[i % colors.length], tension: 0.3, fill: false })
       })
+    } else if (metric === 'wine_timer') {
+      datasets.push({ label: t('metric_wine_timer'), data: history.map(h => h.wineRunsOutIn != null && h.wineRunsOutIn >= 0 ? +(h.wineRunsOutIn / 3600).toFixed(1) : null), borderColor: '#f59e0b', backgroundColor: '#f59e0b22', tension: 0.3, fill: true, spanGaps: false })
     } else if (metric === 'ships') {
       datasets.push({ label: t('chart_ships_avail'), data: history.map(h => h.ships.available), borderColor: colors[0], tension: 0.3, fill: false })
       datasets.push({ label: t('chart_ships_total'), data: history.map(h => h.ships.total),     borderColor: colors[1], tension: 0.3, fill: false })
@@ -67,6 +70,9 @@ export function HistoryPage({ data }: Props) {
     if (metric === 'gold') {
       scales.y2 = { position: 'right', ticks: { color: '#94a3b8' }, grid: { drawOnChartArea: false } }
     }
+    if (metric === 'wine_timer') {
+      scales.y.ticks = { ...scales.y.ticks, callback: (v: number) => `${v}h` }
+    }
 
     chartInstance.current = new Chart(chartRef.current, {
       type: 'line',
@@ -81,7 +87,10 @@ export function HistoryPage({ data }: Props) {
 
   // Metrics available differ by view mode
   const METRICS = city
-    ? [{ key: 'resources', label: t('metric_resources') }]
+    ? [
+        { key: 'resources',   label: t('metric_resources')   },
+        { key: 'wine_timer',  label: t('metric_wine_timer')  },
+      ]
     : [
         { key: 'gold',      label: t('metric_gold')      },
         { key: 'resources', label: t('metric_resources') },
