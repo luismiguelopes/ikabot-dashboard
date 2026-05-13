@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useT, useLang } from '../i18n'
 import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
-import { ALERT_DEFAULTS } from '../constants'
+import { ALERT_DEFAULTS, MATERIALS } from '../constants'
 import { PageHeader } from './ui/PageHeader'
 import { Card } from './ui/Card'
 import type { AlertThresholds } from '../types'
@@ -140,7 +140,11 @@ function AlertasTab({ thresholds, onSaveThresholds }: {
 }
 
 function ConstrucaoTab() {
-  const t = useT()
+  const t    = useT()
+  const lang = useLang() as 'pt' | 'en'
+  const [hoursStart,   setHoursStart]   = useState(0)
+  const [hoursEnd,     setHoursEnd]     = useState(24)
+  const [buffer,       setBuffer]       = useState([0, 0, 0, 0, 0])
   const [wineMinHours, setWineMinHours] = useState(0)
   const [saved,        setSaved]        = useState(false)
   const [saving,       setSaving]       = useState(false)
@@ -150,6 +154,8 @@ function ConstrucaoTab() {
     fetch('/api/building-queue')
       .then(r => r.json())
       .then(d => {
+        if (d.activeHours) { setHoursStart(d.activeHours.start); setHoursEnd(d.activeHours.end) }
+        if (d.resourceBuffer?.length === 5) setBuffer(d.resourceBuffer)
         if (d.wineMinHours != null) setWineMinHours(d.wineMinHours)
         setLoaded(true)
       })
@@ -161,7 +167,11 @@ function ConstrucaoTab() {
     fetch('/api/building-queue/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wineMinHours }),
+      body: JSON.stringify({
+        activeHours: { start: hoursStart, end: hoursEnd },
+        resourceBuffer: buffer,
+        wineMinHours,
+      }),
     })
       .then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) })
       .catch(() => {})
@@ -172,6 +182,63 @@ function ConstrucaoTab() {
 
   return (
     <div className="grid gap-4 max-w-lg">
+      {/* Active Hours */}
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-clock text-indigo-400" /> {t('queue_active_hours_title')}
+          </p>
+          <p className="text-xs text-slate-400 mb-4">{t('queue_active_hours_hint')}</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm text-slate-600">{t('queue_active_hours_from')}</span>
+            <input
+              type="number" min={0} max={23} value={hoursStart}
+              onChange={e => setHoursStart(Math.min(23, Math.max(0, Number(e.target.value))))}
+              className="w-16 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center bg-white font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <span className="text-sm text-slate-400">h</span>
+            <span className="text-sm text-slate-600">{t('queue_active_hours_to')}</span>
+            <input
+              type="number" min={1} max={24} value={hoursEnd}
+              onChange={e => setHoursEnd(Math.min(24, Math.max(1, Number(e.target.value))))}
+              className="w-16 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center bg-white font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <span className="text-sm text-slate-400">h</span>
+            <span className="text-xs text-slate-400">(0–24)</span>
+          </div>
+        </div>
+      </Card>
+
+      {/* Resource Buffer */}
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-shield-halved text-amber-400" /> {t('queue_buffer_title')}
+          </p>
+          <p className="text-xs text-slate-400 mb-4">{t('queue_buffer_hint')}</p>
+          <div className="space-y-2.5">
+            {MATERIALS.map((m, i) => (
+              <div key={m.en} className="flex items-center gap-3">
+                <span className="flex items-center gap-1.5 w-28 text-sm font-medium text-slate-600 shrink-0">
+                  <i className={`fa-solid ${m.icon} ${m.color}`} />
+                  {m[lang]}
+                </span>
+                <input
+                  type="number" min={0} step={1000} value={buffer[i]}
+                  onChange={e => {
+                    const next = [...buffer]
+                    next[i] = Math.max(0, Number(e.target.value))
+                    setBuffer(next)
+                  }}
+                  className="w-32 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-right bg-white font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Wine Minimum */}
       <Card>
         <div className="px-5 py-4">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">

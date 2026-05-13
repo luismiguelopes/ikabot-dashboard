@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtTs, fmtDuration } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
@@ -154,18 +154,12 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   const t    = useT()
   const lang = useLang()
   const now  = useLiveClock()
-  const [activeTab, setActiveTab]       = useState<'queue' | 'template' | 'settings'>('queue')
+  const [activeTab, setActiveTab]       = useState<'queue' | 'template'>('queue')
   const [queue, setQueue]               = useState<BuildingQueue | null>(null)
   const [selCity, setSelCity]           = useState('')
   const [targetLevels, setTargetLevels] = useState<Record<string, number>>({})
   const [costsData, setCostsData]       = useState<BuildingCostsData | null>(null)
   const [refreshMsg, setRefreshMsg]     = useState('')
-  const [settingsHoursStart, setSettingsHoursStart] = useState(0)
-  const [settingsHoursEnd,   setSettingsHoursEnd]   = useState(24)
-  const [settingsBuffer,     setSettingsBuffer]     = useState([0, 0, 0, 0, 0])
-  const [settingsSaved,      setSettingsSaved]      = useState(false)
-  const [settingsSaving,     setSettingsSaving]     = useState(false)
-  const settingsInitRef = useRef(false)
 
   const fetchQueue = () =>
     fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
@@ -220,36 +214,6 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
     }).then(fetchQueue)
   }
 
-  useEffect(() => {
-    if (!queue || settingsInitRef.current) return
-    settingsInitRef.current = true
-    if (queue.activeHours) {
-      setSettingsHoursStart(queue.activeHours.start)
-      setSettingsHoursEnd(queue.activeHours.end)
-    }
-    if (queue.resourceBuffer?.length === 5) {
-      setSettingsBuffer(queue.resourceBuffer)
-    }
-  }, [queue])
-
-  const handleSaveSettings = () => {
-    setSettingsSaving(true)
-    fetch('/api/building-queue/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        activeHours: { start: settingsHoursStart, end: settingsHoursEnd },
-        resourceBuffer: settingsBuffer,
-      }),
-    })
-      .then(() => {
-        setSettingsSaved(true)
-        setTimeout(() => setSettingsSaved(false), 3000)
-        fetchQueue()
-      })
-      .catch(() => {})
-      .finally(() => setSettingsSaving(false))
-  }
 
   const empireData = data?.empireData || {}
   const cityNames  = Object.keys(empireData).sort()
@@ -382,7 +346,7 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
 
       {/* Sub-tab pills */}
       <div className="flex gap-2">
-        {(['queue', 'template', 'settings'] as const).map(key => (
+        {(['queue', 'template'] as const).map(key => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -392,8 +356,8 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
             }`}
           >
-            <i className={`fa-solid ${key === 'queue' ? 'fa-list-check' : key === 'template' ? 'fa-layer-group' : 'fa-sliders'}`} />
-            {key === 'queue' ? t('queue_panel') : key === 'template' ? t('template_tab') : t('queue_settings_tab')}
+            <i className={`fa-solid ${key === 'queue' ? 'fa-list-check' : 'fa-layer-group'}`} />
+            {key === 'queue' ? t('queue_panel') : t('template_tab')}
           </button>
         ))}
       </div>
@@ -402,82 +366,6 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
         <ConstructionTemplate data={data} queue={queue} costsData={costsData} />
       )}
 
-      {activeTab === 'settings' && (
-        <Card>
-          <div className="px-5 py-5 space-y-7">
-            {/* Active Hours */}
-            <div>
-              <p className="text-sm font-semibold text-slate-700 mb-1 flex items-center gap-2">
-                <i className="fa-solid fa-clock text-indigo-400" />
-                {t('queue_active_hours_title')}
-              </p>
-              <p className="text-xs text-slate-400 mb-3">{t('queue_active_hours_hint')}</p>
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-sm text-slate-600">{t('queue_active_hours_from')}</span>
-                <input
-                  type="number" min={0} max={23} value={settingsHoursStart}
-                  onChange={e => setSettingsHoursStart(Math.min(23, Math.max(0, Number(e.target.value))))}
-                  className="w-16 border border-slate-300 rounded-lg px-2 py-1.5 text-sm text-center font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                />
-                <span className="text-sm text-slate-500">h</span>
-                <span className="text-sm text-slate-600">{t('queue_active_hours_to')}</span>
-                <input
-                  type="number" min={1} max={24} value={settingsHoursEnd}
-                  onChange={e => setSettingsHoursEnd(Math.min(24, Math.max(1, Number(e.target.value))))}
-                  className="w-16 border border-slate-300 rounded-lg px-2 py-1.5 text-sm text-center font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                />
-                <span className="text-sm text-slate-500">h</span>
-                <span className="text-xs text-slate-400 ml-1">(0 = midnight, 24 = all day)</span>
-              </div>
-            </div>
-
-            {/* Resource Buffer */}
-            <div>
-              <p className="text-sm font-semibold text-slate-700 mb-1 flex items-center gap-2">
-                <i className="fa-solid fa-shield-halved text-amber-400" />
-                {t('queue_buffer_title')}
-              </p>
-              <p className="text-xs text-slate-400 mb-3">{t('queue_buffer_hint')}</p>
-              <div className="space-y-2.5">
-                {MATERIALS.map((m, i) => (
-                  <div key={m.en} className="flex items-center gap-3">
-                    <span className="flex items-center gap-1.5 w-28 text-sm font-medium text-slate-600 shrink-0">
-                      <i className={`fa-solid ${m.icon} ${m.color}`} />
-                      {m[lang as 'pt' | 'en']}
-                    </span>
-                    <input
-                      type="number" min={0} step={1000} value={settingsBuffer[i]}
-                      onChange={e => {
-                        const next = [...settingsBuffer]
-                        next[i] = Math.max(0, Number(e.target.value))
-                        setSettingsBuffer(next)
-                      }}
-                      className="w-32 border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Save */}
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={handleSaveSettings}
-                disabled={settingsSaving}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
-              >
-                {settingsSaving && <i className="fa-solid fa-spinner animate-spin text-xs" />}
-                {t('queue_settings_save')}
-              </button>
-              {settingsSaved && (
-                <span className="text-sm text-emerald-600 font-medium">
-                  {t('queue_settings_saved')}
-                </span>
-              )}
-            </div>
-          </div>
-        </Card>
-      )}
 
       {activeTab === 'queue' && <>
       {/* Queue budget */}
