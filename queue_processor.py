@@ -463,7 +463,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
 
     available = city_data.get("availableResources", [0] * 5)
     buf = _get_resource_buffer()
-    missing = [max(0, cost[i] + buf[i] - available[i]) for i in range(5)]
+    missing = [max(0, cost[i] + (buf[i] if cost[i] > 0 else 0) - available[i]) for i in range(5)]
     if all(m == 0 for m in missing):
         return False
 
@@ -715,7 +715,7 @@ def process_building_queue(session, ids, cities):
                 cost_check = _get_upgrade_cost_from_cache(city_name, next_item["building"], target_b["level"])
                 if cost_check is not None:
                     avail_check = city_data.get("availableResources", [0] * 5)
-                    if any(avail_check[i] - cost_check[i] < buf[i] for i in range(5)):
+                    if any(cost_check[i] > 0 and avail_check[i] - cost_check[i] < buf[i] for i in range(5)):
                         need_transport = True
 
         if need_transport:
