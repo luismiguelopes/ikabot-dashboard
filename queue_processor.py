@@ -141,6 +141,15 @@ def _get_resource_buffer():
     return [0, 0, 0, 0, 0]
 
 
+def _get_wine_min_hours():
+    """Return minimum wine-runout hours required before acting on a city. 0 = disabled."""
+    settings = _load_queue_settings()
+    try:
+        return max(0, int(settings.get("wineMinHours", 0)))
+    except (ValueError, TypeError):
+        return 0
+
+
 def _in_active_hours():
     """Return True if current local hour is within the active hours window."""
     start, end = _get_active_hours()
@@ -682,6 +691,16 @@ def process_building_queue(session, ids, cities):
                     changed = True
             print(lm("queue_city_busy", city=city_name))
             continue
+
+        # ── Wine buffer check ─────────────────────────────────────────────────
+        wine_min_hours = _get_wine_min_hours()
+        if wine_min_hours > 0:
+            all_res = _load_resources_json()
+            wine_runs_out = all_res.get(city_name, {}).get("wineRunsOutIn", -1)
+            if wine_runs_out >= 0 and wine_runs_out < wine_min_hours * 3600:
+                print(lm("queue_wine_low", city=city_name,
+                          hours=round(wine_runs_out / 3600, 1), min_hours=wine_min_hours))
+                continue
 
         # ── Try to start the next item ────────────────────────────────────────
         next_item = items[0]

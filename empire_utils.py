@@ -281,6 +281,10 @@ _LM = {
         "en": "      -> Transport dispatched — refreshing movements for ETA tracking.",
         "pt": "      -> Transporte enviado — a actualizar movimentos para rastreio de ETA.",
     },
+    "queue_wine_low": {
+        "en": "      -> Queue [{city}]: wine runs out in {hours}h (below {min_hours}h minimum) — skipping city.",
+        "pt": "      -> Fila [{city}]: vinho esgota em {hours}h (abaixo do mínimo de {min_hours}h) — a saltar cidade.",
+    },
 }
 
 
