@@ -244,8 +244,6 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     queue_active_hours_hint:'Outside this window the queue will not start constructions or dispatch transports.',
     queue_buffer_title:'Resource Buffer',
     queue_buffer_hint:'Minimum reserve per city. The queue will not build or dispatch if it would leave the city below this amount.',
-    queue_wine_min_title:'Wine Minimum',
-    queue_wine_min_hint:'Minimum hours of wine remaining before the queue acts on a city. Set 0 to disable. Recommended: 4–8h.',
     queue_settings_save:'Save', queue_settings_saved:'✓ Saved',
   },
   pt: {
@@ -491,8 +489,6 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     queue_active_hours_hint:'Fora desta janela a queue não inicia construções nem despacha transportes.',
     queue_buffer_title:'Buffer de Recursos',
     queue_buffer_hint:'Reserva mínima por cidade. A queue não constrói nem transporta se deixar a cidade abaixo deste valor.',
-    queue_wine_min_title:'Mínimo de Vinho',
-    queue_wine_min_hint:'Horas mínimas de vinho em reserva antes de a queue actuar numa cidade. 0 = desactivado. Recomendado: 4–8h.',
     queue_settings_save:'Guardar', queue_settings_saved:'✓ Guardado',
   },
 }

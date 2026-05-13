@@ -142,11 +142,10 @@ function AlertasTab({ thresholds, onSaveThresholds }: {
 function ConstrucaoTab() {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
-  const [hoursStart,   setHoursStart]   = useState(0)
-  const [hoursEnd,     setHoursEnd]     = useState(24)
-  const [buffer,       setBuffer]       = useState([0, 0, 0, 0, 0])
-  const [wineMinHours, setWineMinHours] = useState(0)
-  const [saved,        setSaved]        = useState(false)
+  const [hoursStart, setHoursStart] = useState(0)
+  const [hoursEnd,   setHoursEnd]   = useState(24)
+  const [buffer,     setBuffer]     = useState([0, 0, 0, 0, 0])
+  const [saved,      setSaved]      = useState(false)
   const [saving,       setSaving]       = useState(false)
   const [loaded,       setLoaded]       = useState(false)
 
@@ -156,7 +155,6 @@ function ConstrucaoTab() {
       .then(d => {
         if (d.activeHours) { setHoursStart(d.activeHours.start); setHoursEnd(d.activeHours.end) }
         if (d.resourceBuffer?.length === 5) setBuffer(d.resourceBuffer)
-        if (d.wineMinHours != null) setWineMinHours(d.wineMinHours)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
@@ -170,7 +168,6 @@ function ConstrucaoTab() {
       body: JSON.stringify({
         activeHours: { start: hoursStart, end: hoursEnd },
         resourceBuffer: buffer,
-        wineMinHours,
       }),
     })
       .then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) })
@@ -234,30 +231,6 @@ function ConstrucaoTab() {
                 />
               </div>
             ))}
-          </div>
-        </div>
-      </Card>
-
-      {/* Wine Minimum */}
-      <Card>
-        <div className="px-5 py-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
-            <i className="fa-solid fa-wine-bottle text-red-400" /> {t('queue_wine_min_title')}
-          </p>
-          <p className="text-xs text-slate-400 mb-4">{t('queue_wine_min_hint')}</p>
-          <div className="flex items-center gap-3">
-            <input
-              type="number" min={0} max={72} value={wineMinHours}
-              onChange={e => setWineMinHours(Math.max(0, Math.min(72, Number(e.target.value))))}
-              className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-            <span className="text-sm text-slate-400">h</span>
-            {wineMinHours > 0 && (
-              <span className="text-xs text-red-500 font-medium flex items-center gap-1">
-                <i className="fa-solid fa-triangle-exclamation" />
-                {`< ${wineMinHours}h → skip`}
-              </span>
-            )}
           </div>
         </div>
       </Card>

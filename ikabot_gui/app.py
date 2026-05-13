@@ -428,7 +428,7 @@ def _load_queue_settings():
         except Exception:
             pass
     q = _load_building_queue()
-    return {k: q[k] for k in ("activeHours", "resourceBuffer", "wineMinHours") if k in q}
+    return {k: q[k] for k in ("activeHours", "resourceBuffer") if k in q}
 
 
 def _save_queue_settings(data):
@@ -537,11 +537,6 @@ def api_building_queue_settings():
                 settings["resourceBuffer"] = [max(0, int(b)) for b in buf]
             except (ValueError, TypeError):
                 pass
-    if "wineMinHours" in body:
-        try:
-            settings["wineMinHours"] = max(0, int(body["wineMinHours"]))
-        except (ValueError, TypeError):
-            pass
     _save_queue_settings(settings)
     return jsonify({"ok": True})
 

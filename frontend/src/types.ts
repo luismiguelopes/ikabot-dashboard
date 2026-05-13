@@ -95,7 +95,6 @@ export interface BuildingQueue {
   enabled?: boolean
   activeHours?: { start: number; end: number }
   resourceBuffer?: number[]
-  wineMinHours?: number
 }
 
 export interface BuildingCostEntry {
