@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useT, useLang } from '../i18n'
 import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
 import { ALERT_DEFAULTS } from '../constants'
@@ -139,6 +139,77 @@ function AlertasTab({ thresholds, onSaveThresholds }: {
   )
 }
 
+function ConstrucaoTab() {
+  const t = useT()
+  const [wineMinHours, setWineMinHours] = useState(0)
+  const [saved,        setSaved]        = useState(false)
+  const [saving,       setSaving]       = useState(false)
+  const [loaded,       setLoaded]       = useState(false)
+
+  useEffect(() => {
+    fetch('/api/building-queue')
+      .then(r => r.json())
+      .then(d => {
+        if (d.wineMinHours != null) setWineMinHours(d.wineMinHours)
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
+  }, [])
+
+  const handleSave = () => {
+    setSaving(true)
+    fetch('/api/building-queue/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wineMinHours }),
+    })
+      .then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) })
+      .catch(() => {})
+      .finally(() => setSaving(false))
+  }
+
+  if (!loaded) return <div className="text-sm text-slate-400 mt-4">{t('loading')}</div>
+
+  return (
+    <div className="grid gap-4 max-w-lg">
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-wine-bottle text-red-400" /> {t('queue_wine_min_title')}
+          </p>
+          <p className="text-xs text-slate-400 mb-4">{t('queue_wine_min_hint')}</p>
+          <div className="flex items-center gap-3">
+            <input
+              type="number" min={0} max={72} value={wineMinHours}
+              onChange={e => setWineMinHours(Math.max(0, Math.min(72, Number(e.target.value))))}
+              className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            <span className="text-sm text-slate-400">h</span>
+            {wineMinHours > 0 && (
+              <span className="text-xs text-red-500 font-medium flex items-center gap-1">
+                <i className="fa-solid fa-triangle-exclamation" />
+                {`< ${wineMinHours}h → skip`}
+              </span>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+        >
+          {saving && <i className="fa-solid fa-spinner animate-spin text-xs" />}
+          {t('save')}
+        </button>
+        {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('queue_settings_saved').replace('✓ ', '')}</span>}
+      </div>
+    </div>
+  )
+}
+
 function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   notifEnabled: boolean
   onToggleNotif: (v: boolean) => void
@@ -257,9 +328,10 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
   }
 
   const tabs = [
-    { key: 'geral',        label: t('settings_tab_general'),       icon: 'fa-sliders'    },
-    { key: 'alertas',      label: t('settings_tab_alerts'),        icon: 'fa-bell'       },
-    { key: 'notificacoes', label: t('settings_tab_notifications'), icon: 'fa-paper-plane' },
+    { key: 'geral',        label: t('settings_tab_general'),       icon: 'fa-sliders'      },
+    { key: 'alertas',      label: t('settings_tab_alerts'),        icon: 'fa-bell'         },
+    { key: 'construcao',   label: t('nav_construction'),           icon: 'fa-hammer'       },
+    { key: 'notificacoes', label: t('settings_tab_notifications'), icon: 'fa-paper-plane'  },
   ]
 
   return (
@@ -284,6 +356,7 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
 
       {tab === 'geral'        && <GeralTab        toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={onSaveDefaultTab} />}
       {tab === 'alertas'      && <AlertasTab      thresholds={thresholds} onSaveThresholds={onSaveThresholds} />}
+      {tab === 'construcao'   && <ConstrucaoTab />}
       {tab === 'notificacoes' && <NotificacoesTab notifEnabled={notifEnabled} onToggleNotif={handleToggleNotif} />}
     </div>
   )

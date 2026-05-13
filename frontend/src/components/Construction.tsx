@@ -160,12 +160,11 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   const [targetLevels, setTargetLevels] = useState<Record<string, number>>({})
   const [costsData, setCostsData]       = useState<BuildingCostsData | null>(null)
   const [refreshMsg, setRefreshMsg]     = useState('')
-  const [settingsHoursStart,  setSettingsHoursStart]  = useState(0)
-  const [settingsHoursEnd,    setSettingsHoursEnd]    = useState(24)
-  const [settingsBuffer,      setSettingsBuffer]      = useState([0, 0, 0, 0, 0])
-  const [settingsWineMinHours, setSettingsWineMinHours] = useState(0)
-  const [settingsSaved,       setSettingsSaved]       = useState(false)
-  const [settingsSaving,      setSettingsSaving]      = useState(false)
+  const [settingsHoursStart, setSettingsHoursStart] = useState(0)
+  const [settingsHoursEnd,   setSettingsHoursEnd]   = useState(24)
+  const [settingsBuffer,     setSettingsBuffer]     = useState([0, 0, 0, 0, 0])
+  const [settingsSaved,      setSettingsSaved]      = useState(false)
+  const [settingsSaving,     setSettingsSaving]     = useState(false)
   const settingsInitRef = useRef(false)
 
   const fetchQueue = () =>
@@ -231,9 +230,6 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
     if (queue.resourceBuffer?.length === 5) {
       setSettingsBuffer(queue.resourceBuffer)
     }
-    if (queue.wineMinHours != null) {
-      setSettingsWineMinHours(queue.wineMinHours)
-    }
   }, [queue])
 
   const handleSaveSettings = () => {
@@ -244,7 +240,6 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
       body: JSON.stringify({
         activeHours: { start: settingsHoursStart, end: settingsHoursEnd },
         resourceBuffer: settingsBuffer,
-        wineMinHours: settingsWineMinHours,
       }),
     })
       .then(() => {
@@ -461,29 +456,6 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
                     />
                   </div>
                 ))}
-              </div>
-            </div>
-
-            {/* Wine Minimum */}
-            <div>
-              <p className="text-sm font-semibold text-slate-700 mb-1 flex items-center gap-2">
-                <i className="fa-solid fa-wine-bottle text-red-400" />
-                {t('queue_wine_min_title')}
-              </p>
-              <p className="text-xs text-slate-400 mb-3">{t('queue_wine_min_hint')}</p>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number" min={0} max={72} value={settingsWineMinHours}
-                  onChange={e => setSettingsWineMinHours(Math.max(0, Math.min(72, Number(e.target.value))))}
-                  className="w-20 border border-slate-300 rounded-lg px-3 py-1.5 text-sm text-center font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                />
-                <span className="text-sm text-slate-500">h</span>
-                {settingsWineMinHours > 0 && (
-                  <span className="text-xs text-red-500 font-medium flex items-center gap-1">
-                    <i className="fa-solid fa-triangle-exclamation" />
-                    {`< ${settingsWineMinHours}h → skip`}
-                  </span>
-                )}
               </div>
             </div>
 
