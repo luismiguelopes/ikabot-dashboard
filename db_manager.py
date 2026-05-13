@@ -132,6 +132,54 @@ def init_db():
     _migrate_queue()
 
 
+# ── Empire snapshot ───────────────────────────────────────────────────────────
+
+def save_empire_snapshot(written_at, empire_data, resources_data, status_summary):
+    """Persist current empire state to SQLite so Flask can read without file mtime hacks."""
+    init_db()
+    conn = _connect()
+    try:
+        with conn:
+            for key, value in (
+                ("snapshot_written_at", str(written_at)),
+                ("empire_json",         json.dumps(empire_data)),
+                ("resources_json",      json.dumps(resources_data)),
+                ("status_json",         json.dumps(status_summary)),
+            ):
+                conn.execute(
+                    "INSERT OR REPLACE INTO empire_meta (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+    finally:
+        conn.close()
+
+
+def get_empire_snapshot():
+    """Return (written_at, empire_data, resources_data, status_summary) or None if not found."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM empire_meta WHERE key IN "
+            "('snapshot_written_at','empire_json','resources_json','status_json')"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    kv = {r["key"]: r["value"] for r in rows}
+    if len(kv) < 4:
+        return None
+    try:
+        return (
+            int(kv["snapshot_written_at"]),
+            json.loads(kv["empire_json"]),
+            json.loads(kv["resources_json"]),
+            json.loads(kv["status_json"]),
+        )
+    except Exception:
+        return None
+
+
 # ── History ───────────────────────────────────────────────────────────────────
 
 def insert_history(ts, status_summary, resources_data):

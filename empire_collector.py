@@ -14,7 +14,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm
+from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, with_retry
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -42,7 +42,7 @@ def _collect_movements(session, city_id):
                 city_id, actionRequest
             )
         )
-        resp = session.post(url)
+        resp = with_retry(lambda: session.post(url), attempts=3, delay=30, label="movements")
         data = json.loads(resp, strict=False)
         movements_raw = data[1][1][2]["viewScriptParams"]["militaryAndFleetMovements"]
         time_now = int(float(data[0][1]["time"]))
@@ -129,13 +129,20 @@ def collect_city_data(session, ids, cities):
     for id in ids:
         time.sleep(random.randint(5, 15))
 
-        html = session.get("view=city&cityId={}".format(id))
-        city_data = getCity(html)
+        try:
+            html      = with_retry(lambda: session.get("view=city&cityId={}".format(id)),
+                                   attempts=3, delay=30, label="city {}".format(id))
+            city_data = getCity(html)
 
-        time.sleep(random.randint(2, 6))
-        data = session.get("view=updateGlobalData&ajax=1", noIndex=True)
-        json_data = json.loads(data, strict=False)
-        json_data = json_data[0][1]["headerData"]
+            time.sleep(random.randint(2, 6))
+            raw       = with_retry(lambda: session.get("view=updateGlobalData&ajax=1", noIndex=True),
+                                   attempts=3, delay=30, label="globalData {}".format(id))
+            json_data = json.loads(raw, strict=False)[0][1]["headerData"]
+        except Exception:
+            import traceback
+            print("[retry] city {} failed after 3 attempts — skipping:\n{}".format(
+                id, traceback.format_exc()))
+            continue
 
         if json_data["relatedCity"]["owncity"] != 1:
             continue
@@ -271,7 +278,8 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
 
     ts = int(time.time())
     try:
-        from db_manager import insert_history
+        from db_manager import save_empire_snapshot, insert_history
+        save_empire_snapshot(ts, formatted_empire, resources_data, status_summary)
         insert_history(ts, status_summary, resources_data)
     except Exception:
         import traceback

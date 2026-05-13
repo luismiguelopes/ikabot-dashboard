@@ -288,3 +288,19 @@ def lm(key, **kwargs):
     """Return log message in current LOG_LANG (fallback to English)."""
     msg = _LM[key].get(LOG_LANG, _LM[key]["en"])
     return msg.format(**kwargs) if kwargs else msg
+
+
+def with_retry(fn, attempts=3, delay=30, label=""):
+    """Call fn(), retrying up to `attempts` times on exception with `delay` s between tries."""
+    import time as _time
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if i < attempts - 1:
+                print("[retry] {}: {} — retrying in {}s ({}/{})".format(
+                    label, exc, delay, i + 1, attempts - 1))
+                _time.sleep(delay)
+    raise last_exc

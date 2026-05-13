@@ -51,24 +51,34 @@ def get_last_modified_ts(filepath):
 
 
 def load_all_data():
-    for path, name in [
-        (EMPIRE_JSON_PATH,         "empire.json"),
-        (STATUS_SUMMARY_JSON_PATH, "statusSummary.json"),
-        (RESOURCES_JSON_PATH,      "resources.json"),
-    ]:
-        if not os.path.exists(path):
-            return None, f"Ficheiro {name} não encontrado!"
+    # Try SQLite snapshot first (written_at is exact, no mtime fragility)
+    snapshot = None
+    if _db:
+        try:
+            snapshot = _db.get_empire_snapshot()
+        except Exception:
+            pass
 
-    with open(EMPIRE_JSON_PATH) as f:
-        empire_data = json.load(f)
-    with open(STATUS_SUMMARY_JSON_PATH) as f:
-        status_summary = json.load(f)
-    with open(RESOURCES_JSON_PATH) as f:
-        resources_data = json.load(f)
+    if snapshot:
+        written_at, empire_data, resources_data, status_summary = snapshot
+    else:
+        # JSON fallback
+        for path, name in [
+            (EMPIRE_JSON_PATH,         "empire.json"),
+            (STATUS_SUMMARY_JSON_PATH, "statusSummary.json"),
+            (RESOURCES_JSON_PATH,      "resources.json"),
+        ]:
+            if not os.path.exists(path):
+                return None, f"Ficheiro {name} não encontrado!"
+        with open(EMPIRE_JSON_PATH) as f:
+            empire_data = json.load(f)
+        with open(STATUS_SUMMARY_JSON_PATH) as f:
+            status_summary = json.load(f)
+        with open(RESOURCES_JSON_PATH) as f:
+            resources_data = json.load(f)
+        written_at = get_last_modified_ts(RESOURCES_JSON_PATH)
 
-    # Patch empire_data with inProgress from building_queue.json so constructions
-    # started by the queue processor are visible before the next full cycle writes
-    # empire.json (which only happens hourly).
+    # Patch empire_data with inProgress so queue constructions are visible immediately
     now_ts = time.time()
     if os.path.exists(BUILDING_QUEUE_JSON_PATH):
         try:
@@ -89,7 +99,8 @@ def load_all_data():
         except Exception:
             pass
 
-    elapsed = int(time.time() - get_last_modified_ts(RESOURCES_JSON_PATH))
+    # Adjust wineRunsOutIn using exact written_at (not fragile mtime)
+    elapsed = int(now_ts - written_at)
     for city_data in resources_data.values():
         t = city_data.get('wineRunsOutIn')
         if t is not None and t != -1:
@@ -111,12 +122,13 @@ def load_all_data():
         except Exception:
             pass
 
+    last_updated_ts = written_at if snapshot else get_last_modified_ts(EMPIRE_JSON_PATH)
     return {
         "empireData":    empire_data,
         "statusSummary": status_summary,
         "resourcesData": resources_data,
-        "lastUpdated":   get_last_modified_date(EMPIRE_JSON_PATH),
-        "lastUpdatedTs": get_last_modified_ts(EMPIRE_JSON_PATH),
+        "lastUpdated":   time.strftime("%d/%m/%Y %H:%M:%S", time.localtime(last_updated_ts)),
+        "lastUpdatedTs": last_updated_ts,
         "nextCycleAt":   next_cycle_at,
         "lastAlive":     last_alive,
     }, None
