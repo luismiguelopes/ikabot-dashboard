@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
+    environment:
+      TZ: Europe/Lisbon
     env_file:
       - .env
     volumes:
@@ -33,6 +35,8 @@ services:
     image: python:3.12-slim
     container_name: ikabot-gui
     restart: unless-stopped
+    environment:
+      TZ: Europe/Lisbon
     volumes:
       # Pega na pasta inteira ./ikabot_gui que está ao lado do compose e mete no contentor
       - ./ikabot_gui:/gui
@@ -47,6 +51,8 @@ services:
     image: node:20-alpine
     container_name: ikabot-frontend
     restart: unless-stopped
+    environment:
+      TZ: Europe/Lisbon
     volumes:
       - ./frontend:/app
     working_dir: /app
