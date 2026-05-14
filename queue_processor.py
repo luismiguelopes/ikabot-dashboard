@@ -657,10 +657,11 @@ def process_building_queue(session, ids, cities):
                 except Exception:
                     pass
                 if items and items[0]["building"] == ip["building"]:
-                    b_done = (city_data["position"][ip_pos]
-                              if ip_pos is not None and ip_pos < len(city_data["position"])
-                              else next((b for b in city_data["position"] if b["name"] == items[0]["building"]), None))
-                    if b_done and b_done.get("level", 0) >= items[0]["targetLevel"]:
+                    still_below = any(
+                        b["name"] == items[0]["building"] and b["level"] < items[0]["targetLevel"]
+                        for b in city_data["position"]
+                    )
+                    if not still_below:
                         items.pop(0)
                 del in_progress[city_name]
                 changed = True
@@ -687,22 +688,23 @@ def process_building_queue(session, ids, cities):
 
         # ── Try to start the next item ────────────────────────────────────────
         next_item = items[0]
-        target_b = next((b for b in city_data["position"] if b["name"] == next_item["building"]), None)
+        candidates = [
+            b for b in city_data["position"]
+            if b["name"] == next_item["building"]
+            and not b.get("isMaxLevel")
+            and b["level"] < next_item["targetLevel"]
+        ]
+        target_b = min(candidates, key=lambda b: b["level"]) if candidates else None
 
         if target_b is None:
-            print(lm("queue_building_not_found", city=city_name, building=next_item["building"]))
-            items.pop(0)
-            changed = True
-            continue
-
-        if target_b.get("isMaxLevel"):
-            print(lm("queue_max_level", city=city_name, building=next_item["building"]))
-            items.pop(0)
-            changed = True
-            continue
-
-        if target_b["level"] >= next_item["targetLevel"]:
-            print(lm("queue_target_reached", city=city_name, building=next_item["building"], level=next_item["targetLevel"]))
+            # No candidate: building absent, already at/above target, or all instances at max level
+            all_instances = [b for b in city_data["position"] if b["name"] == next_item["building"]]
+            if not all_instances:
+                print(lm("queue_building_not_found", city=city_name, building=next_item["building"]))
+            elif all(b.get("isMaxLevel") for b in all_instances):
+                print(lm("queue_max_level", city=city_name, building=next_item["building"]))
+            else:
+                print(lm("queue_target_reached", city=city_name, building=next_item["building"], level=next_item["targetLevel"]))
             items.pop(0)
             changed = True
             continue
