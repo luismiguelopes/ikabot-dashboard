@@ -12,7 +12,11 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL, FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm
+from empire_utils import (
+    LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL,
+    SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
+    FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm,
+)
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_update_world_scan, collect_world_scan
@@ -65,7 +69,17 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 except Exception:
                     pass
                 ids = None
-            do_full = ids is None or (now >= last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter)
+
+            in_scan_hours = (
+                SCAN_ACTIVE_HOURS_START == 0 and SCAN_ACTIVE_HOURS_END == 24
+            ) or (SCAN_ACTIVE_HOURS_START <= time.localtime().tm_hour < SCAN_ACTIVE_HOURS_END)
+
+            if in_scan_hours:
+                effective_interval = UPDATE_INTERVAL + next_full_jitter
+            else:
+                effective_interval = SCAN_NIGHT_INTERVAL + random.randint(-600, 600)
+
+            do_full = ids is None or (now >= last_full_cycle_time + effective_interval)
 
             # ── Queue-only wake-up ───────────────────────────────────────────
             if not do_full:
@@ -84,7 +98,14 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 continue
 
             # ── Full empire data cycle ───────────────────────────────────────
+            if not in_scan_hours:
+                _night_mins = round(effective_interval / 60)
+                print(lm("scan_outside_hours",
+                          start=SCAN_ACTIVE_HOURS_START, end=SCAN_ACTIVE_HOURS_END,
+                          mins=_night_mins))
+
             print(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
+            time.sleep(random.randint(3, 10))
             (ids, cities) = getIdsOfCities(session)
 
             status_summary, formatted_empire, resources_data = collect_city_data(session, ids, cities)
@@ -122,4 +143,4 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
         except Exception:
             import traceback
             print(lm("cycle_error"), traceback.format_exc())
-            time.sleep(180)
+            time.sleep(random.randint(120, 300))

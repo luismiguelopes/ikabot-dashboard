@@ -50,6 +50,8 @@ def _parse_active_hours(value):
 
 
 ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(os.getenv("QUEUE_ACTIVE_HOURS"))
+SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END = _parse_active_hours(os.getenv("SCAN_ACTIVE_HOURS", ""))
+SCAN_NIGHT_INTERVAL = _parse_duration(os.getenv("SCAN_NIGHT_INTERVAL", "4h"), 4 * 3600)
 WINE_CRITICAL_NOTIFY_SECS = _parse_duration(os.getenv("WINE_CRITICAL_NOTIFY_HOURS", "2h"), 7200)
 
 _LM = {
@@ -280,6 +282,10 @@ _LM = {
     "queue_movements_refresh": {
         "en": "      -> Transport dispatched — refreshing movements for ETA tracking.",
         "pt": "      -> Transporte enviado — a actualizar movimentos para rastreio de ETA.",
+    },
+    "scan_outside_hours": {
+        "en": "[+] Outside scan hours ({start}h–{end}h). Sleeping {mins} min (night interval).",
+        "pt": "[+] Fora das horas de scan ({start}h–{end}h). A dormir {mins} min (intervalo nocturno).",
     },
 }
 
