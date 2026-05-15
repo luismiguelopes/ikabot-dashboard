@@ -122,6 +122,17 @@ def load_all_data():
         except Exception:
             pass
 
+    if last_alive:
+        try:
+            import telegram_notifier as _tg
+            offline_min = int((time.time() - last_alive) / 60)
+            if offline_min > 90:
+                _tg.notify_bot_offline(offline_min)
+            else:
+                _tg.clear_bot_offline()
+        except Exception:
+            pass
+
     last_updated_ts = written_at if snapshot else get_last_modified_ts(EMPIRE_JSON_PATH)
     return {
         "empireData":    empire_data,
@@ -577,6 +588,18 @@ def api_building_queue_reorder():
 
 
 @app.route("/api/stream")
+@app.route("/api/health")
+def api_health():
+    db_ok = False
+    if _db:
+        try:
+            _db.init_db()
+            db_ok = True
+        except Exception:
+            pass
+    return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok})
+
+
 def api_stream():
     """SSE endpoint — emits 'update' whenever any data file on the shared volume changes."""
     watched = [

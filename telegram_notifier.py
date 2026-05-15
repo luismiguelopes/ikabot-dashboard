@@ -9,8 +9,9 @@ from urllib.error import URLError
 _BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 _CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Per-run dedup: avoid re-notifying for the same city until condition clears
+# Per-run dedup: avoid re-notifying for the same condition until it clears
 _wine_critical_notified: set = set()
+_offline_notified: bool = False
 
 
 def _send(text: str) -> None:
@@ -47,3 +48,16 @@ def notify_wine_critical(city: str, hours_left: float) -> None:
 
 def clear_wine_critical(city: str) -> None:
     _wine_critical_notified.discard(city)
+
+
+def notify_bot_offline(minutes: int) -> None:
+    global _offline_notified
+    if _offline_notified:
+        return
+    _offline_notified = True
+    _send(f"🔴 <b>Bot offline</b> — sem actividade há {minutes} minutos")
+
+
+def clear_bot_offline() -> None:
+    global _offline_notified
+    _offline_notified = False

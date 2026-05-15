@@ -296,14 +296,18 @@ def lm(key, **kwargs):
     return msg.format(**kwargs) if kwargs else msg
 
 
-def with_retry(fn, attempts=3, delay=30, label=""):
-    """Call fn(), retrying up to `attempts` times on exception with `delay` s between tries."""
+def with_retry(fn, attempts=3, delay=30, label="", retryable=None):
+    """Call fn(), retrying up to `attempts` times on exception with `delay` s between tries.
+    `retryable`: tuple of exception types to retry (default None = all exceptions).
+    Non-retryable exceptions are re-raised immediately without consuming attempts."""
     import time as _time
     last_exc = None
     for i in range(attempts):
         try:
             return fn()
         except Exception as exc:
+            if retryable is not None and not isinstance(exc, retryable):
+                raise
             last_exc = exc
             if i < attempts - 1:
                 print("[retry] {}: {} — retrying in {}s ({}/{})".format(

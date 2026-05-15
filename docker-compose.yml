@@ -37,10 +37,13 @@ services:
     restart: unless-stopped
     environment:
       TZ: Europe/Lisbon
+    env_file:
+      - .env
     volumes:
       # Pega na pasta inteira ./ikabot_gui que está ao lado do compose e mete no contentor
       - ./ikabot_gui:/gui
       - ./db_manager.py:/gui/db_manager.py
+      - ./telegram_notifier.py:/gui/telegram_notifier.py
       # A mesma Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
     working_dir: /gui
