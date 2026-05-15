@@ -1,39 +1,52 @@
 # Ikabot Docker Setup
 
-A Dockerized setup for [ikabot](https://github.com/ikabot-collective/ikabot) — an automation bot for the browser game Ikariam — extended with a custom empire data collector and a web dashboard.
+A Dockerized setup for [ikabot](https://github.com/ikabot-collective/ikabot) — an automation bot for the browser game Ikariam — extended with a custom empire data collector, a SQLite database, and a React/TypeScript web dashboard.
 
 ## Overview
 
-Two containers run side by side and share a volume (`ikalogs_volume`) to exchange data:
+Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 
 | Container | Description |
 |---|---|
-| `ikabot` | Runs the ikabot automation bot with custom files injected via volume mounts |
-| `ikabot-gui` | Flask REST API that reads the collected JSON data (internal, port 5000) |
-| `frontend` | Vite dev server that serves the React/TypeScript SPA on port 5001, proxying `/api/*` to `ikabot-gui` |
+| `ikabot` | Runs the ikabot automation bot with custom modules injected via volume mounts |
+| `ikabot-gui` | Flask REST API + SSE stream (internal port 5000) |
+| `frontend` | Vite dev server serving the React/TypeScript SPA on port 5001, proxying `/api/*` to `ikabot-gui` |
 
 ### How it works
 
 `empireFunction.py` runs as a background process inside the ikabot container. Every hour (configurable) it:
 
-0. Writes `last_alive.json` at the very start of each iteration — if the process crashes mid-cycle, this timestamp goes stale and the dashboard shows a "Bot offline" warning.
-1. Iterates over all cities and collects resources, buildings, production rates, and wine status.
-2. Fetches military and fleet movements from the military advisor.
-3. Writes the results to JSON files on the shared volume:
-   - `statusSummary.json` — empire-wide totals (gold, ships, resources, population)
-   - `empire.json` — per-city building levels and construction status
-   - `resources.json` — per-city resource amounts and wine timers
-   - `movements.json` — active fleet and army movements
-4. Appends a timestamped snapshot to `history.jsonl` (capped at ~90 days).
-5. Then, one of the following runs inline (mutually exclusive, strictly sequential):
-   - If building upgrade costs are due (every 3 days) → writes `building_costs.json`
-   - Else if world scan is due (every 7 days) → writes `world_scan.json` with inactive/vacation players and island summaries; previous scan kept as `world_scan_prev.json` to detect newly inactive players
-   - Else if building queue has pending items and the queue is **enabled** → processes one upgrade per city: dispatches missing resource transports from surplus cities (verifying the POST response), records any transport failures in `building_queue.json`, then starts construction when resources are available. Transport dispatch bundles all needed resources into a single fleet per source city (no port loading queue), with freighters used as a supplementary dispatch only when the total resource gap is very large (> 8 transporter ship-loads). If any transport was dispatched, `movements.json` is immediately refreshed so fleet arrival times are visible to the sleep scheduler.
-6. Writes `next_cycle.json` with the exact wake-up timestamp before sleeping. The bot wakes at the earliest of: next full cycle, next construction ETA, or next transport fleet arrival — whichever comes first — respecting the `QUEUE_ACTIVE_HOURS` window. The sidebar "Refresh in" countdown is derived from this value. A `.force_empire_update` flag (created by `POST /api/data/refresh`) causes the bot to break out of the sleep immediately and run a full empire cycle, writing per-city progress to `empire_scan_status.json` as it goes.
+1. Writes `last_alive.json` at the very start of each iteration — if the process crashes mid-cycle this timestamp goes stale and the dashboard shows a "Bot offline" warning after 90 minutes.
+2. Decides whether to run a **full empire cycle** based on `SCAN_ACTIVE_HOURS`:
+   - Within active hours: runs every `EMPIRE_UPDATE_INTERVAL` (default 1h ± 5 min jitter)
+   - Outside active hours: runs every `SCAN_NIGHT_INTERVAL` (default 4h) — reduces nightly HTTP activity to a heartbeat scan
+3. On a full cycle, collects per-city data: resources, building levels, production rates, wine status, gold. Cities are visited in a **randomised order** each cycle.
+4. Fetches military and fleet movements from the military advisor endpoint.
+5. Persists everything to the shared SQLite database (`ikabot.db`) and writes JSON files to the shared volume.
+6. Then, one of the following runs inline (mutually exclusive, strictly sequential):
+   - If building costs are due (every 3 days, or `.force_costs_update` flag) → `collect_building_costs()`
+   - Else if world scan is due (every 7 days, or `.force_world_scan` flag) → `collect_world_scan()`
+   - Else if the building queue has pending items and is **enabled** → `process_building_queue()`
+7. Calculates the next wake-up time as the earliest of: next full cycle, next construction ETA, or next transport fleet arrival. Writes it to `next_cycle.json`. The sidebar countdown is derived from this value.
 
-All steps use randomised delays between HTTP requests to simulate human behaviour (anti-detection).
+**Building queue** — when processing the queue, for each city:
+- Checks if a tracked in-progress construction has completed.
+- If the city is free, attempts to start the next item in the queue.
+- If resources are insufficient, calls `_try_transport()`: calculates missing resources (respecting per-resource buffers), identifies surplus source cities (after reserving their own queue costs), and dispatches one bundled transport fleet per source city with all needed resources. Freighters are used only when total need exceeds 8 transporter ship-loads.
+- If multiple buildings of the same type exist (e.g. two warehouses), the lowest-level instance below the target is always chosen. The queue item is only removed when **all** instances have reached the target level.
+- Transport dispatch verifies the server response (`type == 10`). Failures are recorded in `transportErrors` and surfaced in the UI as an orange warning banner.
+- If any transport was dispatched, `movements.json` is immediately re-fetched so fleet arrival ETAs are visible to the sleep scheduler.
 
-The `ikabot-gui` container runs a Flask app (internal port 5000) that reads those files and exposes them via a REST API and a Server-Sent Events stream (`/api/stream`). The `frontend` container runs a Vite dev server (port 5001) that serves the React/TypeScript SPA and proxies all `/api/*` requests to Flask. The SSE stream pushes live updates to the browser within ~2 seconds of any data file changing.
+**Anti-detection** — all HTTP requests to the game server use randomised delays to simulate human browsing patterns:
+- Cities are visited in a random order on each cycle.
+- A 3–10s orientation pause precedes the first request of each cycle.
+- 5–15s between cities during empire collection; 2–6s between the two requests per city.
+- 15–30s between cities during building costs collection; 3–8s between city GET and detail POST; 2–6s before the research reduction POST; 5–15s between buildings within a city.
+- 2–5s between quadrant requests during the world scan shallow phase; 15–30s between island requests in the deep phase.
+- 3–7s between `changeCurrentCity` and `loadTransportersWithFreight`; 12–30s between consecutive transport fleets.
+- `SCAN_ACTIVE_HOURS` suppresses the full empire scan outside a configurable time window, eliminating the most obvious bot signal (regular hourly HTTP activity at 3 AM).
+
+The `ikabot-gui` Flask app reads from SQLite and exposes REST endpoints and a Server-Sent Events stream (`/api/stream`). The SSE stream pushes live updates to the browser within ~2 seconds of any data file changing. The `frontend` Vite dev server (port 5001) proxies all `/api/*` requests to Flask and hot-reloads on file changes.
 
 ## Requirements
 
@@ -54,6 +67,10 @@ EMPIRE_UPDATE_INTERVAL=1h
 BUILDING_COSTS_UPDATE_INTERVAL=3d
 WORLD_SCAN_UPDATE_INTERVAL=7d
 WORLD_SCAN_RADIUS=10
+QUEUE_ACTIVE_HOURS=8-23
+SCAN_ACTIVE_HOURS=8-23
+SCAN_NIGHT_INTERVAL=4h
+LOG_LANG=en
 ```
 
 3. Start the containers:
@@ -66,29 +83,45 @@ docker compose up -d
 
 ## Configuration
 
-Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `30m`, `90s`) or a plain integer (seconds).
+Duration variables accept `Nd` (days), `Nh` (hours), `Nm` (minutes), `Ns` (seconds), or a plain integer (seconds).
 
-| Environment variable | Default | Description |
+| Variable | Default | Description |
 |---|---|---|
-| `IKABOT_EMAIL` | — | Your Ikariam account email |
-| `IKABOT_PASSWORD` | — | Your Ikariam account password |
-| `EMPIRE_UPDATE_INTERVAL` | `1h` | Interval between main data collection cycles |
-| `BUILDING_COSTS_UPDATE_INTERVAL` | `3d` | Interval between building costs refreshes |
+| `IKABOT_EMAIL` | — | Ikariam account email |
+| `IKABOT_PASSWORD` | — | Ikariam account password |
+| `EMPIRE_UPDATE_INTERVAL` | `1h` | Interval between full empire data cycles (within active scan hours) |
+| `BUILDING_COSTS_UPDATE_INTERVAL` | `3d` | Interval between building cost refreshes |
 | `WORLD_SCAN_UPDATE_INTERVAL` | `7d` | Interval between world scans |
-| `WORLD_SCAN_RADIUS` | `10` | Max island distance from own cities included in the world scan |
-| `QUEUE_ACTIVE_HOURS` | *(all hours)* | Hours during which the building queue may start constructions and dispatch transports — format `H-H`, e.g. `8-23` |
-| `LOG_LANG` | `en` | Language for backend log messages (`en` or `pt`) |
+| `WORLD_SCAN_RADIUS` | `10` | Max tile distance from own cities included in the world scan |
+| `QUEUE_ACTIVE_HOURS` | *(all hours)* | Hours during which the queue may **start constructions and dispatch transports** — format `H-H`, e.g. `8-23` |
+| `SCAN_ACTIVE_HOURS` | *(all hours)* | Hours during which the bot runs **full empire scans** at the normal interval. Outside this window it scans at `SCAN_NIGHT_INTERVAL` instead. Format `H-H`, e.g. `8-23`. Unset = 24h operation |
+| `SCAN_NIGHT_INTERVAL` | `4h` | Scan frequency outside `SCAN_ACTIVE_HOURS`. Keeps data roughly fresh overnight without hourly HTTP activity |
+| `WINE_CRITICAL_NOTIFY_HOURS` | `2h` | Wine-critical Telegram alert threshold in hours |
+| `LOG_LANG` | `en` | Backend log language (`en` or `pt`) |
+
+## Docker Commands
+
+```bash
+docker compose up -d          # start all containers
+docker compose logs -f        # stream logs from all containers
+docker compose up -d --build  # rebuild after editing ikabot_gui/app.py or adding npm packages
+docker compose down           # stop all containers
+```
+
+Volume-mounted files (`empireFunction.py` and all sibling modules, `planRoutes_patched.py`) take effect immediately — no rebuild needed.
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/data` | GET | Empire-wide status, buildings, and resources — includes `lastUpdatedTs`, `nextCycleAt`, `lastAlive` |
-| `/api/data/refresh` | POST | Creates `.force_empire_update` flag — bot breaks from sleep and runs a full cycle immediately |
-| `/api/data/status` | GET | Live empire scan progress `{status, phase, progress, total, message}` |
+| `/api/data` | GET | Empire-wide status, buildings, resources — includes `lastUpdatedTs`, `nextCycleAt`, `lastAlive` |
+| `/api/data/refresh` | POST | Creates `.force_empire_update` flag — bot wakes immediately and runs a full cycle |
+| `/api/data/status` | GET | Live per-city scan progress `{status, phase, progress, total, message}` |
 | `/api/movements` | GET | Current fleet and army movements |
 | `/api/movements/refresh` | POST | Creates `.force_movements_update` flag — bot refreshes movements on next wake |
 | `/api/history` | GET | Last 7 days of hourly empire snapshots |
+| `/api/history?city=Name` | GET | Last 7 days of per-city resource and wine timer history |
+| `/api/history/cities` | GET | List of cities that have history data |
 | `/api/building-costs` | GET | Upgrade costs per building per level per city |
 | `/api/building-costs/refresh` | POST | Schedules an early building costs refresh |
 | `/api/world-scan` | GET | Inactive/vacation players near own cities, with marks and action logs merged |
@@ -96,56 +129,112 @@ Interval variables accept a human-readable duration string (`1h`, `3h`, `2d`, `3
 | `/api/world-scan/refresh` | POST | Schedules an early world scan |
 | `/api/world-scan/mark` | POST | Save a player mark (`novo`/`visto`/`alvo`/`ignorar`) and note |
 | `/api/world-scan/action` | POST | Append a timestamped action log entry for a player |
-| `/api/building-queue` | GET | Current queue, active construction, transport errors, and `enabled` flag per city |
-| `/api/building-queue/add` | POST | Add a building upgrade to a city queue |
-| `/api/building-queue/remove` | POST | Remove an item from a city queue |
-| `/api/building-queue/reorder` | POST | Reorder items in a city queue |
-| `/api/building-queue/clear` | POST | Clear all items for one city (`{cityName}`) or all cities (no body) |
-| `/api/building-queue/enabled` | POST | Enable or pause the building queue (`{enabled: bool}`) |
+| `/api/building-queue` | GET | Current queue, in-progress construction, transport errors, `enabled` flag, and settings per city |
+| `/api/building-queue/add` | POST | Add a building upgrade `{cityName, buildingName, targetLevel}` to the queue |
+| `/api/building-queue/remove` | POST | Remove item `{cityName, index}` from the queue |
+| `/api/building-queue/reorder` | POST | Reorder item `{cityName, fromIndex, toIndex}` in the queue |
+| `/api/building-queue/clear` | POST | Clear queue for one city `{cityName}` or all cities (no body) |
+| `/api/building-queue/enabled` | POST | Enable or pause the queue `{enabled: bool}` |
+| `/api/building-queue/settings` | POST | Save queue settings `{activeHours: {start, end}, resourceBuffer: [5]}` |
 
 ## Dashboard Tabs
 
-The dashboard defaults to **English**. A language toggle button in the sidebar footer switches to Portuguese — the preference is saved in browser `localStorage`.
+The dashboard defaults to **English**. A toggle in the sidebar footer switches to Portuguese — preference saved in `localStorage`.
 
 | Tab | Description |
 |---|---|
-| Home | Empire-wide summary: gold, ships, population, active constructions, gold runway, wine-at-risk cities, **resource balance matrix** (cities × resources vs. queue reservations — green/yellow/red) |
-| Cities | Per-city resources, production, and wine timers — **force-refresh button** triggers a live bot cycle with per-city progress indicator |
-| Buildings | Building levels and active constructions per city — "+" per row to add to queue — **force-refresh button** with live progress |
-| Movements | Active fleet and army movements with live countdowns — refresh button requests immediate movement fetch from the game |
-| Alerts | Wine, storage, gold, and ships alerts with configurable thresholds (wine warning/critical hours, storage %) — settings persisted in browser localStorage |
-| History | Charts of empire stats over the last 7 days |
-| Calculators | **Building Upgrade**: selects city/building/target level, computes net total missing and estimates collection time. **ROI Sawmill / Quarry**: island vs city building comparator. **Colony ROI**: upgrading current island vs colonising a new one — pre-filled from the Islands tab via "Use in Calc." button |
-| Construction | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear per city or globally, city pills, building list, queue panel with drag-to-reorder, inProgress ETA, transport error banner, queue budget card. **Template** sub-tab: set target levels per building type and apply to all cities at once |
-| World | **Inactive**: inactive/vacation players with new-player detection, sortable scores, and per-player marks — expandable rows show an editable note field and a timestamped action log. **Islands**: nearby islands ranked by free slots, resource and wonder levels, "Use in Calc." button |
+| **Home** | Empire-wide summary: gold, ships, population. Active constructions card (in progress / waiting for resources / queued). Wine balance card (cities at risk with warning/critical pills). Resource balance matrix (cities × resources vs. queue reservations, green/yellow/red). Gold runway estimate |
+| **Cities** | Per-city resources, production rates, wine timers. Force-refresh button triggers a live bot cycle with per-city progress bar |
+| **Buildings** | Building levels and active constructions per city. "+" button per row adds to the queue. Force-refresh with live progress |
+| **Movements** | Active fleet and army movements with live countdown timers. Refresh button requests an immediate re-fetch from the game |
+| **Alerts** | Wine-running-out (warning + critical), storage overflow, negative gold, all ships busy. Thresholds configurable inline — persisted in `localStorage` |
+| **History** | Empire-wide charts (gold, resources, ships, population) over the last 7 days. City selector switches to per-city view: resources (5 lines) and wine timer (hours until empty) |
+| **Calculators** | **Building Upgrade**: city/building/level selector, auto-fills costs, estimates time to gather. **ROI Sawmill/Quarry**: island vs city building comparator. **Colony ROI**: current island vs new colony — pre-fillable from the Islands tab |
+| **Construction** | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear, city pills, building list, per-city queue panel with drag-to-reorder, inProgress ETA countdown, transport error banner, queue budget summary. **Template** sub-tab: set target levels per building type and apply to all cities at once |
+| **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note and timestamped action log. Highlights newly inactive players (not seen in previous scan). **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button |
+| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Notifications**: browser notifications toggle; Telegram bot configuration |
+
+## Data Storage
+
+All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/`):
+
+**SQLite database** (`ikabot.db`) — primary data store, managed by `db_manager.py`:
+
+| Table | Contents |
+|---|---|
+| `history` | Hourly empire-wide snapshots (gold, ships, resources, population) |
+| `history_cities` | Hourly per-city resource and wine timer snapshots |
+| `building_costs` | Upgrade costs per city/building/level |
+| `building_costs_meta` | Current level and last-updated timestamp per building |
+| `marks` | Player marks (status, note, last updated) |
+| `mark_actions` | Timestamped action log entries per player |
+| `queue_items` | Building queue entries per city |
+| `queue_in_progress` | Active constructions per city |
+| `queue_transport_errors` | Latest transport failure per city |
+| `queue_state` | Queue enabled/paused flag |
+| `empire_meta` | Key-value store: latest empire snapshot, costs timestamp, scan timestamp |
+
+**JSON files** — written alongside SQLite for operational use and fallback:
+
+| File | Updated | Contents |
+|---|---|---|
+| `statusSummary.json` | Every cycle | Empire-wide totals |
+| `empire.json` | Every cycle | Building levels per city |
+| `resources.json` | Every cycle | Resources and wine timers per city |
+| `movements.json` | Every cycle + on dispatch | Active fleet/army movements |
+| `own_cities.json` | Every cycle | Island coordinates of own cities |
+| `building_costs.json` | Every 3 days | Upgrade costs (also written to SQLite) |
+| `world_scan.json` | Every 7 days | Inactive players and island summaries |
+| `world_scan_prev.json` | Every 7 days | Previous scan — used to detect newly inactive players |
+| `building_queue.json` | On each queue change | Queue state fallback |
+| `next_cycle.json` | Each sleep | Exact timestamp of next wake-up |
+| `last_alive.json` | Each loop iteration | `{lastAlive, cycle}` — stale if bot crashes |
+| `empire_scan_status.json` | During force-refresh | Per-city scan progress |
+| `world_scan_status.json` | During world scan | Scan phase progress |
 
 ## Project Structure
 
 ```
 .
 ├── docker-compose.yml
-├── empireFunction.py        # Main loop orchestrator (injected into ikabot)
-├── empire_utils.py          # Constants, duration parser, i18n strings
-├── empire_collector.py      # City data collection, movements refresh
-├── costs_collector.py       # Building costs collection
-├── scan_collector.py        # World scan collection
-├── queue_processor.py       # Building queue processor, transport dispatch, smart sleep
+├── empireFunction.py        # Main loop orchestrator (~120 lines)
+├── empire_utils.py          # Constants, duration parser, i18n log strings, with_retry()
+├── empire_collector.py      # City data collection, movements fetch
+├── costs_collector.py       # Building costs collection (every 3 days)
+├── scan_collector.py        # World scan (every 7 days)
+├── queue_processor.py       # Building queue: transport dispatch, smart sleep, city shuffling
+├── db_manager.py            # SQLite layer: schema init, CRUD, migrations from JSON
 ├── planRoutes_patched.py    # Patched transport helper with anti-detection delays
-├── ikabot_gui/              # Flask REST API
-│   └── app.py
-├── frontend/                # Vite + React + TypeScript SPA
+├── telegram_notifier.py     # Telegram Bot API notifications
+├── tests/
+│   ├── test_db.py           # DB CRUD unit tests (13 tests)
+│   └── test_queue.py        # Queue pure-function unit tests (13 tests)
+├── ikabot_gui/
+│   └── app.py               # Flask REST API + SSE stream
+├── frontend/
 │   ├── src/
-│   │   ├── App.tsx          # Root component (SSE, routing, language)
-│   │   ├── types.ts         # TypeScript interfaces for all JSON data
-│   │   ├── i18n.tsx         # EN/PT translations + hooks
-│   │   ├── utils.ts         # Formatting helpers
+│   │   ├── App.tsx          # Root: SSE EventSource, tab routing, LangContext
+│   │   ├── types.ts         # TypeScript interfaces for all API data
+│   │   ├── i18n.tsx         # EN/PT translations + useT, useLang hooks
+│   │   ├── utils.ts         # Formatting helpers (fmt, fmtTime, fmtTs, exportCsv…)
 │   │   ├── constants.ts     # MATERIALS, COST_KEYS, resource icons/colours
+│   │   ├── hooks/           # useNotifications
 │   │   └── components/      # One file per tab/feature
 │   ├── vite.config.ts       # Proxy /api/* → ikabot-gui:5000
 │   └── package.json
 └── .env                     # Credentials — never commit this
 ```
 
+## Running Tests
+
+```bash
+.venv/bin/pytest tests/ -v
+```
+
+Tests use temporary SQLite databases and stub all ikabot imports — no live session or game connection required.
+
 ## Patches Applied to Ikabot Core
 
-`planRoutes_patched.py` replaces `ikabot/ikabot/helpers/planRoutes.py` via Docker volume mount. It adds randomised delays between consecutive fleet dispatches on the same route and between distinct routes, reducing detection risk when sending large transport operations.
+`planRoutes_patched.py` replaces `ikabot/ikabot/helpers/planRoutes.py` via Docker volume mount. Adds randomised delays between consecutive fleet dispatches on the same route (10–25s) and between distinct routes (12–30s), reducing detection risk during large transport operations.
+
+All other custom modules (`empireFunction.py` and siblings) are injected into the ikabot container at `/ikabot/ikabot/function/` via volume mounts — no rebuild of the base image is needed when editing them.
