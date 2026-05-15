@@ -11,7 +11,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, WORLD_SCAN_RADIUS, WORLD_SCAN_UPDATE_INTERVAL, lm
+from empire_utils import LOGS_DIR, WORLD_SCAN_RADIUS, WORLD_SCAN_UPDATE_INTERVAL, lm, logger
 
 from ikabot.helpers.getJson import getIsland
 
@@ -56,14 +56,14 @@ def collect_world_scan(session):
     try:
         own_cities_path = os.path.join(LOGS_DIR, "own_cities.json")
         if not os.path.exists(own_cities_path):
-            print(lm("own_cities_missing"))
+            logger.warning(lm("own_cities_missing"))
             return
         with open(own_cities_path) as f:
             own_cities = json.load(f)
         if not own_cities:
             return
 
-        print(lm("world_scan_start", ts=time.strftime('%H:%M:%S'), radius=WORLD_SCAN_RADIUS))
+        logger.info(lm("world_scan_start", ts=time.strftime('%H:%M:%S'), radius=WORLD_SCAN_RADIUS))
         _write_scan_status("running", "shallow_scan", 0, 4, lm("scan_status_shallow"))
 
         shallow_islands = []
@@ -100,7 +100,7 @@ def collect_world_scan(session):
                     islands_to_scan.append(island)
                     break
 
-        print(lm("scan_islands_count", n=len(islands_to_scan), radius=WORLD_SCAN_RADIUS))
+        logger.info(lm("scan_islands_count", n=len(islands_to_scan), radius=WORLD_SCAN_RADIUS))
         _write_scan_status("running", "deep_scan", 0, len(islands_to_scan),
             lm("scan_status_deep", n=len(islands_to_scan)))
 
@@ -108,7 +108,7 @@ def collect_world_scan(session):
         islands_summary = []
         for i, island in enumerate(islands_to_scan):
             pause = random.randint(15, 30)
-            print(lm("scan_island_pause", pause=pause, i=i+1, total=len(islands_to_scan), x=island['x'], y=island['y']))
+            logger.info(lm("scan_island_pause", pause=pause, i=i+1, total=len(islands_to_scan), x=island['x'], y=island['y']))
             time.sleep(pause)
 
             try:
@@ -175,7 +175,7 @@ def collect_world_scan(session):
                     lm("scan_island_done", i=i+1, total=len(islands_to_scan), x=island['x'], y=island['y']))
 
             except Exception as e:
-                print(lm("scan_island_error", id=island['id'], err=e))
+                logger.warning(lm("scan_island_error", id=island['id'], err=e))
                 continue
 
         scan_path = os.path.join(LOGS_DIR, "world_scan.json")
@@ -202,9 +202,8 @@ def collect_world_scan(session):
 
         _write_scan_status("idle", "done", len(islands_to_scan), len(islands_to_scan),
             lm("scan_status_done", n=len(inactive_players)))
-        print(lm("scan_done", n=len(inactive_players)))
+        logger.info(lm("scan_done", n=len(inactive_players)))
 
     except Exception:
-        import traceback
-        print(lm("scan_error"), traceback.format_exc())
+        logger.error(lm("scan_error"), exc_info=True)
         _write_scan_status("error", "error", 0, 0, lm("scan_status_error"))

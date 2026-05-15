@@ -1,8 +1,26 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import logging
 import os
 import re
+
+
+def _setup_logger():
+    _log = logging.getLogger("ikabot")
+    if not _log.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        _log.addHandler(_handler)
+        _log.setLevel(logging.DEBUG)
+        _log.propagate = False
+    return _log
+
+
+logger = _setup_logger()
 
 LOGS_DIR = "/tmp/ikalogs/"
 QUEUE_JSON_PATH           = os.path.join(LOGS_DIR, "building_queue.json")
@@ -310,7 +328,7 @@ def with_retry(fn, attempts=3, delay=30, label="", retryable=None):
                 raise
             last_exc = exc
             if i < attempts - 1:
-                print("[retry] {}: {} — retrying in {}s ({}/{})".format(
-                    label, exc, delay, i + 1, attempts - 1))
+                logger.warning("[retry] %s: %s — retrying in %ss (%d/%d)",
+                               label, exc, delay, i + 1, attempts - 1)
                 _time.sleep(delay)
     raise last_exc

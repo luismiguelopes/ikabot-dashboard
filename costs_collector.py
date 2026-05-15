@@ -16,7 +16,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, BUILDING_COSTS_UPDATE_INTERVAL, lm
+from empire_utils import LOGS_DIR, BUILDING_COSTS_UPDATE_INTERVAL, lm, logger
 
 from ikabot.config import materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -80,19 +80,19 @@ def collect_building_costs(session, ids):
     try:
         from ikabot.function.constructionList import getCostsReducers, checkhash
 
-        print(lm("costs_start", ts=time.strftime('%H:%M:%S')))
+        logger.info(lm("costs_start", ts=time.strftime('%H:%M:%S')))
         all_costs = {}
 
         for city_id in random.sample(ids, len(ids)):
             pause = random.randint(15, 30)
-            print(lm("costs_city_pause", pause=pause))
+            logger.info(lm("costs_city_pause", pause=pause))
             time.sleep(pause)
 
             try:
                 html = session.get("view=city&cityId={}".format(city_id))
                 city = getCity(html)
                 city_name = city.get("cityName", city.get("name", "Unknown"))
-                print(lm("costs_city_start", city=city_name))
+                logger.info(lm("costs_city_start", city=city_name))
 
                 time.sleep(random.randint(3, 8))
                 detail_url = (
@@ -184,18 +184,16 @@ def collect_building_costs(session, ids):
                         }
 
                 all_costs[city_name] = city_costs
-                print(lm("costs_city_done", city=city_name, n=len(city_costs)))
+                logger.info(lm("costs_city_done", city=city_name, n=len(city_costs)))
 
             except Exception:
-                import traceback
-                print(lm("costs_city_error", id=city_id), traceback.format_exc())
+                logger.error(lm("costs_city_error", id=city_id), exc_info=True)
 
         costs_data = {"lastUpdated": int(time.time()), "cities": all_costs}
         from db_manager import save_building_costs
         save_building_costs(costs_data)
 
-        print(lm("costs_done", ts=time.strftime('%H:%M:%S')))
+        logger.info(lm("costs_done", ts=time.strftime('%H:%M:%S')))
 
     except Exception:
-        import traceback
-        print(lm("costs_error"), traceback.format_exc())
+        logger.error(lm("costs_error"), exc_info=True)

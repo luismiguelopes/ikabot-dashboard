@@ -15,7 +15,7 @@ if _here not in sys.path:
 from empire_utils import (
     LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
-    FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm,
+    FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm, logger,
 )
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
@@ -37,8 +37,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
     event.set()
 
-    print(lm("empire_start_1"))
-    print(lm("empire_start_2", interval=UPDATE_INTERVAL))
+    logger.info(lm("empire_start_1"))
+    logger.info(lm("empire_start_2", interval=UPDATE_INTERVAL))
 
     ids = None
     cities = None
@@ -90,9 +90,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         pass
                     refresh_movements(session, ids[0])
                 if ids and has_building_queue():
-                    print(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
+                    logger.info(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
                     if process_building_queue(session, ids, cities):
-                        print(lm("queue_movements_refresh"))
+                        logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
                 smart_sleep(last_full_cycle_time, next_full_jitter)
                 continue
@@ -100,11 +100,11 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── Full empire data cycle ───────────────────────────────────────
             if not in_scan_hours:
                 _night_mins = round(effective_interval / 60)
-                print(lm("scan_outside_hours",
-                          start=SCAN_ACTIVE_HOURS_START, end=SCAN_ACTIVE_HOURS_END,
-                          mins=_night_mins))
+                logger.info(lm("scan_outside_hours",
+                               start=SCAN_ACTIVE_HOURS_START, end=SCAN_ACTIVE_HOURS_END,
+                               mins=_night_mins))
 
-            print(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
+            logger.info(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
             time.sleep(random.randint(3, 10))
             (ids, cities) = getIdsOfCities(session)
 
@@ -128,19 +128,18 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             except Exception:
                 pass
 
-            print(lm("cycle_done"))
+            logger.info(lm("cycle_done"))
             last_full_cycle_time = time.time()
             next_full_jitter = random.randint(-300, 300)
 
             # ── Building queue (after full cycle) ────────────────────────────
             if has_building_queue():
                 if process_building_queue(session, ids, cities):
-                    print(lm("queue_movements_refresh"))
+                    logger.info(lm("queue_movements_refresh"))
                     refresh_movements(session, ids[0])
 
             smart_sleep(last_full_cycle_time, next_full_jitter)
 
         except Exception:
-            import traceback
-            print(lm("cycle_error"), traceback.format_exc())
+            logger.error(lm("cycle_error"), exc_info=True)
             time.sleep(random.randint(120, 300))

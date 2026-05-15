@@ -14,7 +14,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, with_retry
+from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, logger, with_retry
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -90,8 +90,7 @@ def _collect_movements(session, city_id):
 
         return movements
     except Exception:
-        import traceback
-        print(lm("movements_error"), traceback.format_exc())
+        logger.warning(lm("movements_error"), exc_info=True)
         return []
 
 
@@ -139,9 +138,7 @@ def collect_city_data(session, ids, cities):
                                    attempts=3, delay=30, label="globalData {}".format(id))
             json_data = json.loads(raw, strict=False)[0][1]["headerData"]
         except Exception:
-            import traceback
-            print("[retry] city {} failed after 3 attempts — skipping:\n{}".format(
-                id, traceback.format_exc()))
+            logger.error("city %s failed after 3 attempts — skipping", id, exc_info=True)
             continue
 
         if json_data["relatedCity"]["owncity"] != 1:
@@ -181,7 +178,7 @@ def collect_city_data(session, ids, cities):
         island_x = int(float(city_data.get("islandXCoord", city_data.get("x", 0)) or 0))
         island_y = int(float(city_data.get("islandYCoord", city_data.get("y", 0)) or 0))
         own_cities_list.append({"name": city_name, "x": island_x, "y": island_y})
-        print(lm("city_done", city=city_name))
+        logger.info(lm("city_done", city=city_name))
         _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 
         storage_capacity = int(float(city_data.get("storageCapacity") or 0))
@@ -282,8 +279,7 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
         save_empire_snapshot(ts, formatted_empire, resources_data, status_summary)
         insert_history(ts, status_summary, resources_data)
     except Exception:
-        import traceback
-        print("[db] insert_history error:", traceback.format_exc())
+        logger.error("[db] insert_history error", exc_info=True)
         history_path = os.path.join(LOGS_DIR, "history.jsonl")
         history_entry = {"timestamp": ts, **status_summary}
         with open(history_path, "a") as f:

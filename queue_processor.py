@@ -14,7 +14,7 @@ if _here not in sys.path:
 
 from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, QUEUE_SETTINGS_PATH, UPDATE_INTERVAL,
-    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm,
+    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -170,7 +170,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
         sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
         if wake_for_queue < next_full_at:
             eta_str = time.strftime('%H:%M:%S', time.localtime(eta))
-            print(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
+            logger.info(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
     else:
         sleep_secs = max(60, next_full_at - time.time())
         # Se há itens em queue mas sem ETA conhecido, acorda em 30 min para re-tentar
@@ -181,10 +181,10 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
         secs_to_open = _secs_until_active()
         if 0 < secs_to_open < sleep_secs:
             sleep_secs = secs_to_open + random.randint(1, 5) * 60
-            print(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
-                      start=_get_active_hours()[0]))
+            logger.info(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
+                           start=_get_active_hours()[0]))
 
-    print(lm("cycle_sleep", mins=round(sleep_secs / 60)))
+    logger.info(lm("cycle_sleep", mins=round(sleep_secs / 60)))
     wake_at = int(time.time() + sleep_secs)
     try:
         with open(os.path.join(LOGS_DIR, "next_cycle.json"), "w") as f:
@@ -418,7 +418,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     cost = _get_total_upgrade_cost(costs_cache, city_name, building_name,
                                    current_level, current_level + 1)
     if cost is None:
-        print(lm("queue_no_cost_data", city=city_name, building=building_name))
+        logger.warning(lm("queue_no_cost_data", city=city_name, building=building_name))
         try:
             from ikabot.function.constructionList import getResourcesNeeded
             cost = getResourcesNeeded(session, city_data, target_b, current_level, current_level + 1)
@@ -442,16 +442,16 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         "{} {}".format(net_missing[i], _RESOURCES_ENG[i])
         for i in range(5) if net_missing[i] > 0
     )
-    print(lm("queue_transport_missing", city=city_name, building=building_name,
-              missing=missing_desc or "0"))
+    logger.info(lm("queue_transport_missing", city=city_name, building=building_name,
+                   missing=missing_desc or "0"))
 
     if all(m == 0 for m in net_missing):
-        print(lm("queue_transport_waiting", city=city_name))
+        logger.info(lm("queue_transport_waiting", city=city_name))
         return False
 
     ships_available = getAvailableShips(session)
     if ships_available == 0:
-        print(lm("queue_no_ships", city=city_name))
+        logger.warning(lm("queue_no_ships", city=city_name))
         return False
 
     ship_cap, freighter_cap = getShipCapacity(session)
@@ -474,7 +474,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     sources.sort(key=lambda x: sum(x[2]), reverse=True)
 
     if not sources:
-        print(lm("queue_no_surplus", city=city_name))
+        logger.warning(lm("queue_no_surplus", city=city_name))
         return False
 
     island_id = city_data.get("islandId", "")
@@ -511,8 +511,8 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                 "{} {}".format(send_list[i], _RESOURCES_ENG[i])
                 for i in range(5) if send_list[i] > 0
             )
-            print(lm("queue_transport_sent_bundle", city=city_name, resources=sent_desc,
-                      origin=src_name, ships=ships_to_use))
+            logger.info(lm("queue_transport_sent_bundle", city=city_name, resources=sent_desc,
+                           origin=src_name, ships=ships_to_use))
         else:
             failed_resource = next((_RESOURCES_ENG[i] for i in range(5) if send_list[i] > 0), "?")
             if transport_errors is not None:
@@ -526,7 +526,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                 notify_transport_error(city_name, failed_resource, src_name)
             except Exception:
                 pass
-            print(lm("queue_transport_failed", city=city_name, origin=src_name))
+            logger.warning(lm("queue_transport_failed", city=city_name, origin=src_name))
 
     # ── Freighter pass: only when total need is very large ────────────────────
     # Skip if total need is small — transporter waves are faster (8 min vs 2h40m)
@@ -563,10 +563,10 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                         "{} {}".format(send_list[i], _RESOURCES_ENG[i])
                         for i in range(5) if send_list[i] > 0
                     )
-                    print(lm("queue_freighter_sent", city=city_name, resources=sent_desc,
-                              origin=src_name, ships=freighters_to_use))
+                    logger.info(lm("queue_freighter_sent", city=city_name, resources=sent_desc,
+                                   origin=src_name, ships=freighters_to_use))
                 else:
-                    print(lm("queue_freighter_failed", city=city_name, origin=src_name))
+                    logger.warning(lm("queue_freighter_failed", city=city_name, origin=src_name))
                 break  # one freighter fleet per cycle
 
     return dispatched
@@ -576,7 +576,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
 
 def process_building_queue(session, ids, cities):
     """Process one queue cycle. Returns True if any transport was dispatched."""
-    print(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
+    logger.info(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
     data = _load_queue()
     if not data.get("enabled", True):
         return False
@@ -597,7 +597,7 @@ def process_building_queue(session, ids, cities):
 
         city_id = name_to_id.get(city_name)
         if not city_id:
-            print(lm("queue_city_not_found", city=city_name))
+            logger.warning(lm("queue_city_not_found", city=city_name))
             continue
 
         if not first_city:
@@ -619,7 +619,7 @@ def process_building_queue(session, ids, cities):
                     for b in city_data["position"]
                 )
             if not still_busy:
-                print(lm("queue_construction_done", city=city_name, building=ip["building"]))
+                logger.info(lm("queue_construction_done", city=city_name, building=ip["building"]))
                 try:
                     from telegram_notifier import notify_construction_done
                     notify_construction_done(city_name, ip["building"], ip.get("toLevel", ip.get("fromLevel", 0) + 1))
@@ -652,7 +652,7 @@ def process_building_queue(session, ids, cities):
                         "eta": int(busy_b.get("completed", 0)),
                     }
                     changed = True
-            print(lm("queue_city_busy", city=city_name))
+            logger.info(lm("queue_city_busy", city=city_name))
             continue
 
         # ── Try to start the next item ────────────────────────────────────────
@@ -669,11 +669,11 @@ def process_building_queue(session, ids, cities):
             # No candidate: building absent, already at/above target, or all instances at max level
             all_instances = [b for b in city_data["position"] if b["name"] == next_item["building"]]
             if not all_instances:
-                print(lm("queue_building_not_found", city=city_name, building=next_item["building"]))
+                logger.warning(lm("queue_building_not_found", city=city_name, building=next_item["building"]))
             elif all(b.get("isMaxLevel") for b in all_instances):
-                print(lm("queue_max_level", city=city_name, building=next_item["building"]))
+                logger.info(lm("queue_max_level", city=city_name, building=next_item["building"]))
             else:
-                print(lm("queue_target_reached", city=city_name, building=next_item["building"], level=next_item["targetLevel"]))
+                logger.info(lm("queue_target_reached", city=city_name, building=next_item["building"], level=next_item["targetLevel"]))
             items.pop(0)
             changed = True
             continue
@@ -696,22 +696,22 @@ def process_building_queue(session, ids, cities):
                     dispatched_any = True
             else:
                 _ah_s, _ah_e = _get_active_hours()
-                print(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
+                logger.info(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
-            print(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
+            logger.warning(lm("queue_no_citizens", city=city_name, building=next_item["building"]))
             continue
 
         if not _in_active_hours():
             _ah_s, _ah_e = _get_active_hours()
-            print(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
+            logger.info(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         # ── Fire the upgrade POST ─────────────────────────────────────────────
-        print(lm("queue_attempting", city=city_name, building=next_item["building"],
-                  lv=target_b["level"], btype=target_b["building"], pos=target_b["position"],
-                  can=target_b.get("canUpgrade"), cit=city_data.get("freeCitizens")))
+        logger.info(lm("queue_attempting", city=city_name, building=next_item["building"],
+                       lv=target_b["level"], btype=target_b["building"], pos=target_b["position"],
+                       can=target_b.get("canUpgrade"), cit=city_data.get("freeCitizens")))
 
         from ikabot.function.constructionList import expandBuilding as _expandBuilding
         target_for_expand = dict(target_b)
@@ -736,20 +736,20 @@ def process_building_queue(session, ids, cities):
                 }
                 started = True
                 changed = True
-                print(lm("queue_started", city=city_name, building=next_item["building"],
-                          from_lv=target_b["level"], to_lv=target_b["level"] + 1))
+                logger.info(lm("queue_started", city=city_name, building=next_item["building"],
+                               from_lv=target_b["level"], to_lv=target_b["level"] + 1))
 
         if not started:
-            print(lm("queue_start_failed", city=city_name, building=next_item["building"]))
+            logger.warning(lm("queue_start_failed", city=city_name, building=next_item["building"]))
             b_diag = city2["position"][pos_idx] if pos_idx < len(city2["position"]) else {}
-            print("      -> [diag] pos={} após POST: level={}, canUpgrade={}, isMaxLevel={}, isBusy={}, building={}".format(
-                pos_idx, b_diag.get("level"), b_diag.get("canUpgrade"),
-                b_diag.get("isMaxLevel"), b_diag.get("isBusy"), b_diag.get("building")))
+            logger.warning("      -> [diag] pos=%s level=%s canUpgrade=%s isMaxLevel=%s isBusy=%s building=%s",
+                           pos_idx, b_diag.get("level"), b_diag.get("canUpgrade"),
+                           b_diag.get("isMaxLevel"), b_diag.get("isBusy"), b_diag.get("building"))
             next_item["failedAttempts"] = next_item.get("failedAttempts", 0) + 1
             changed = True
             if next_item["failedAttempts"] >= 5:
-                print("      -> [aviso] {} tentativas falhadas consecutivas para {}. A remover da fila.".format(
-                    next_item["failedAttempts"], next_item["building"]))
+                logger.warning("      -> [aviso] %d tentativas falhadas consecutivas para %s. A remover da fila.",
+                               next_item["failedAttempts"], next_item["building"])
                 items.pop(0)
 
     if changed or transport_errors != transport_errors_snapshot:
@@ -757,5 +757,5 @@ def process_building_queue(session, ids, cities):
         data["inProgress"] = in_progress
         _save_queue(data)
 
-    print(lm("queue_done"))
+    logger.info(lm("queue_done"))
     return dispatched_any
