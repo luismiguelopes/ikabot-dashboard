@@ -29,9 +29,11 @@ FORCE_WORLD_SCAN_FLAG       = os.path.join(LOGS_DIR, ".force_world_scan")
 FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG_PATH       = os.path.join(LOGS_DIR, ".force_queue_check")
-BUILDING_QUEUE_JSON_PATH = os.path.join(LOGS_DIR, "building_queue.json")
-DB_PATH                  = os.path.join(LOGS_DIR, "ikabot.db")
-QUEUE_SETTINGS_JSON_PATH = os.path.join(LOGS_DIR, "queue_settings.json")
+BUILDING_QUEUE_JSON_PATH    = os.path.join(LOGS_DIR, "building_queue.json")
+QUEUE_SENTINEL_PATH         = os.path.join(LOGS_DIR, ".queue_updated")
+TELEGRAM_SETTINGS_PATH      = os.path.join(LOGS_DIR, "telegram_settings.json")
+DB_PATH                     = os.path.join(LOGS_DIR, "ikabot.db")
+QUEUE_SETTINGS_JSON_PATH    = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
@@ -577,6 +579,47 @@ def api_building_queue_reorder():
     return jsonify({"ok": True, "queue": city_queue})
 
 
+@app.route("/api/telegram-settings", methods=["GET"])
+def api_telegram_settings_get():
+    data = {"botToken": "", "chatId": ""}
+    if os.path.exists(TELEGRAM_SETTINGS_PATH):
+        try:
+            with open(TELEGRAM_SETTINGS_PATH) as f:
+                saved = json.load(f)
+            data["botToken"] = saved.get("botToken", "")
+            data["chatId"] = saved.get("chatId", "")
+        except Exception:
+            pass
+    if not data["botToken"]:
+        data["botToken"] = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not data["chatId"]:
+        data["chatId"] = os.getenv("TELEGRAM_CHAT_ID", "")
+    return jsonify(data)
+
+
+@app.route("/api/telegram-settings", methods=["POST"])
+def api_telegram_settings_save():
+    body = request.get_json(force=True) or {}
+    data = {
+        "botToken": str(body.get("botToken", "")).strip(),
+        "chatId":   str(body.get("chatId", "")).strip(),
+    }
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(TELEGRAM_SETTINGS_PATH, "w") as f:
+        json.dump(data, f)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/telegram-settings/test", methods=["POST"])
+def api_telegram_settings_test():
+    try:
+        import telegram_notifier as _tg
+        _tg._send("🤖 Teste de notificação Telegram — ikabot dashboard")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/health")
 def api_health():
     db_ok = False
@@ -594,7 +637,7 @@ def api_stream():
     """SSE endpoint — emits 'update' whenever any data file on the shared volume changes."""
     watched = [
         EMPIRE_JSON_PATH, RESOURCES_JSON_PATH, STATUS_SUMMARY_JSON_PATH,
-        MOVEMENTS_JSON_PATH, BUILDING_QUEUE_JSON_PATH, NEXT_CYCLE_JSON_PATH,
+        MOVEMENTS_JSON_PATH, QUEUE_SENTINEL_PATH, NEXT_CYCLE_JSON_PATH,
         LAST_ALIVE_JSON_PATH,
     ]
 

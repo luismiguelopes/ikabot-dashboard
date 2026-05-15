@@ -250,6 +250,89 @@ function ConstrucaoTab() {
   )
 }
 
+function TelegramCard() {
+  const t = useT()
+  const [token, setToken] = useState('')
+  const [chatId, setChatId] = useState('')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'testing' | 'ok' | 'fail'>('idle')
+
+  useEffect(() => {
+    fetch('/api/telegram-settings')
+      .then(r => r.json())
+      .then(d => { setToken(d.botToken || ''); setChatId(d.chatId || '') })
+      .catch(() => {})
+  }, [])
+
+  const handleSave = () => {
+    setStatus('saving')
+    fetch('/api/telegram-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ botToken: token, chatId }),
+    })
+      .then(() => { setStatus('saved'); setTimeout(() => setStatus('idle'), 3000) })
+      .catch(() => setStatus('idle'))
+  }
+
+  const handleTest = () => {
+    setStatus('testing')
+    fetch('/api/telegram-settings/test', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => { setStatus(d.ok ? 'ok' : 'fail'); setTimeout(() => setStatus('idle'), 4000) })
+      .catch(() => { setStatus('fail'); setTimeout(() => setStatus('idle'), 4000) })
+  }
+
+  return (
+    <Card>
+      <div className="px-5 py-4">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
+          <i className="fa-brands fa-telegram text-sky-500" /> {t('settings_telegram_title')}
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_token')}</label>
+            <input
+              type="text" value={token} onChange={e => setToken(e.target.value)}
+              placeholder="123456:ABC-DEF…"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_chatid')}</label>
+            <input
+              type="text" value={chatId} onChange={e => setChatId(e.target.value)}
+              placeholder="-100123456789"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleSave}
+            disabled={status === 'saving'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            {status === 'saving' && <i className="fa-solid fa-spinner animate-spin text-xs" />}
+            {t('save')}
+          </button>
+          <button
+            onClick={handleTest}
+            disabled={!token || !chatId || status === 'testing'}
+            className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            {status === 'testing' && <i className="fa-solid fa-spinner animate-spin text-xs" />}
+            {t('settings_telegram_test_btn')}
+          </button>
+          {status === 'saved' && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+          {status === 'ok'    && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_test_ok')}</span>}
+          {status === 'fail'  && <span className="text-sm text-red-600 font-medium">✗ {t('settings_telegram_test_fail')}</span>}
+        </div>
+        <p className="mt-3 text-xs text-slate-400">{t('settings_telegram_help')}</p>
+      </div>
+    </Card>
+  )
+}
+
 function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   notifEnabled: boolean
   onToggleNotif: (v: boolean) => void
@@ -323,29 +406,7 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
         </div>
       </Card>
 
-      {/* Telegram skeleton */}
-      <Card>
-        <div className="px-5 py-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
-            <i className="fa-brands fa-telegram text-sky-500" /> {t('settings_telegram_title')}
-          </p>
-          <div className="space-y-3 opacity-50 pointer-events-none">
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_token')}</label>
-              <input type="text" disabled placeholder="123456:ABC-DEF…"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_chatid')}</label>
-              <input type="text" disabled placeholder="-100123456789"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-2 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            <i className="fa-solid fa-clock shrink-0" /> {t('settings_telegram_note')}
-          </div>
-        </div>
-      </Card>
+      <TelegramCard />
     </div>
   )
 }

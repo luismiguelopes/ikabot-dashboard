@@ -4,22 +4,35 @@
 import json
 import os
 from urllib.request import urlopen, Request
-from urllib.error import URLError
 
-_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+_SETTINGS_PATH = "/tmp/ikalogs/telegram_settings.json"
 
 # Per-run dedup: avoid re-notifying for the same condition until it clears
 _wine_critical_notified: set = set()
 _offline_notified: bool = False
 
 
+def _get_credentials():
+    """Read bot token and chat ID from settings file, falling back to env vars."""
+    try:
+        with open(_SETTINGS_PATH) as f:
+            d = json.load(f)
+        token = d.get("botToken", "").strip()
+        chat_id = d.get("chatId", "").strip()
+        if token and chat_id:
+            return token, chat_id
+    except Exception:
+        pass
+    return os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
+
+
 def _send(text: str) -> None:
-    if not _BOT_TOKEN or not _CHAT_ID:
+    token, chat_id = _get_credentials()
+    if not token or not chat_id:
         return
     try:
-        url  = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
-        body = json.dumps({"chat_id": _CHAT_ID, "text": text, "parse_mode": "HTML"}).encode()
+        url  = f"https://api.telegram.org/bot{token}/sendMessage"
+        body = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
         req  = Request(url, data=body, headers={"Content-Type": "application/json"})
         urlopen(req, timeout=10)
     except Exception:

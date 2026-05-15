@@ -681,6 +681,11 @@ def load_queue():
 
 
 def save_queue(data):
-    """Save queue dict to SQLite."""
+    """Save queue dict to SQLite and touch a sentinel for SSE change detection."""
     init_db()
     _write_queue_to_db(data)
+    try:
+        with open(os.path.join(_LOGS_DIR, ".queue_updated"), "w") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
