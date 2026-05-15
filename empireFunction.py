@@ -110,11 +110,6 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
             status_summary, formatted_empire, resources_data = collect_city_data(session, ids, cities)
 
-            if should_update_building_costs():
-                collect_building_costs(session, ids)
-            elif should_update_world_scan():
-                collect_world_scan(session)
-
             finalize_empire_cycle(session, ids, status_summary, formatted_empire, resources_data)
 
             try:
@@ -132,11 +127,18 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             last_full_cycle_time = time.time()
             next_full_jitter = random.randint(-300, 300)
 
-            # ── Building queue (after full cycle) ────────────────────────────
+            # ── Building queue (before scans — never blocked by long scans) ──
             if has_building_queue():
                 if process_building_queue(session, ids, cities):
                     logger.info(lm("queue_movements_refresh"))
                     refresh_movements(session, ids[0])
+
+            # ── Background scans (only during active hours) ───────────────────
+            if in_scan_hours:
+                if should_update_building_costs():
+                    collect_building_costs(session, ids)
+                elif should_update_world_scan():
+                    collect_world_scan(session)
 
             smart_sleep(last_full_cycle_time, next_full_jitter)
 
