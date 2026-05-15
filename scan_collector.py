@@ -69,6 +69,7 @@ def collect_world_scan(session):
         for i, (x_min, x_max, y_min, y_max) in enumerate(quadrants):
             _write_scan_status("running", "shallow_scan", i + 1, 4,
                 lm("scan_status_quadrant", x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max))
+            time.sleep(random.randint(2, 5))
             data = session.post(
                 f"action=WorldMap&function=getJSONArea&x_min={x_min}&x_max={x_max}&y_min={y_min}&y_max={y_max}"
             )
@@ -80,7 +81,6 @@ def collect_world_scan(session):
                         "resource_type": val2[2],
                         "players": int(val2[7]),
                     })
-            time.sleep(random.randint(2, 5))
 
         seen_ids = set()
         islands_to_scan = []

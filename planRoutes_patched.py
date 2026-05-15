@@ -36,6 +36,7 @@ def sendGoods(session, originCityId, destinationCityId, islandId, ships, send, u
     while True:
         html = session.get()
         current_city = getCity(html)  # the city the bot is right now
+        time.sleep(random.randint(2, 5))
         city = getCity(session.get(city_url + originCityId))  # the origin city
         currId = current_city["id"]
 

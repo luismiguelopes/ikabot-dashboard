@@ -126,7 +126,7 @@ def collect_city_data(session, ids, cities):
     building_names = set()
     own_cities_list = []
 
-    for id in ids:
+    for id in random.sample(ids, len(ids)):
         time.sleep(random.randint(5, 15))
 
         try:

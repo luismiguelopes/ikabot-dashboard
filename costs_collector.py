@@ -40,6 +40,7 @@ def _get_costs_reduction(session, city_id):
     if "reduccion_inv_max" in sessionData:
         return Decimal("0.86")
 
+    time.sleep(random.randint(2, 6))
     url = (
         "view=noViewChange&researchType=economy&backgroundView=city"
         "&currentCityId={}&templateView=researchAdvisor&actionRequest={}&ajax=1"
@@ -75,7 +76,7 @@ def collect_building_costs(session, ids):
         print(lm("costs_start", ts=time.strftime('%H:%M:%S')))
         all_costs = {}
 
-        for city_id in ids:
+        for city_id in random.sample(ids, len(ids)):
             pause = random.randint(15, 30)
             print(lm("costs_city_pause", pause=pause))
             time.sleep(pause)
@@ -86,6 +87,7 @@ def collect_building_costs(session, ids):
                 city_name = city.get("cityName", city.get("name", "Unknown"))
                 print(lm("costs_city_start", city=city_name))
 
+                time.sleep(random.randint(3, 8))
                 detail_url = (
                     "view=buildingDetail&buildingId=0&helpId=1&backgroundView=city"
                     "&currentCityId={}&templateView=ikipedia&actionRequest={}&ajax=1"

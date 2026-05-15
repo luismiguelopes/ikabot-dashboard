@@ -622,7 +622,8 @@ def process_building_queue(session, ids, cities):
     name_to_id = {cities[cid]["name"]: cid for cid in ids if cid in cities}
 
     first_city = True
-    for city_name, items in list(queues.items()):
+    for city_name in random.sample(list(queues.keys()), len(queues)):
+        items = queues[city_name]
         if not items:
             continue
 
@@ -749,7 +750,7 @@ def process_building_queue(session, ids, cities):
         target_for_expand["upgradeTo"] = target_b["level"] + 1
         _expandBuilding(session, city_id, target_for_expand, False)
 
-        time.sleep(2)
+        time.sleep(random.randint(1, 4))
         html2 = session.get("view=city&cityId={}".format(city_id))
         city2 = getCity(html2)
         pos_idx = target_b["position"]
