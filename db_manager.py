@@ -9,6 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
+_SCHEMA_VERSION = 2
 
 
 def _connect():
@@ -18,6 +19,19 @@ def _connect():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def _run_migrations(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = row[0] if row[0] is not None else 0
+    if current < 1:
+        # v1 = baseline: all tables created by CREATE TABLE IF NOT EXISTS in init_db
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    if current < 2:
+        # v2 = scan_last_updated key in empire_meta (no schema change, just a marker)
+        conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+    conn.commit()
 
 
 def init_db():
@@ -126,6 +140,11 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+    conn2 = _connect()
+    try:
+        _run_migrations(conn2)
+    finally:
+        conn2.close()
     _DB_INIT_DONE = True
     _migrate_marks()
     _migrate_building_costs()
@@ -508,7 +527,7 @@ def get_city_building_cost(city, building, level):
 
 
 def costs_last_updated():
-    """Return last_updated timestamp or 0."""
+    """Return building costs last_updated timestamp or 0."""
     init_db()
     conn = _connect()
     try:
@@ -518,6 +537,33 @@ def costs_last_updated():
     finally:
         conn.close()
     return int(row["value"]) if row else 0
+
+
+def scan_last_updated():
+    """Return world scan last_updated timestamp or 0."""
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT value FROM empire_meta WHERE key = 'scan_last_updated'"
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["value"]) if row else 0
+
+
+def save_scan_timestamp(ts):
+    """Persist world scan completion timestamp to empire_meta."""
+    init_db()
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO empire_meta (key, value) VALUES ('scan_last_updated', ?)",
+                (str(ts),),
+            )
+    finally:
+        conn.close()
 
 
 # ── Building queue ────────────────────────────────────────────────────────────

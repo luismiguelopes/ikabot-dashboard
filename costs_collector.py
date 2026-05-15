@@ -28,6 +28,13 @@ def should_update_building_costs():
     if os.path.exists(flag):
         os.remove(flag)
         return True
+    try:
+        from db_manager import costs_last_updated
+        last_ts = costs_last_updated()
+        if last_ts:
+            return time.time() - last_ts > BUILDING_COSTS_UPDATE_INTERVAL
+    except Exception:
+        pass
     costs_path = os.path.join(LOGS_DIR, "building_costs.json")
     if not os.path.exists(costs_path):
         return True

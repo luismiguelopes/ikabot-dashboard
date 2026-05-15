@@ -21,6 +21,13 @@ def should_update_world_scan():
     if os.path.exists(flag):
         os.remove(flag)
         return True
+    try:
+        from db_manager import scan_last_updated
+        last_ts = scan_last_updated()
+        if last_ts:
+            return time.time() - last_ts > WORLD_SCAN_UPDATE_INTERVAL
+    except Exception:
+        pass
     scan_path = os.path.join(LOGS_DIR, "world_scan.json")
     if not os.path.exists(scan_path):
         return True
@@ -186,6 +193,12 @@ def collect_world_scan(session):
         }
         with open(scan_path, "w") as f:
             json.dump(result, f, indent=2)
+
+        try:
+            from db_manager import save_scan_timestamp
+            save_scan_timestamp(int(time.time()))
+        except Exception:
+            pass
 
         _write_scan_status("idle", "done", len(islands_to_scan), len(islands_to_scan),
             lm("scan_status_done", n=len(inactive_players)))
