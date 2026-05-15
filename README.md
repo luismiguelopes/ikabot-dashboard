@@ -22,13 +22,13 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
    - Outside active hours: runs every `SCAN_NIGHT_INTERVAL` (default 4h) — reduces nightly HTTP activity to a heartbeat scan
 3. On a full cycle, collects per-city data: resources, building levels, production rates, wine status, gold. Cities are visited in a **randomised order** each cycle.
 4. Fetches military and fleet movements from the military advisor endpoint.
-5. Persists everything to the shared SQLite database (`ikabot.db`) and writes JSON files to the shared volume.
-6. Persists everything to the shared SQLite database (`ikabot.db`) via `finalize_empire_cycle()`.
-7. Processes the building queue immediately after the empire data is fresh (before any long scan starts).
-8. Then, one of the following runs (mutually exclusive, strictly sequential):
-   - If building costs are due (every 3 days, or `.force_costs_update` flag) → `collect_building_costs()`
-   - Else if world scan is due (every 7 days, or `.force_world_scan` flag) → `collect_world_scan()`
-9. Calculates the next wake-up time as the earliest of: next full cycle, next construction ETA, or next transport fleet arrival. Writes it to `next_cycle.json`. The sidebar countdown is derived from this value.
+5. Persists everything to the shared SQLite database (`ikabot.db`) via `finalize_empire_cycle()` and writes JSON files to the shared volume.
+6. Processes the building queue **immediately** — never blocked by long scans.
+7. Then, within `SCAN_ACTIVE_HOURS` only, one of the following runs:
+   - If building costs are due (every 3 days, or `.force_costs_update` flag) → `collect_building_costs()` (~7 min)
+   - Else if a world scan should start (every 7 days, or `.force_world_scan` flag) → `collect_shallow_scan()` (~30s, discovers island list)
+8. Calculates the next wake-up time as the earliest of: next full cycle, next construction ETA, or next transport fleet arrival. Writes it to `next_cycle.json`. The sidebar countdown is derived from this value.
+9. **During the sleep interval**, visits one island at a time from the deep-scan checkpoint (if active). The number of islands visited per sleep is organically random — determined by how long the bot sleeps, not a fixed batch size.
 
 **Building queue** — when processing the queue, for each city:
 - Checks if a tracked in-progress construction has completed.
@@ -43,7 +43,7 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 - A 3–10s orientation pause precedes the first request of each cycle.
 - 5–15s between cities during empire collection; 2–6s between the two requests per city.
 - 15–30s between cities during building costs collection; 3–8s between city GET and detail POST; 2–6s before the research reduction POST; 5–15s between buildings within a city.
-- 2–5s between quadrant requests during the world scan shallow phase; 15–30s between island requests in the deep phase.
+- 2–5s between the 4 quadrant requests in the world scan shallow phase; 15–30s between individual island requests in the deep phase (processed one per sleep interval).
 - 3–7s between `changeCurrentCity` and `loadTransportersWithFreight`; 12–30s between consecutive transport fleets.
 - `SCAN_ACTIVE_HOURS` suppresses the full empire scan outside a configurable time window, eliminating the most obvious bot signal (regular hourly HTTP activity at 3 AM).
 
@@ -188,8 +188,9 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `resources.json` | Every cycle | Resources and wine timers per city |
 | `movements.json` | Every cycle + on dispatch | Active fleet/army movements |
 | `own_cities.json` | Every cycle | Island coordinates of own cities |
-| `world_scan.json` | Every 7 days | Inactive players and island summaries |
-| `world_scan_prev.json` | Every 7 days | Previous scan — used to detect newly inactive players |
+| `world_scan.json` | Per island (incremental) | Inactive players and island summaries — updated after each island during the deep scan, `scanInProgress: true` while scan is running |
+| `world_scan_checkpoint.json` | Per island | Deep-scan state: remaining islands, accumulated results — deleted when scan completes |
+| `world_scan_prev.json` | On shallow scan start | Previous full scan — used to detect newly inactive players (`isNew` flag) |
 | `next_cycle.json` | Each sleep | Exact timestamp of next wake-up |
 | `last_alive.json` | Each loop iteration | `{lastAlive, cycle}` — stale if bot crashes |
 | `empire_scan_status.json` | During force-refresh | Per-city scan progress |
