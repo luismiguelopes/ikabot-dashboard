@@ -14,7 +14,9 @@ if _here not in sys.path:
 
 from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, QUEUE_SETTINGS_PATH, UPDATE_INTERVAL,
-    ACTIVE_HOURS_START, ACTIVE_HOURS_END, FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm, logger,
+    ACTIVE_HOURS_START, ACTIVE_HOURS_END,
+    SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
+    FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -140,6 +142,13 @@ def _in_active_hours():
     return start <= time.localtime().tm_hour < end
 
 
+def _in_scan_hours():
+    """Return True if current local hour is within the scan active hours window."""
+    if SCAN_ACTIVE_HOURS_START == 0 and SCAN_ACTIVE_HOURS_END == 24:
+        return True
+    return SCAN_ACTIVE_HOURS_START <= time.localtime().tm_hour < SCAN_ACTIVE_HOURS_END
+
+
 def _secs_until_active():
     """Seconds until the active hours window opens. Returns 0 if already active."""
     if _in_active_hours():
@@ -152,7 +161,7 @@ def _secs_until_active():
     return (24 - h + start) * 3600 - m * 60 - s
 
 
-def smart_sleep(last_full_cycle_time, next_full_jitter):
+def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
     """Sleep until the next full empire cycle, next construction ETA, or next transport arrival, whichever is soonest."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
     q = _load_queue()  # single load — reused by all helpers below
@@ -203,6 +212,18 @@ def smart_sleep(last_full_cycle_time, next_full_jitter):
             break
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
+
+        # Opportunistic island scan during idle time — uses the natural sleep
+        # variation as an organic source of randomness in batch size
+        if session and _in_scan_hours() and (end_time - time.time()) > 50:
+            try:
+                from scan_collector import scan_has_pending, scan_next_island
+                if scan_has_pending():
+                    scan_next_island(session)
+                    continue  # re-check flags immediately after island scan
+            except Exception:
+                pass
+
         time.sleep(min(60, end_time - time.time()))
 
 

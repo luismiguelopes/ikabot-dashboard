@@ -19,7 +19,7 @@ from empire_utils import (
 )
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
-from scan_collector import should_update_world_scan, collect_world_scan
+from scan_collector import should_start_scan, collect_shallow_scan
 from queue_processor import has_building_queue, process_building_queue, smart_sleep
 
 from ikabot.helpers.pedirInfo import getIdsOfCities
@@ -94,7 +94,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     if process_building_queue(session, ids, cities):
                         logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
-                smart_sleep(last_full_cycle_time, next_full_jitter)
+                smart_sleep(last_full_cycle_time, next_full_jitter, session)
                 continue
 
             # ── Full empire data cycle ───────────────────────────────────────
@@ -137,10 +137,10 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             if in_scan_hours:
                 if should_update_building_costs():
                     collect_building_costs(session, ids)
-                elif should_update_world_scan():
-                    collect_world_scan(session)
+                elif should_start_scan():
+                    collect_shallow_scan(session)
 
-            smart_sleep(last_full_cycle_time, next_full_jitter)
+            smart_sleep(last_full_cycle_time, next_full_jitter, session)
 
         except Exception:
             logger.error(lm("cycle_error"), exc_info=True)

@@ -30,6 +30,7 @@ EMPIRE_SCAN_STATUS_PATH   = os.path.join(LOGS_DIR, "empire_scan_status.json")
 FORCE_EMPIRE_FLAG         = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG          = os.path.join(LOGS_DIR, ".force_queue_check")
 FORCE_MOVEMENTS_FLAG      = os.path.join(LOGS_DIR, ".force_movements_update")
+SCAN_CHECKPOINT_PATH      = os.path.join(LOGS_DIR, "world_scan_checkpoint.json")
 
 
 def _parse_duration(value, default):
@@ -92,6 +93,10 @@ _LM = {
     "scan_islands_count": {
         "en": "[world_scan] {n} islands to scan within radius {radius}...",
         "pt": "[world_scan] {n} ilhas a escanear no raio {radius}...",
+    },
+    "scan_shallow_complete": {
+        "en": "[world_scan] Shallow scan done — {n} islands queued for incremental deep scan",
+        "pt": "[world_scan] Shallow scan concluído — {n} ilhas em fila para deep scan incremental",
     },
     "scan_status_deep": {
         "en": "Scanning {n} islands...",
