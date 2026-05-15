@@ -23,11 +23,12 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 3. On a full cycle, collects per-city data: resources, building levels, production rates, wine status, gold. Cities are visited in a **randomised order** each cycle.
 4. Fetches military and fleet movements from the military advisor endpoint.
 5. Persists everything to the shared SQLite database (`ikabot.db`) and writes JSON files to the shared volume.
-6. Then, one of the following runs inline (mutually exclusive, strictly sequential):
+6. Persists everything to the shared SQLite database (`ikabot.db`) via `finalize_empire_cycle()`.
+7. Processes the building queue immediately after the empire data is fresh (before any long scan starts).
+8. Then, one of the following runs (mutually exclusive, strictly sequential):
    - If building costs are due (every 3 days, or `.force_costs_update` flag) → `collect_building_costs()`
    - Else if world scan is due (every 7 days, or `.force_world_scan` flag) → `collect_world_scan()`
-   - Else if the building queue has pending items and is **enabled** → `process_building_queue()`
-7. Calculates the next wake-up time as the earliest of: next full cycle, next construction ETA, or next transport fleet arrival. Writes it to `next_cycle.json`. The sidebar countdown is derived from this value.
+9. Calculates the next wake-up time as the earliest of: next full cycle, next construction ETA, or next transport fleet arrival. Writes it to `next_cycle.json`. The sidebar countdown is derived from this value.
 
 **Building queue** — when processing the queue, for each city:
 - Checks if a tracked in-progress construction has completed.
@@ -136,6 +137,10 @@ Volume-mounted files (`empireFunction.py` and all sibling modules, `planRoutes_p
 | `/api/building-queue/clear` | POST | Clear queue for one city `{cityName}` or all cities (no body) |
 | `/api/building-queue/enabled` | POST | Enable or pause the queue `{enabled: bool}` |
 | `/api/building-queue/settings` | POST | Save queue settings `{activeHours: {start, end}, resourceBuffer: [5]}` |
+| `/api/telegram-settings` | GET | Read saved Telegram bot token and chat ID |
+| `/api/telegram-settings` | POST | Save Telegram credentials `{botToken, chatId}` to `/tmp/ikalogs/telegram_settings.json` |
+| `/api/telegram-settings/test` | POST | Send a test message using the currently saved credentials |
+| `/api/health` | GET | Liveness check — `{"status": "ok", "ts": timestamp, "dbOk": bool}` |
 
 ## Dashboard Tabs
 
@@ -152,7 +157,7 @@ The dashboard defaults to **English**. A toggle in the sidebar footer switches t
 | **Calculators** | **Building Upgrade**: city/building/level selector, auto-fills costs, estimates time to gather. **ROI Sawmill/Quarry**: island vs city building comparator. **Colony ROI**: current island vs new colony — pre-fillable from the Islands tab |
 | **Construction** | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear, city pills, building list, per-city queue panel with drag-to-reorder, inProgress ETA countdown, transport error banner, queue budget summary. **Template** sub-tab: set target levels per building type and apply to all cities at once |
 | **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note and timestamped action log. Highlights newly inactive players (not seen in previous scan). **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button |
-| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Notifications**: browser notifications toggle; Telegram bot configuration |
+| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Notifications**: browser notifications toggle; Telegram bot token and chat ID configuration with a live test button |
 
 ## Data Storage
 
@@ -174,7 +179,7 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `queue_state` | Queue enabled/paused flag |
 | `empire_meta` | Key-value store: latest empire snapshot, costs timestamp, scan timestamp |
 
-**JSON files** — written alongside SQLite for operational use and fallback:
+**JSON files** — written for operational signalling and read by the Flask layer:
 
 | File | Updated | Contents |
 |---|---|---|
@@ -183,14 +188,14 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `resources.json` | Every cycle | Resources and wine timers per city |
 | `movements.json` | Every cycle + on dispatch | Active fleet/army movements |
 | `own_cities.json` | Every cycle | Island coordinates of own cities |
-| `building_costs.json` | Every 3 days | Upgrade costs (also written to SQLite) |
 | `world_scan.json` | Every 7 days | Inactive players and island summaries |
 | `world_scan_prev.json` | Every 7 days | Previous scan — used to detect newly inactive players |
-| `building_queue.json` | On each queue change | Queue state fallback |
 | `next_cycle.json` | Each sleep | Exact timestamp of next wake-up |
 | `last_alive.json` | Each loop iteration | `{lastAlive, cycle}` — stale if bot crashes |
 | `empire_scan_status.json` | During force-refresh | Per-city scan progress |
 | `world_scan_status.json` | During world scan | Scan phase progress |
+| `telegram_settings.json` | On save via UI | Telegram bot token and chat ID |
+| `.queue_updated` | On each queue change | Sentinel touched on every queue write — SSE watches this |
 
 ## Project Structure
 
@@ -198,7 +203,7 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 .
 ├── docker-compose.yml
 ├── empireFunction.py        # Main loop orchestrator (~120 lines)
-├── empire_utils.py          # Constants, duration parser, i18n log strings, with_retry()
+├── empire_utils.py          # Constants, duration parser, i18n log strings, with_retry(), shared logger
 ├── empire_collector.py      # City data collection, movements fetch
 ├── costs_collector.py       # Building costs collection (every 3 days)
 ├── scan_collector.py        # World scan (every 7 days)
