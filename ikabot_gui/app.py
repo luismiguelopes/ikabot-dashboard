@@ -424,22 +424,12 @@ def _load_building_queue():
             return _db.load_queue()
         except Exception:
             pass
-    if not os.path.exists(BUILDING_QUEUE_JSON_PATH):
-        return {"queues": {}, "inProgress": {}, "transportErrors": {}}
-    with open(BUILDING_QUEUE_JSON_PATH) as f:
-        return json.load(f)
+    return {"queues": {}, "inProgress": {}, "transportErrors": {}}
 
 
 def _save_building_queue(data):
     if _db:
-        try:
-            _db.save_queue(data)
-            return
-        except Exception:
-            pass
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(BUILDING_QUEUE_JSON_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+        _db.save_queue(data)
 
 
 def _load_queue_settings():
@@ -587,7 +577,6 @@ def api_building_queue_reorder():
     return jsonify({"ok": True, "queue": city_queue})
 
 
-@app.route("/api/stream")
 @app.route("/api/health")
 def api_health():
     db_ok = False
@@ -600,6 +589,7 @@ def api_health():
     return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok})
 
 
+@app.route("/api/stream")
 def api_stream():
     """SSE endpoint — emits 'update' whenever any data file on the shared volume changes."""
     watched = [

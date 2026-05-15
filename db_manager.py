@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _connect():
@@ -31,6 +31,10 @@ def _run_migrations(conn):
     if current < 2:
         # v2 = scan_last_updated key in empire_meta (no schema change, just a marker)
         conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+    if current < 3:
+        # v3 = city_order column on queue_items for stable inter-city ordering
+        conn.execute("ALTER TABLE queue_items ADD COLUMN city_order INTEGER DEFAULT 0")
+        conn.execute("INSERT INTO schema_version (version) VALUES (3)")
     conn.commit()
 
 
@@ -463,15 +467,9 @@ def _write_building_costs_to_db(data):
 
 
 def save_building_costs(data):
-    """Save full building_costs dict to SQLite. Also writes JSON as fallback."""
+    """Save full building_costs dict to SQLite."""
     init_db()
     _write_building_costs_to_db(data)
-    costs_path = os.path.join(_LOGS_DIR, "building_costs.json")
-    try:
-        with open(costs_path, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception:
-        pass
 
 
 def get_building_costs():
@@ -600,15 +598,15 @@ def _write_queue_to_db(data):
                 INSERT OR REPLACE INTO queue_state (key, value) VALUES ('enabled', ?)
             """, ("true" if enabled else "false",))
             conn.execute("DELETE FROM queue_items")
-            for city, items in queues.items():
+            for city_idx, (city, items) in enumerate(queues.items()):
                 for pos, item in enumerate(items):
                     conn.execute("""
                         INSERT INTO queue_items
-                        (city, building, target_level, added_at, position, failed_attempts)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (city, building, target_level, added_at, position, city_order, failed_attempts)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         city, item["building"], item.get("targetLevel", 0),
-                        item.get("addedAt", 0), pos,
+                        item.get("addedAt", 0), pos, city_idx,
                         item.get("failedAttempts", 0),
                     ))
             conn.execute("DELETE FROM queue_in_progress")
@@ -639,7 +637,7 @@ def _read_queue_from_db():
         state_rows = conn.execute("SELECT key, value FROM queue_state").fetchall()
         item_rows = conn.execute("""
             SELECT city, building, target_level, added_at, position, failed_attempts
-            FROM queue_items ORDER BY city, position
+            FROM queue_items ORDER BY city_order, position
         """).fetchall()
         ip_rows = conn.execute("SELECT * FROM queue_in_progress").fetchall()
         err_rows = conn.execute("SELECT * FROM queue_transport_errors").fetchall()
@@ -683,12 +681,6 @@ def load_queue():
 
 
 def save_queue(data):
-    """Save queue dict to SQLite. Also writes JSON as fallback."""
+    """Save queue dict to SQLite."""
     init_db()
     _write_queue_to_db(data)
-    queue_path = os.path.join(_LOGS_DIR, "building_queue.json")
-    try:
-        with open(queue_path, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass

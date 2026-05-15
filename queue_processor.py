@@ -31,23 +31,12 @@ def _load_queue():
         from db_manager import load_queue
         return load_queue()
     except Exception:
-        pass
-    if not os.path.exists(QUEUE_JSON_PATH):
-        return {"queues": {}, "inProgress": {}, "transportErrors": {}}
-    with open(QUEUE_JSON_PATH) as f:
-        return json.load(f)
+        return {"queues": {}, "inProgress": {}, "transportErrors": {}, "enabled": True}
 
 
 def _save_queue(data):
-    try:
-        from db_manager import save_queue
-        save_queue(data)
-        return
-    except Exception:
-        pass
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(QUEUE_JSON_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    from db_manager import save_queue
+    save_queue(data)
 
 
 def has_building_queue(data=None):
@@ -228,22 +217,7 @@ def _get_upgrade_cost_from_cache(city_name, building_name, current_level):
             return [entry.get(k, 0) for k in ("wood", "wine", "marble", "glass", "sulfur")]
     except Exception:
         pass
-    # JSON fallback
-    costs_path = os.path.join(LOGS_DIR, "building_costs.json")
-    if not os.path.exists(costs_path):
-        return None
-    try:
-        with open(costs_path) as f:
-            data = json.load(f)
-    except Exception:
-        return None
-    bdata = data.get("cities", {}).get(city_name, {}).get(building_name)
-    if not bdata:
-        return None
-    entry = bdata.get("costs", {}).get(str(current_level + 1))
-    if not entry:
-        return None
-    return [entry.get(k, 0) for k in ("wood", "wine", "marble", "glass", "sulfur")]
+    return None
 
 
 def _get_in_transit_to(city_name):
@@ -439,13 +413,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         from db_manager import get_building_costs
         costs_cache = get_building_costs()
     except Exception:
-        costs_path = os.path.join(LOGS_DIR, "building_costs.json")
-        if os.path.exists(costs_path):
-            try:
-                with open(costs_path) as f:
-                    costs_cache = json.load(f)
-            except Exception:
-                pass
+        pass
 
     cost = _get_total_upgrade_cost(costs_cache, city_name, building_name,
                                    current_level, current_level + 1)
