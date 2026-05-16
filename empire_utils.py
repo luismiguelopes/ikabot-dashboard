@@ -15,8 +15,11 @@ def _setup_logger():
             datefmt="%H:%M:%S",
         ))
         _log.addHandler(_handler)
-        _log.setLevel(logging.DEBUG)
+        _log.setLevel(logging.INFO)
         _log.propagate = False
+    # Silence ikabot's internal HTTP/session debug noise
+    for _noisy in ("ikabot.web", "ikabot.web.session", "ikabot.helpers"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
     return _log
 
 
