@@ -625,13 +625,44 @@ def api_telegram_settings_test():
 
 @app.route("/api/espionage/spy-counts")
 def api_espionage_spy_counts():
+    """
+    Return spy counts per city.
+    Primary source: spy_counts.json written by fetch_spy_counts() from the bot.
+    Fallback: compute deployed count from TRAVELING missions.
+    """
+    # Merge in-field counts from missions (always accurate)
+    in_field: dict[str, int] = {}
+    try:
+        with open(SPY_MISSIONS_PATH) as f:
+            missions = json.load(f).get("missions", [])
+        for m in missions:
+            if m.get("state") == "TRAVELING":
+                cid = str(m.get("originCityId", ""))
+                in_field[cid] = in_field.get(cid, 0) + m.get("numAgents", 0)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Primary source: game-fetched counts
     try:
         with open(SPY_COUNTS_PATH) as f:
-            return jsonify(json.load(f))
-    except FileNotFoundError:
-        return jsonify({"lastUpdated": 0, "counts": {}})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            data = json.load(f)
+        by_city = data.get("byCityId", {})
+        # Overlay in-field count from missions (more real-time than cached game data)
+        for cid, cnt in in_field.items():
+            if cid in by_city:
+                by_city[cid]["deployed"] = cnt
+            else:
+                by_city[cid] = {"cityName": None, "available": None, "inDefense": None,
+                                 "inTraining": None, "deployed": cnt, "trainable": None}
+        return jsonify({"counts": by_city, "lastUpdated": data.get("lastUpdated", 0)})
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Fallback: only in-field data
+    by_city = {cid: {"cityName": None, "available": None, "inDefense": None,
+                      "inTraining": None, "deployed": cnt, "trainable": None}
+               for cid, cnt in in_field.items()}
+    return jsonify({"counts": by_city, "lastUpdated": 0})
 
 
 @app.route("/api/espionage/missions")

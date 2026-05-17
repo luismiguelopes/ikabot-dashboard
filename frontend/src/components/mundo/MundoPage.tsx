@@ -24,16 +24,23 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
   const [numAgents, setNumAgents] = useState(spyDefaults.numAgents)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [spyCounts, setSpyCounts] = useState<Record<string, number>>({})
+  interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
+  const [spyCounts, setSpyCounts] = useState<Record<string, CitySpyCounts>>({})
 
   useEffect(() => {
     fetch('/api/espionage/spy-counts')
       .then(r => r.json())
       .then(d => {
-        const counts: Record<string, number> = {}
+        const counts: Record<string, CitySpyCounts> = {}
         if (d.counts) {
           for (const [id, val] of Object.entries(d.counts)) {
-            counts[id] = val as number
+            const v = val as Record<string, number | null>
+            counts[id] = {
+              available:  v.available  ?? null,
+              inDefense:  v.inDefense  ?? null,
+              inTraining: v.inTraining ?? null,
+              deployed:   v.deployed   ?? null,
+            }
           }
         }
         setSpyCounts(counts)
@@ -106,8 +113,14 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
             >
               {ownCities.map(c => {
                 const id = String(c.cityId)
-                const count = spyCounts[id]
-                const label = count !== undefined ? `${c.name} (${count})` : c.name
+                const sc = spyCounts[id]
+                let label = c.name
+                if (sc) {
+                  if (sc.available != null)
+                    label = `${c.name} (${sc.available} disponíveis)`
+                  else if (sc.deployed != null && sc.deployed > 0)
+                    label = `${c.name} (${sc.deployed} em campo)`
+                }
                 return <option key={c.cityId} value={id}>{label}</option>
               })}
             </select>

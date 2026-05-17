@@ -12,6 +12,7 @@ from empire_utils import LOGS_DIR, logger
 SPY_MISSIONS_PATH       = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
 SPY_COUNTS_PATH         = os.path.join(LOGS_DIR, "spy_counts.json")
+OWN_CITIES_PATH         = os.path.join(LOGS_DIR, "own_cities.json")
 
 
 # ── Persistence helpers ───────────────────────────────────────────────────────
@@ -49,110 +50,179 @@ def _load_spy_counts():
         with open(SPY_COUNTS_PATH) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"lastUpdated": 0, "counts": {}}
+        return {"lastUpdated": 0, "byCityId": {}}
 
 
-def _save_spy_counts(counts_by_city_id):
+def _save_spy_counts(data):
     os.makedirs(LOGS_DIR, exist_ok=True)
-    data = _load_spy_counts()
-    data["lastUpdated"] = int(time.time())
-    data["counts"].update(counts_by_city_id)
     with open(SPY_COUNTS_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
 
-# ── Safehouse pre-check ───────────────────────────────────────────────────────
+# ── Safehouse HTML parsing ────────────────────────────────────────────────────
 
-def _fetch_available_spies(session, origin_city_id):
+def _parse_safehouse_html(html, city_name):
     """
-    Open the safehouse tab for origin_city_id and parse available agent count.
-    Returns int or None if count cannot be determined.
-    Also refreshes ikabot_config.actionRequest from the response.
+    Extract spy counts from the safehouse updateTemplateData HTML.
+    Returns a dict with keys: available, inDefense, inTraining, deployed, trainable.
+    Any value that cannot be parsed is left as None.
+    """
+    counts = {
+        "available":  None,
+        "inDefense":  None,
+        "inTraining": None,
+        "deployed":   None,
+        "trainable":  None,
+    }
+
+    if not html:
+        return counts
+
+    # "20 estão em uso" → deployed on missions
+    m = re.search(r'(\d+)\s+est[aã]o?\s+em\s+uso', html, re.IGNORECASE)
+    if m:
+        counts["deployed"] = int(m.group(1))
+
+    # "20 estão a trabalhar na defesa" → defense assignment
+    m = re.search(r'(\d+)\s+est[aã]o?\s+a\s+trabalhar\s+na\s+defesa', html, re.IGNORECASE)
+    if m:
+        counts["inDefense"] = int(m.group(1))
+
+    # "0 esperam por treino" → agents in training queue
+    m = re.search(r'(\d+)\s+esperam?\s+por\s+treino', html, re.IGNORECASE)
+    if m:
+        counts["inTraining"] = int(m.group(1))
+
+    # "Podes treinar 40" → remaining training capacity (safehouse level - total trained)
+    m = re.search(r'[Pp]odes\s+treinar\s+(\d+)', html, re.IGNORECASE)
+    if m:
+        counts["trainable"] = int(m.group(1))
+
+    # explicit available count — game may show "X disponíveis" or "X espiões disponíveis"
+    m = re.search(r'(\d+)\s+(?:espi[oõ]es?\s+)?dispon[ií]veis?', html, re.IGNORECASE)
+    if m:
+        counts["available"] = int(m.group(1))
+
+    # fallback: if we have deployed/defense/training but not available,
+    # available = trainable_total - inDefense - deployed - inTraining
+    # trainable_total = current_total + trainable_capacity; we don't know current_total directly.
+    # Log so the real HTML can be inspected to add a better pattern.
+    if counts["available"] is None:
+        logger.debug(
+            "[espionage] %s: não foi possível parsear 'disponíveis' do HTML "
+            "(deployed=%s defense=%s training=%s). HTML excerpt: %.200s",
+            city_name, counts["deployed"], counts["inDefense"], counts["inTraining"], html
+        )
+
+    return counts
+
+
+def _fetch_city_spy_counts(session, city_id, city_name, position):
+    """
+    GET the safehouse view for a single city and return parsed counts dict.
+    Returns None on error.
     """
     import ikabot.config as ikabot_config
 
-    delay = random.randint(3, 8)
-    logger.info("[espionage] waiting %ds before safehouse check (city %s)", delay, origin_city_id)
-    time.sleep(delay)
-
-    params = {
-        "view": "safehouse",
-        "cityId": origin_city_id,
-        "backgroundView": "city",
-        "currentCityId": origin_city_id,
-        "actionRequest": ikabot_config.actionRequest,
-        "ajax": 1,
-    }
-
+    url = (
+        f"view=safehouse&cityId={city_id}&position={position}"
+        f"&backgroundView=city&currentCityId={city_id}"
+        f"&templateView=safehouse&actionRequest={ikabot_config.actionRequest}&ajax=1"
+    )
     try:
-        resp = session.get(params=params)
+        resp = session.get(url)
         resp_data = json.loads(resp, strict=False)
     except Exception as e:
-        logger.error("[espionage] safehouse fetch failed for city %s: %s", origin_city_id, e)
+        logger.error("[espionage] GET safehouse %s falhou: %s", city_name, e)
         return None
 
     # Refresh CSRF token
     for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            new_token = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if new_token:
-                ikabot_config.actionRequest = new_token
+            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+            if tok:
+                ikabot_config.actionRequest = tok
             break
 
-    # Log all entry types so we can debug the response structure
-    entry_types = [entry[0] for entry in resp_data if isinstance(entry, list) and entry]
-    logger.info("[espionage] safehouse response entries for city %s: %s", origin_city_id, entry_types)
-
-    # Collect all text from the response to search for agent count
-    all_text = ""
+    # Find template HTML
+    html_content = ""
     for entry in resp_data:
-        if not (isinstance(entry, list) and len(entry) >= 2):
-            continue
-        key = entry[0]
-        if key == "changeView":
+        if isinstance(entry, list) and entry[0] == "updateTemplateData":
             payload = entry[1]
-            if isinstance(payload, list):
-                for part in payload:
-                    if isinstance(part, str):
-                        all_text += part
-            elif isinstance(payload, str):
-                all_text += payload
-        elif key in ("updateTemplateData", "loadBuilding", "updateCityData"):
-            all_text += json.dumps(entry[1])
+            if isinstance(payload, str):
+                html_content = payload
+            elif isinstance(payload, dict):
+                html_content = json.dumps(payload)
+            break
 
-    if not all_text:
-        logger.warning("[espionage] safehouse: no parseable text in response for city %s "
-                       "(entries: %s)", origin_city_id, entry_types)
+    if not html_content:
+        logger.warning("[espionage] safehouse %s: sem conteúdo HTML (tipos na resposta: %s)",
+                       city_name, [e[0] if isinstance(e, list) else e for e in resp_data[:6]])
         return None
 
-    # Log first 800 chars so we can identify the agent count pattern
-    logger.info("[espionage] safehouse content (city %s) [first 800]: %s",
-                origin_city_id, all_text[:800])
+    counts = _parse_safehouse_html(html_content, city_name)
+    counts["cityName"] = city_name
+    return counts
 
-    # Try known patterns (we'll refine these after seeing the logs)
-    patterns = [
-        r'(\d+)\s+agente[s]?\s+disponíve',         # "X agentes disponíveis"
-        r'agente[s]?\s+disponíve[is]+\D{0,20}(\d+)',
-        r'disponíve[is]+\D{0,20}(\d+)\s+agente',
-        r'"availableAgents"\s*:\s*(\d+)',
-        r'available[Aa]gents["\s:]+(\d+)',
-        r'"agents"\s*:\s*(\d+)',
-        r'agentsAvailable["\s:]+(\d+)',
-        r'spiesAvailable["\s:]+(\d+)',
-        r'(\d+)\s+espi[ãa][o]?\s+disponíve',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, all_text, re.IGNORECASE)
-        if m:
-            count = int(m.group(1))
-            logger.info("[espionage] city %s: %d agents available (pattern: %s)",
-                        origin_city_id, count, pattern)
-            return count
 
-    logger.warning("[espionage] could not parse agent count for city %s — "
-                   "check the [first 800] log above to identify the right pattern",
-                   origin_city_id)
-    return None
+# ── Public: fetch spy counts for all cities ───────────────────────────────────
+
+def fetch_spy_counts(session):
+    """
+    Fetch spy counts from the safehouse view for every city that has a safehouse.
+    Reads safehouse position from own_cities.json (written by empire_collector).
+    Saves results to spy_counts.json.
+    """
+    try:
+        with open(OWN_CITIES_PATH) as f:
+            cities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("[espionage] own_cities.json não encontrado — a saltar fetch_spy_counts")
+        return
+
+    results = {}
+    first = True
+    for city in cities:
+        city_id   = str(city.get("cityId", ""))
+        city_name = city.get("name", "")
+        position  = city.get("safehousePosition")
+
+        if position is None:
+            logger.info("[espionage] %s sem posição de espionagem — a saltar", city_name)
+            continue
+
+        if not first:
+            delay = random.randint(5, 15)
+            logger.info("[espionage] aguardar %ds antes de consultar safehouse de %s", delay, city_name)
+            time.sleep(delay)
+        else:
+            time.sleep(random.randint(3, 8))
+        first = False
+
+        counts = _fetch_city_spy_counts(session, city_id, city_name, position)
+        if counts is None:
+            counts = {"cityName": city_name, "available": None, "inDefense": None,
+                      "inTraining": None, "deployed": None, "trainable": None}
+        logger.info("[espionage] safehouse %s: %s", city_name,
+                    {k: v for k, v in counts.items() if k != "cityName"})
+        results[city_id] = counts
+
+    data = {"lastUpdated": int(time.time()), "byCityId": results}
+    _save_spy_counts(data)
+    logger.info("[espionage] spy_counts.json atualizado para %d cidade(s)", len(results))
+
+
+# ── In-field count (fallback when spy_counts.json is stale) ──────────────────
+
+def count_in_field_by_city():
+    """Return {city_id_str: num_agents} for all TRAVELING missions."""
+    data = _load_missions()
+    counts: dict[str, int] = {}
+    for m in data.get("missions", []):
+        if m.get("state") == "TRAVELING":
+            cid = str(m.get("originCityId", ""))
+            counts[cid] = counts.get(cid, 0) + m.get("numAgents", 0)
+    return counts
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -175,44 +245,40 @@ def has_pending_dispatch():
 
 def process_dispatch_queue(session):
     """
-    Called from smart_sleep. For each pending spy dispatch:
-      1. Pre-check available agents at origin city (GET safehouse).
-      2. Skip with FAILED if not enough agents.
-      3. Dispatch if OK.
-    Clears the queue regardless of outcome.
+    Called from smart_sleep. Dispatches all pending spy missions.
+    Does a safehouse pre-check (if position data is available) to verify
+    there are enough agents before sending.
     """
     q = _load_dispatch_queue()
     pending = q.get("pending", [])
     if not pending:
         return
 
-    counts_to_save = {}
+    # Load cached spy counts for pre-check
+    spy_data = _load_spy_counts().get("byCityId", {})
 
     for i, item in enumerate(pending):
         if i > 0:
             delay = random.randint(15, 35)
-            logger.info("[espionage] waiting %ds before next dispatch", delay)
+            logger.info("[espionage] aguardar %ds antes do próximo dispatch", delay)
             time.sleep(delay)
 
-        origin_id = str(item["originCityId"])
-        num_agents = item.get("numAgents", 1)
+        origin_id  = str(item["originCityId"])
+        num_agents = int(item.get("numAgents", 1))
 
-        # Pre-check: how many agents are available?
-        available = _fetch_available_spies(session, origin_id)
-        if available is not None:
-            counts_to_save[origin_id] = available
-
+        # Pre-check: if we have fresh safehouse data, verify available >= requested
+        city_counts = spy_data.get(origin_id, {})
+        available   = city_counts.get("available")
         if available is not None and available < num_agents:
-            error_msg = (f"Sem agentes suficientes em cidade {origin_id} "
-                         f"({available} disponíveis, {num_agents} necessários)")
-            logger.warning("[espionage] %s — skipping dispatch to %s",
-                           error_msg, item["targetPlayerName"])
-            _append_failed_mission(item, error_msg)
+            error = f"Espiões insuficientes: {available} disponíveis, {num_agents} pedidos"
+            logger.warning("[espionage] pre-check falhou para %s: %s",
+                           item["targetPlayerName"], error)
+            _append_failed_mission(item, error)
             continue
 
         ok, result = _dispatch_spy(
             session,
-            origin_city_id=item["originCityId"],
+            origin_city_id=origin_id,
             target_city_id=item["targetCityId"],
             target_island_id=item["islandId"],
             target_player_name=item["targetPlayerName"],
@@ -224,15 +290,8 @@ def process_dispatch_queue(session):
         )
         if not ok:
             _append_failed_mission(item, result)
-            logger.warning("[espionage] dispatch failed → saved as FAILED for %s: %s",
+            logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
                            item["targetPlayerName"], result)
-        else:
-            # Decrement local count so next dispatch in same batch uses updated estimate
-            if available is not None:
-                counts_to_save[origin_id] = max(0, available - num_agents)
-
-    if counts_to_save:
-        _save_spy_counts(counts_to_save)
 
     q["pending"] = []
     _save_dispatch_queue(q)
@@ -290,7 +349,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         resp = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
 
-        # Always refresh the CSRF token from the response
+        # Refresh CSRF token from response
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "updateGlobalData":
                 new_token = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
@@ -308,7 +367,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                             success = True
                             break
         if not success:
-            logger.warning("[espionage] dispatch failed — raw: %s", resp[:300])
+            logger.warning("[espionage] dispatch falhou — raw: %s", resp[:300])
             return False, "Servidor rejeitou o dispatch (sem type=10)"
     except Exception as e:
         logger.error("[espionage] dispatch exception: %s", e)
@@ -335,6 +394,6 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
     data["missions"].append(mission)
     _save_missions(data)
 
-    logger.info("[espionage] %d spy(s) dispatched → %s (%s)",
+    logger.info("[espionage] %d espião(s) despachado(s) → %s (%s)",
                 num_agents, target_player_name, target_city_name)
     return True, mission

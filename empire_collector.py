@@ -209,6 +209,7 @@ def collect_city_data(session, ids, cities):
 
         city_buildings = {}
         construction_ends = int(float(city_data.get("endUpgradeTime") or 0))
+        safehouse_slot = None
 
         if "position" in city_data:
             for b in city_data["position"]:
@@ -218,9 +219,18 @@ def collect_city_data(session, ids, cities):
                     if b.get("isBusy"):
                         level += "+"
                     city_buildings[b["name"]] = level
+                # detect safehouse slot by building identifier (en) or display name (pt)
+                if safehouse_slot is None:
+                    bname = b.get("name", "").lower()
+                    btype = b.get("building", "").lower()
+                    if "espionagem" in bname or "safehouse" in btype:
+                        safehouse_slot = b.get("position")
 
         city_buildings["_constructionEnds"] = construction_ends
         empire_data[city_name] = city_buildings
+
+        # patch safehousePosition into own_cities_list entry added just above
+        own_cities_list[-1]["safehousePosition"] = safehouse_slot
 
     status_summary = {
         "ships": {
