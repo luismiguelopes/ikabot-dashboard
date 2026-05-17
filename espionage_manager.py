@@ -3,6 +3,7 @@
 
 import json
 import os
+import random
 import time
 
 from empire_utils import LOGS_DIR, logger
@@ -65,7 +66,12 @@ def process_dispatch_queue(session):
     if not pending:
         return
 
-    for item in pending:
+    for i, item in enumerate(pending):
+        if i > 0:
+            delay = random.randint(15, 35)
+            logger.info("[espionage] waiting %ds before next dispatch", delay)
+            time.sleep(delay)
+
         ok, result = _dispatch_spy(
             session,
             origin_city_id=item["originCityId"],
