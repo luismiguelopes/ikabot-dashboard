@@ -24,6 +24,22 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
   const [numAgents, setNumAgents] = useState(spyDefaults.numAgents)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [spyCounts, setSpyCounts] = useState<Record<string, number>>({})
+
+  useEffect(() => {
+    fetch('/api/espionage/spy-counts')
+      .then(r => r.json())
+      .then(d => {
+        const counts: Record<string, number> = {}
+        if (d.counts) {
+          for (const [id, val] of Object.entries(d.counts)) {
+            counts[id] = val as number
+          }
+        }
+        setSpyCounts(counts)
+      })
+      .catch(() => {})
+  }, [])
 
   const hasIslandId = !!player.cityId && !!player.islandId
 
@@ -88,9 +104,12 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
               disabled={!hasIslandId}
               className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
             >
-              {ownCities.map(c => (
-                <option key={c.cityId} value={String(c.cityId)}>{c.name}</option>
-              ))}
+              {ownCities.map(c => {
+                const id = String(c.cityId)
+                const count = spyCounts[id]
+                const label = count !== undefined ? `${c.name} (${count})` : c.name
+                return <option key={c.cityId} value={id}>{label}</option>
+              })}
             </select>
           </div>
           <div>

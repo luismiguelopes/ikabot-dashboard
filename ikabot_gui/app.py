@@ -39,6 +39,7 @@ LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 SPY_MISSIONS_PATH       = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
+SPY_COUNTS_PATH         = os.path.join(LOGS_DIR, "spy_counts.json")
 
 
 def get_last_modified_date(filepath):
@@ -620,6 +621,17 @@ def api_telegram_settings_test():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/espionage/spy-counts")
+def api_espionage_spy_counts():
+    try:
+        with open(SPY_COUNTS_PATH) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"lastUpdated": 0, "counts": {}})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/espionage/missions")
