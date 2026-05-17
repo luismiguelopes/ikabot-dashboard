@@ -109,6 +109,8 @@ export interface BuildingCostsData {
 
 export interface WorldScanPlayer {
   playerId: string
+  cityId?: string
+  islandId?: string
   playerName: string
   allyTag?: string
   state: string
@@ -123,6 +125,13 @@ export interface WorldScanPlayer {
   markNote?: string
   markActions?: Array<{ ts: number; text: string }>
   isNew: boolean
+}
+
+export interface OwnCity {
+  name: string
+  cityId: number
+  x: number
+  y: number
 }
 
 export interface WorldScanIsland {

@@ -213,6 +213,16 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
 
+        # Pending spy dispatch queued by the Flask UI — process immediately
+        if session:
+            try:
+                from espionage_manager import has_pending_dispatch, process_dispatch_queue
+                if has_pending_dispatch():
+                    process_dispatch_queue(session)
+                    continue
+            except Exception:
+                pass
+
         # Opportunistic island scan during idle time — uses the natural sleep
         # variation as an organic source of randomness in batch size
         if session and _in_scan_hours() and (end_time - time.time()) > 50:

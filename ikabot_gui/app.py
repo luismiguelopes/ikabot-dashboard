@@ -37,6 +37,8 @@ QUEUE_SETTINGS_JSON_PATH    = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
+SPY_MISSIONS_PATH       = os.path.join(LOGS_DIR, "spy_missions.json")
+SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
 
 
 def get_last_modified_date(filepath):
@@ -618,6 +620,66 @@ def api_telegram_settings_test():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/espionage/missions")
+def api_espionage_missions():
+    try:
+        with open(SPY_MISSIONS_PATH) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"missions": []})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/own-cities")
+def api_own_cities():
+    try:
+        with open(os.path.join(LOGS_DIR, "own_cities.json")) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify([])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/espionage/dispatch", methods=["POST"])
+def api_espionage_dispatch():
+    body = request.get_json(silent=True) or {}
+    required = ["originCityId", "targetCityId", "islandId",
+                "targetPlayerName", "targetCityName", "islandX", "islandY"]
+    missing = [k for k in required if str(body.get(k, "")).strip() == ""]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    item = {
+        "originCityId":     str(body["originCityId"]),
+        "targetCityId":     str(body["targetCityId"]),
+        "islandId":         str(body["islandId"]),
+        "targetPlayerName": body["targetPlayerName"],
+        "targetCityName":   body["targetCityName"],
+        "islandX":          body["islandX"],
+        "islandY":          body["islandY"],
+        "numAgents":        int(body.get("numAgents", 1)),
+        "numDecoys":        int(body.get("numDecoys", 0)),
+        "queuedAt":         int(time.time()),
+    }
+
+    try:
+        try:
+            with open(SPY_DISPATCH_QUEUE_PATH) as f:
+                q = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            q = {"pending": []}
+        q["pending"].append(item)
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(SPY_DISPATCH_QUEUE_PATH, "w") as f:
+            json.dump(q, f)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"status": "queued"})
 
 
 @app.route("/api/health")
