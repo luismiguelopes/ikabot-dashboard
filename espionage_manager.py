@@ -80,13 +80,12 @@ def _fetch_available_spies(session, origin_city_id):
         "cityId": origin_city_id,
         "backgroundView": "city",
         "currentCityId": origin_city_id,
-        "tab": "tabSafehouse",
         "actionRequest": ikabot_config.actionRequest,
         "ajax": 1,
     }
 
     try:
-        resp = session.post(params=params)
+        resp = session.get(params=params)
         resp_data = json.loads(resp, strict=False)
     except Exception as e:
         logger.error("[espionage] safehouse fetch failed for city %s: %s", origin_city_id, e)
@@ -100,19 +99,30 @@ def _fetch_available_spies(session, origin_city_id):
                 ikabot_config.actionRequest = new_token
             break
 
+    # Log all entry types so we can debug the response structure
+    entry_types = [entry[0] for entry in resp_data if isinstance(entry, list) and entry]
+    logger.info("[espionage] safehouse response entries for city %s: %s", origin_city_id, entry_types)
+
     # Collect all text from the response to search for agent count
     all_text = ""
     for entry in resp_data:
-        if isinstance(entry, list) and len(entry) >= 2:
-            if entry[0] == "changeView" and isinstance(entry[1], list):
-                for part in entry[1]:
+        if not (isinstance(entry, list) and len(entry) >= 2):
+            continue
+        key = entry[0]
+        if key == "changeView":
+            payload = entry[1]
+            if isinstance(payload, list):
+                for part in payload:
                     if isinstance(part, str):
                         all_text += part
-            elif entry[0] == "updateTemplateData" and isinstance(entry[1], dict):
-                all_text += json.dumps(entry[1])
+            elif isinstance(payload, str):
+                all_text += payload
+        elif key in ("updateTemplateData", "loadBuilding", "updateCityData"):
+            all_text += json.dumps(entry[1])
 
     if not all_text:
-        logger.warning("[espionage] safehouse response has no text content for city %s", origin_city_id)
+        logger.warning("[espionage] safehouse: no parseable text in response for city %s "
+                       "(entries: %s)", origin_city_id, entry_types)
         return None
 
     # Log first 800 chars so we can identify the agent count pattern
