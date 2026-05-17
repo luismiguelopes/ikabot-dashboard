@@ -297,10 +297,12 @@ def scan_next_island(session):
             scores_raw = avatar_scores.get(owner_id, {})
             cp["players"].append({
                 "playerId":       owner_id,
+                "cityId":         str(city_slot.get("id", "")),
                 "playerName":     owner_name,
                 "allyTag":        city_slot.get("ownerAllyTag", city_slot.get("AllyTag", "")),
                 "state":          state,
                 "cityName":       city_slot.get("name", ""),
+                "islandId":       str(island["id"]),
                 "islandName":     island_data.get("name", island.get("name", "")),
                 "islandX":        island["x"],
                 "islandY":        island["y"],
