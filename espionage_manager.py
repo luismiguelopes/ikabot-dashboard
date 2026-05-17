@@ -65,7 +65,6 @@ def process_dispatch_queue(session):
     if not pending:
         return
 
-    remaining = []
     for item in pending:
         ok, result = _dispatch_spy(
             session,
@@ -80,10 +79,30 @@ def process_dispatch_queue(session):
             num_decoys=item.get("numDecoys", 0),
         )
         if not ok:
-            item["error"] = result
-            remaining.append(item)
+            failed_mission = {
+                "originCityId":     str(item["originCityId"]),
+                "targetCityId":     str(item["targetCityId"]),
+                "targetIslandId":   str(item["islandId"]),
+                "targetPlayerName": item["targetPlayerName"],
+                "targetCityName":   item["targetCityName"],
+                "islandX":          item["islandX"],
+                "islandY":          item["islandY"],
+                "numAgents":        item.get("numAgents", 1),
+                "state":            "FAILED",
+                "error":            result,
+                "dispatchedAt":     int(time.time()),
+                "arrivedAt":        None,
+                "executeAfter":     None,
+                "missionType":      None,
+                "result":           None,
+            }
+            data = _load_missions()
+            data["missions"].append(failed_mission)
+            _save_missions(data)
+            logger.warning("[espionage] dispatch failed → saved as FAILED for %s: %s",
+                           item["targetPlayerName"], result)
 
-    q["pending"] = remaining
+    q["pending"] = []
     _save_dispatch_queue(q)
 
 

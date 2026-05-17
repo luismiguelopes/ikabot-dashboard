@@ -5,6 +5,7 @@ import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { Td } from '../ui/TableCells'
+import { loadSpyDefaults } from '../SettingsPage'
 import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCity } from '../../types'
 
 interface SpyModalProps {
@@ -16,10 +17,11 @@ interface SpyModalProps {
 
 function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
   const t = useT()
+  const spyDefaults = loadSpyDefaults()
   const [originCityId, setOriginCityId] = useState<string>(
-    ownCities.length > 0 ? String(ownCities[0].cityId) : ''
+    spyDefaults.originCityId || (ownCities.length > 0 ? String(ownCities[0].cityId) : '')
   )
-  const [numAgents, setNumAgents] = useState(1)
+  const [numAgents, setNumAgents] = useState(spyDefaults.numAgents)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 

@@ -4,7 +4,22 @@ import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
 import { ALERT_DEFAULTS, MATERIALS } from '../constants'
 import { PageHeader } from './ui/PageHeader'
 import { Card } from './ui/Card'
-import type { AlertThresholds } from '../types'
+import type { AlertThresholds, OwnCity } from '../types'
+
+const SPY_ORIGIN_KEY = 'spy_default_origin_city'
+const SPY_AGENTS_KEY = 'spy_default_agents'
+
+export function loadSpyDefaults(): { originCityId: string; numAgents: number } {
+  return {
+    originCityId: localStorage.getItem(SPY_ORIGIN_KEY) || '',
+    numAgents: parseInt(localStorage.getItem(SPY_AGENTS_KEY) || '1') || 1,
+  }
+}
+
+function saveSpyDefaults(originCityId: string, numAgents: number) {
+  localStorage.setItem(SPY_ORIGIN_KEY, originCityId)
+  localStorage.setItem(SPY_AGENTS_KEY, String(numAgents))
+}
 
 const NAV_OPTIONS = [
   'home', 'cities', 'buildings', 'movements', 'alerts',
@@ -411,6 +426,81 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   )
 }
 
+function EspionagemTab() {
+  const t = useT()
+  const [ownCities, setOwnCities] = useState<OwnCity[]>([])
+  const defaults = loadSpyDefaults()
+  const [originCityId, setOriginCityId] = useState(defaults.originCityId)
+  const [numAgents, setNumAgents] = useState(defaults.numAgents)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/own-cities')
+      .then(r => r.json())
+      .then(d => {
+        const cities: OwnCity[] = d.cities || []
+        setOwnCities(cities)
+        if (!originCityId && cities.length > 0) {
+          setOriginCityId(String(cities[0].cityId))
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleSave = () => {
+    saveSpyDefaults(originCityId, numAgents)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
+  }
+
+  return (
+    <div className="grid gap-4 max-w-lg">
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-user-secret text-indigo-400" /> {t('settings_spy_title')}
+          </p>
+          <p className="text-xs text-slate-400 mb-4">{t('settings_spy_hint')}</p>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">{t('spy_origin_city')}</label>
+              <select
+                value={originCityId}
+                onChange={e => setOriginCityId(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              >
+                {ownCities.map(c => (
+                  <option key={c.cityId} value={String(c.cityId)}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">{t('spy_num_agents')}</label>
+              <input
+                type="number"
+                min={1}
+                max={99}
+                value={numAgents}
+                onChange={e => setNumAgents(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {t('save')}
+        </button>
+        {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+      </div>
+    </div>
+  )
+}
+
 export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, defaultTab, onSaveDefaultTab, notifEnabled, onToggleNotif }: {
   thresholds: AlertThresholds
   onSaveThresholds: (t: AlertThresholds) => void
@@ -432,6 +522,7 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
     { key: 'geral',        label: t('settings_tab_general'),       icon: 'fa-sliders'      },
     { key: 'alertas',      label: t('settings_tab_alerts'),        icon: 'fa-bell'         },
     { key: 'construcao',   label: t('nav_construction'),           icon: 'fa-hammer'       },
+    { key: 'espionagem',   label: t('settings_tab_espionage'),     icon: 'fa-user-secret'  },
     { key: 'notificacoes', label: t('settings_tab_notifications'), icon: 'fa-paper-plane'  },
   ]
 
@@ -458,6 +549,7 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
       {tab === 'geral'        && <GeralTab        toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={onSaveDefaultTab} />}
       {tab === 'alertas'      && <AlertasTab      thresholds={thresholds} onSaveThresholds={onSaveThresholds} />}
       {tab === 'construcao'   && <ConstrucaoTab />}
+      {tab === 'espionagem'   && <EspionagemTab />}
       {tab === 'notificacoes' && <NotificacoesTab notifEnabled={notifEnabled} onToggleNotif={handleToggleNotif} />}
     </div>
   )
