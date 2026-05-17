@@ -258,9 +258,10 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
   const [expandedKey,  setExpandedKey]  = useState<string | null>(null)
   const [noteInputs,   setNoteInputs]   = useState<Record<string, string>>({})
   const [actionInputs, setActionInputs] = useState<Record<string, string>>({})
-  const [spyTarget,    setSpyTarget]    = useState<PlayerWithMark | null>(null)
-  const [ownCities,    setOwnCities]    = useState<OwnCity[]>([])
-  const [dispatchedOk, setDispatchedOk] = useState<string | null>(null)
+  const [spyTarget,      setSpyTarget]      = useState<PlayerWithMark | null>(null)
+  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
+  const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
+  const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     fetch('/api/own-cities').then(r => r.json()).then(data => {
@@ -514,7 +515,13 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                         <button
                           onClick={() => setSpyTarget(p)}
                           title={p.cityId && p.islandId ? t('spy_send_btn') : t('spy_no_city_id')}
-                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${p.cityId && p.islandId ? 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700' : 'bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${
+                            !p.cityId || !p.islandId
+                              ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
+                              : dispatchedKeys.has(p.markKey)
+                                ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
+                                : 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
+                          }`}
                           disabled={!p.cityId || !p.islandId}
                         >
                           <i className="fa-solid fa-user-secret" />
@@ -597,6 +604,7 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
             setDispatchedOk(spyTarget.playerName)
+            setDispatchedKeys(prev => new Set(prev).add(spyTarget.markKey))
             setTimeout(() => setDispatchedOk(null), 4000)
           }}
         />
