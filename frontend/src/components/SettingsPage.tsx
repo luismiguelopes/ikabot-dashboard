@@ -438,7 +438,7 @@ function EspionagemTab() {
     fetch('/api/own-cities')
       .then(r => r.json())
       .then(d => {
-        const cities: OwnCity[] = d.cities || []
+        const cities: OwnCity[] = Array.isArray(d) ? d : (d.cities || [])
         setOwnCities(cities)
         if (!originCityId && cities.length > 0) {
           setOriginCityId(String(cities[0].cityId))
