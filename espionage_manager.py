@@ -119,7 +119,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
     Dispatch spies from origin_city_id to target_city_id.
     Returns (True, mission_dict) on success, (False, error_str) on failure.
     """
-    from ikabot.config import actionRequest
+    import ikabot.config as ikabot_config
 
     params = {
         "action": "Espionage",
@@ -131,7 +131,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "backgroundView": "island",
         "currentIslandId": target_island_id,
         "templateView": "sendSpy",
-        "actionRequest": actionRequest,
+        "actionRequest": ikabot_config.actionRequest,
         "ajax": 1,
         f"spies[{origin_city_id}][agents]": num_agents,
         f"spies[{origin_city_id}][decoys]": num_decoys,
@@ -140,6 +140,15 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
     try:
         resp = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
+
+        # Always refresh the CSRF token from the response before checking success
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "updateGlobalData":
+                new_token = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+                if new_token:
+                    ikabot_config.actionRequest = new_token
+                break
+
         success = False
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "provideFeedback":
