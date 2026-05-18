@@ -819,7 +819,7 @@ def check_spy_arrivals(session):
             missions[i]["arrivedAt"] = int(time.time())
             missions[i]["safehousePosition"] = position
             missions[i]["spySessionId"] = spy_id
-            missions[i]["executeAfter"] = int(time.time()) + random.randint(10, 45) * 60
+            missions[i]["executeAfter"] = int(time.time()) + random.randint(5, 15) * 60
             logger.info("[espionage] espiões chegaram a %s (spy_id=%s) — executar em %dmin",
                         m["targetCityName"], spy_id,
                         (missions[i]["executeAfter"] - int(time.time())) // 60)
