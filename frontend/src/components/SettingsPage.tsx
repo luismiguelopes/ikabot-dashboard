@@ -426,22 +426,17 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   )
 }
 
-const RESOURCE_LABELS: Record<string, string> = {
-  wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', glass: 'Cristal', sulfur: 'Enxofre',
-}
-const GARRISON_KEYS = ['wood', 'wine', 'marble', 'glass', 'sulfur'] as const
-type GarrisonThresholds = Record<typeof GARRISON_KEYS[number], number>
-const DEFAULT_GARRISON: GarrisonThresholds = { wood: 5000, wine: 0, marble: 5000, glass: 0, sulfur: 0 }
+const DEFAULT_GARRISON_TOTAL = 50000
 
 function EspionagemTab() {
   const t = useT()
-  const [ownCities, setOwnCities]     = useState<OwnCity[]>([])
+  const [ownCities, setOwnCities]         = useState<OwnCity[]>([])
   const defaults = loadSpyDefaults()
-  const [originCityId, setOriginCityId] = useState(defaults.originCityId)
-  const [numAgents, setNumAgents]     = useState(defaults.numAgents)
-  const [saved, setSaved]             = useState(false)
-  const [thresholds, setThresholds]   = useState<GarrisonThresholds>(DEFAULT_GARRISON)
-  const [thSaved, setThSaved]         = useState(false)
+  const [originCityId, setOriginCityId]   = useState(defaults.originCityId)
+  const [numAgents, setNumAgents]         = useState(defaults.numAgents)
+  const [saved, setSaved]                 = useState(false)
+  const [thresholdTotal, setThresholdTotal] = useState(DEFAULT_GARRISON_TOTAL)
+  const [thSaved, setThSaved]             = useState(false)
 
   useEffect(() => {
     fetch('/api/own-cities')
@@ -454,7 +449,7 @@ function EspionagemTab() {
       .catch(() => {})
     fetch('/api/espionage/settings')
       .then(r => r.json())
-      .then(d => { if (d.garrisonThresholds) setThresholds({ ...DEFAULT_GARRISON, ...d.garrisonThresholds }) })
+      .then(d => { if (d.garrisonThresholdTotal != null) setThresholdTotal(d.garrisonThresholdTotal) })
       .catch(() => {})
   }, [])
 
@@ -468,7 +463,7 @@ function EspionagemTab() {
     fetch('/api/espionage/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ garrisonThresholds: thresholds }),
+      body: JSON.stringify({ garrisonThresholdTotal: thresholdTotal }),
     }).then(() => {
       setThSaved(true)
       setTimeout(() => setThSaved(false), 3000)
@@ -520,18 +515,14 @@ function EspionagemTab() {
             <i className="fa-solid fa-shield-halved text-amber-400" /> {t('spy_garrison_threshold_title')}
           </p>
           <p className="text-xs text-slate-400 mb-4">{t('spy_garrison_threshold_desc')}</p>
-          <div className="grid grid-cols-2 gap-3">
-            {GARRISON_KEYS.map(key => (
-              <div key={key}>
-                <label className="block text-xs font-medium text-slate-600 mb-1">{RESOURCE_LABELS[key]}</label>
-                <input
-                  type="number" min={0} step={1000}
-                  value={thresholds[key]}
-                  onChange={e => setThresholds(prev => ({ ...prev, [key]: Math.max(0, parseInt(e.target.value) || 0) }))}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                />
-              </div>
-            ))}
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('spy_garrison_threshold_label')}</label>
+            <input
+              type="number" min={0} step={5000}
+              value={thresholdTotal}
+              onChange={e => setThresholdTotal(Math.max(0, parseInt(e.target.value) || 0))}
+              className="w-36 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
           </div>
         </div>
       </Card>

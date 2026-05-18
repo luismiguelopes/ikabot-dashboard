@@ -19,7 +19,7 @@ ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 MISSION_WAREHOUSE = 5
 MISSION_GARRISON  = 6
 
-_DEFAULT_GARRISON_THRESHOLDS = {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
+_DEFAULT_GARRISON_THRESHOLD_TOTAL = 50000
 
 
 def _load_espionage_settings():
@@ -27,19 +27,15 @@ def _load_espionage_settings():
         with open(ESPIONAGE_SETTINGS_PATH) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"garrisonThresholds": _DEFAULT_GARRISON_THRESHOLDS}
+        return {"garrisonThresholdTotal": _DEFAULT_GARRISON_THRESHOLD_TOTAL}
 
 
-def _check_garrison_threshold(resources, thresholds):
-    """AND logic: ALL resources with threshold > 0 must be >= their minimum."""
+def _check_garrison_threshold(resources, settings):
+    """Sum of all resources must reach garrisonThresholdTotal."""
     if not resources:
         return False
-    for key, min_val in thresholds.items():
-        if min_val <= 0:
-            continue
-        if resources.get(key, 0) < min_val:
-            return False
-    return True
+    total = sum(resources.values())
+    return total >= settings.get("garrisonThresholdTotal", _DEFAULT_GARRISON_THRESHOLD_TOTAL)
 
 
 # ── Persistence helpers ───────────────────────────────────────────────────────
@@ -918,10 +914,9 @@ def collect_mission_results(session):
             missions[i]["result"] = report
 
             if report.get("success"):
-                settings   = _load_espionage_settings()
-                thresholds = settings.get("garrisonThresholds", _DEFAULT_GARRISON_THRESHOLDS)
-                resources  = report.get("resources") or {}
-                if _check_garrison_threshold(resources, thresholds):
+                settings  = _load_espionage_settings()
+                resources = report.get("resources") or {}
+                if _check_garrison_threshold(resources, settings):
                     delay_min = random.randint(5, 15)
                     missions[i]["state"] = "WAITING_FOR_GARRISON"
                     missions[i]["garrisonExecuteAfter"] = now + delay_min * 60

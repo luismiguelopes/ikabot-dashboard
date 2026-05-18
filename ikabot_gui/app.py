@@ -47,7 +47,7 @@ AUTO_ATTACK_WAVES_PATH     = os.path.join(LOGS_DIR, "auto_attack_waves.json")
 AUTO_ATTACK_SETTINGS_PATH  = os.path.join(LOGS_DIR, "auto_attack_settings.json")
 
 _DEFAULT_ESPIONAGE_SETTINGS = {
-    "garrisonThresholds": {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
+    "garrisonThresholdTotal": 50000
 }
 
 _DEFAULT_AUTO_ATTACK_SETTINGS = {
@@ -719,10 +719,8 @@ def api_espionage_settings_get():
 def api_espionage_settings_post():
     body = request.get_json(silent=True) or {}
     settings = {
-        "garrisonThresholds": {
-            k: max(0, int(body.get("garrisonThresholds", {}).get(k, v)))
-            for k, v in _DEFAULT_ESPIONAGE_SETTINGS["garrisonThresholds"].items()
-        }
+        "garrisonThresholdTotal": max(0, int(body.get("garrisonThresholdTotal",
+                                              _DEFAULT_ESPIONAGE_SETTINGS["garrisonThresholdTotal"])))
     }
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(ESPIONAGE_SETTINGS_PATH, "w") as f:
