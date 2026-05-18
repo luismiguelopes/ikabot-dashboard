@@ -264,10 +264,30 @@ def collect_city_data(session, ids, cities):
     return status_summary, formatted_empire, resources_data
 
 
-def _collect_military_data(session):
-    """Fetch troop counts per city and write military.json. Gated to run at most once every 8 hours."""
+def _parse_unit_tab(html, css_class):
+    """Parse a cityMilitary tab HTML. css_class is 'army' or 'fleet'."""
     import re
+    if css_class == "army":
+        html = html.split('<div class="fleet')[0]
+    id_names = re.findall(
+        rf'<div class="{css_class} (.*?)">\s*<div class="tooltip">(.*?)<\/div>', html
+    )
+    amounts = re.findall(r"<td>(.*?)\s*</td>", html)
+    units = {}
+    for i in range(min(len(id_names), len(amounts))):
+        raw = amounts[i].replace(",", "").replace(".", "").replace("-", "0").strip()
+        try:
+            amount = int(raw)
+        except ValueError:
+            amount = 0
+        uid   = id_names[i][0].lstrip("_")
+        uname = id_names[i][1]
+        units[uid] = {"name": uname, "amount": amount}
+    return units
 
+
+def _collect_military_data(session):
+    """Fetch troops + fleet per city and write military.json. Gated to run at most once every 8 hours."""
     military_path = os.path.join(LOGS_DIR, "military.json")
     try:
         with open(os.path.join(LOGS_DIR, "own_cities.json")) as f:
@@ -283,36 +303,31 @@ def _collect_military_data(session):
             continue
         time.sleep(random.randint(3, 8))
         try:
-            params = {
-                "view":             "cityMilitary",
-                "activeTab":        "tabUnits",
-                "cityId":           city_id,
-                "backgroundView":   "city",
-                "currentCityId":    city_id,
-                "currentTab":       "multiTab1",
-                "actionRequest":    actionRequest,
-                "ajax":             "1",
+            base_params = {
+                "view":           "cityMilitary",
+                "cityId":         city_id,
+                "backgroundView": "city",
+                "currentCityId":  city_id,
+                "actionRequest":  actionRequest,
+                "ajax":           "1",
             }
+
+            # Troops tab
+            params = dict(base_params, activeTab="tabUnits", currentTab="multiTab1")
             resp      = session.post(params=params)
             resp_data = json.loads(resp, strict=False)
-            html      = resp_data[1][1][1]
-            html      = html.split('<div class="fleet')[0]
-            unit_id_names = re.findall(
-                r'<div class="army (.*?)">\s*<div class="tooltip">(.*?)<\/div>', html
-            )
-            unit_amounts = re.findall(r"<td>(.*?)\s*</td>", html)
-            units = {}
-            for i in range(min(len(unit_id_names), len(unit_amounts))):
-                raw = unit_amounts[i].replace(",", "").replace(".", "").replace("-", "0").strip()
-                try:
-                    amount = int(raw)
-                except ValueError:
-                    amount = 0
-                uid   = unit_id_names[i][0].lstrip("_")
-                uname = unit_id_names[i][1]
-                units[uid] = {"name": uname, "amount": amount}
-            result[city_name] = {"cityId": str(city_id), "units": units}
-            logger.info("[military] %s: %d tipo(s) de unidades", city_name, len(units))
+            troops    = _parse_unit_tab(resp_data[1][1][1], "army")
+
+            # Fleet tab
+            time.sleep(random.randint(3, 8))
+            params = dict(base_params, activeTab="tabFleet", currentTab="multiTab2")
+            resp      = session.post(params=params)
+            resp_data = json.loads(resp, strict=False)
+            fleet     = _parse_unit_tab(resp_data[1][1][1], "fleet")
+
+            result[city_name] = {"cityId": str(city_id), "troops": troops, "fleet": fleet}
+            logger.info("[military] %s: %d tropa(s), %d frota(s)",
+                        city_name, len(troops), len(fleet))
         except Exception:
             logger.warning("[military] erro %s", city_name, exc_info=True)
 

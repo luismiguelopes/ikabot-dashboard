@@ -426,22 +426,17 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   )
 }
 
-const RESOURCE_LABELS: Record<string, string> = {
-  wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', glass: 'Cristal', sulfur: 'Enxofre',
-}
-const GARRISON_KEYS = ['wood', 'wine', 'marble', 'glass', 'sulfur'] as const
-type GarrisonThresholds = Record<typeof GARRISON_KEYS[number], number>
-const DEFAULT_GARRISON: GarrisonThresholds = { wood: 5000, wine: 0, marble: 5000, glass: 0, sulfur: 0 }
+const DEFAULT_GARRISON_TOTAL = 50000
 
 function EspionagemTab() {
   const t = useT()
-  const [ownCities, setOwnCities]     = useState<OwnCity[]>([])
+  const [ownCities, setOwnCities]         = useState<OwnCity[]>([])
   const defaults = loadSpyDefaults()
-  const [originCityId, setOriginCityId] = useState(defaults.originCityId)
-  const [numAgents, setNumAgents]     = useState(defaults.numAgents)
-  const [saved, setSaved]             = useState(false)
-  const [thresholds, setThresholds]   = useState<GarrisonThresholds>(DEFAULT_GARRISON)
-  const [thSaved, setThSaved]         = useState(false)
+  const [originCityId, setOriginCityId]   = useState(defaults.originCityId)
+  const [numAgents, setNumAgents]         = useState(defaults.numAgents)
+  const [saved, setSaved]                 = useState(false)
+  const [thresholdTotal, setThresholdTotal] = useState(DEFAULT_GARRISON_TOTAL)
+  const [thSaved, setThSaved]             = useState(false)
 
   useEffect(() => {
     fetch('/api/own-cities')
@@ -454,7 +449,7 @@ function EspionagemTab() {
       .catch(() => {})
     fetch('/api/espionage/settings')
       .then(r => r.json())
-      .then(d => { if (d.garrisonThresholds) setThresholds({ ...DEFAULT_GARRISON, ...d.garrisonThresholds }) })
+      .then(d => { if (d.garrisonThresholdTotal != null) setThresholdTotal(d.garrisonThresholdTotal) })
       .catch(() => {})
   }, [])
 
@@ -468,7 +463,7 @@ function EspionagemTab() {
     fetch('/api/espionage/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ garrisonThresholds: thresholds }),
+      body: JSON.stringify({ garrisonThresholdTotal: thresholdTotal }),
     }).then(() => {
       setThSaved(true)
       setTimeout(() => setThSaved(false), 3000)
@@ -520,18 +515,14 @@ function EspionagemTab() {
             <i className="fa-solid fa-shield-halved text-amber-400" /> {t('spy_garrison_threshold_title')}
           </p>
           <p className="text-xs text-slate-400 mb-4">{t('spy_garrison_threshold_desc')}</p>
-          <div className="grid grid-cols-2 gap-3">
-            {GARRISON_KEYS.map(key => (
-              <div key={key}>
-                <label className="block text-xs font-medium text-slate-600 mb-1">{RESOURCE_LABELS[key]}</label>
-                <input
-                  type="number" min={0} step={1000}
-                  value={thresholds[key]}
-                  onChange={e => setThresholds(prev => ({ ...prev, [key]: Math.max(0, parseInt(e.target.value) || 0) }))}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                />
-              </div>
-            ))}
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('spy_garrison_threshold_label')}</label>
+            <input
+              type="number" min={0} step={5000}
+              value={thresholdTotal}
+              onChange={e => setThresholdTotal(Math.max(0, parseInt(e.target.value) || 0))}
+              className="w-36 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
           </div>
         </div>
       </Card>
@@ -541,7 +532,115 @@ function EspionagemTab() {
         </button>
         {thSaved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
       </div>
+
+      <AutoAttackSettingsCard />
     </div>
+  )
+}
+
+interface AutoAttackSettings {
+  enabled: boolean
+  minLootTotal: number
+  lootPerWave: number
+  battleDelayFewMins: number
+  battleDelayMedMins: number
+  battleDelayManyMins: number
+  maxEnemyShipsToEngage: number
+}
+
+const AUTO_ATTACK_DEFAULTS: AutoAttackSettings = {
+  enabled: false, minLootTotal: 50000, lootPerWave: 195000,
+  battleDelayFewMins: 30, battleDelayMedMins: 60, battleDelayManyMins: 120,
+  maxEnemyShipsToEngage: 20,
+}
+
+function AutoAttackSettingsCard() {
+  const t = useT()
+  const [settings, setSettings] = useState<AutoAttackSettings>(AUTO_ATTACK_DEFAULTS)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/espionage/auto-attack-settings')
+      .then(r => r.json())
+      .then((d: AutoAttackSettings) => setSettings({ ...AUTO_ATTACK_DEFAULTS, ...d }))
+      .catch(() => {})
+  }, [])
+
+  const numField = (key: keyof AutoAttackSettings, min = 0, step = 1000) => (
+    <input
+      type="number" min={min} step={step}
+      value={settings[key] as number}
+      onChange={e => setSettings(prev => ({ ...prev, [key]: Math.max(min, parseInt(e.target.value) || min) }))}
+      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-red-400"
+    />
+  )
+
+  const handleSave = () => {
+    fetch('/api/espionage/auto-attack-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    }).then(() => {
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    }).catch(() => {})
+  }
+
+  return (
+    <>
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-bolt text-red-400" /> {t('auto_attack_settings')}
+          </p>
+          <div className="space-y-4 mt-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-slate-600">{t('auto_attack_enabled')}</label>
+              <button
+                onClick={() => setSettings(prev => ({ ...prev, enabled: !prev.enabled }))}
+                className={`relative w-11 h-6 rounded-full transition-colors ${settings.enabled ? 'bg-red-500' : 'bg-slate-300'}`}
+              >
+                <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${settings.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+            </div>
+            {settings.enabled && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_min_loot')}</label>
+                  {numField('minLootTotal', 0, 10000)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_loot_per_wave')}</label>
+                  {numField('lootPerWave', 10000, 10000)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_battle_delay_few')}</label>
+                  {numField('battleDelayFewMins', 0, 5)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_battle_delay_med')}</label>
+                  {numField('battleDelayMedMins', 0, 5)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_battle_delay_many')}</label>
+                  {numField('battleDelayManyMins', 0, 5)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_max_ships')}</label>
+                  {numField('maxEnemyShipsToEngage', 0, 1)}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+      <div className="flex items-center gap-3">
+        <button onClick={handleSave} className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">
+          {t('auto_attack_save')}
+        </button>
+        {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+      </div>
+    </>
   )
 }
 

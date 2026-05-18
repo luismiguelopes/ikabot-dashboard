@@ -43,9 +43,23 @@ SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
 ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
 MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
+AUTO_ATTACK_WAVES_PATH     = os.path.join(LOGS_DIR, "auto_attack_waves.json")
+AUTO_ATTACK_SETTINGS_PATH  = os.path.join(LOGS_DIR, "auto_attack_settings.json")
+WORLD_SCAN_SETTINGS_PATH   = os.path.join(LOGS_DIR, "world_scan_settings.json")
 
 _DEFAULT_ESPIONAGE_SETTINGS = {
-    "garrisonThresholds": {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
+    "garrisonThresholdTotal": 50000,
+    "processingEnabled": True,
+}
+
+_DEFAULT_AUTO_ATTACK_SETTINGS = {
+    "enabled":                False,
+    "minLootTotal":           50000,
+    "lootPerWave":            195000,
+    "battleDelayFewMins":     30,
+    "battleDelayMedMins":     60,
+    "battleDelayManyMins":    120,
+    "maxEnemyShipsToEngage":  20,
 }
 
 
@@ -694,27 +708,51 @@ def api_own_cities():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/world-scan/settings")
+def api_world_scan_settings_get():
+    try:
+        with open(WORLD_SCAN_SETTINGS_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"enabled": True})
+
+
+@app.route("/api/world-scan/settings", methods=["POST"])
+def api_world_scan_settings_post():
+    body = request.get_json(silent=True) or {}
+    settings = {"enabled": bool(body.get("enabled", True))}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WORLD_SCAN_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/espionage/settings")
 def api_espionage_settings_get():
     try:
         with open(ESPIONAGE_SETTINGS_PATH) as f:
-            return jsonify(json.load(f))
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify(_DEFAULT_ESPIONAGE_SETTINGS)
+        data = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+    data.setdefault("processingEnabled", True)
+    return jsonify(data)
 
 
 @app.route("/api/espionage/settings", methods=["POST"])
 def api_espionage_settings_post():
     body = request.get_json(silent=True) or {}
-    settings = {
-        "garrisonThresholds": {
-            k: max(0, int(body.get("garrisonThresholds", {}).get(k, v)))
-            for k, v in _DEFAULT_ESPIONAGE_SETTINGS["garrisonThresholds"].items()
-        }
-    }
+    try:
+        with open(ESPIONAGE_SETTINGS_PATH) as f:
+            existing = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+    if "garrisonThresholdTotal" in body:
+        existing["garrisonThresholdTotal"] = max(0, int(body["garrisonThresholdTotal"]))
+    if "processingEnabled" in body:
+        existing["processingEnabled"] = bool(body["processingEnabled"])
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(ESPIONAGE_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+        json.dump(existing, f, indent=2)
     return jsonify({"ok": True})
 
 
@@ -840,6 +878,64 @@ def api_attack_queue_cancel():
     return jsonify({"status": "cancelled"})
 
 
+@app.route("/api/espionage/attack-waves")
+def api_attack_waves_get():
+    try:
+        with open(AUTO_ATTACK_WAVES_PATH) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"waves": []})
+
+
+@app.route("/api/espionage/attack-waves/cancel", methods=["POST"])
+def api_attack_waves_cancel():
+    data = request.get_json(silent=True) or {}
+    wave_id = data.get("id")
+    if not wave_id:
+        return jsonify({"error": "id obrigatório"}), 400
+    try:
+        with open(AUTO_ATTACK_WAVES_PATH) as f:
+            waves_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"error": "Sem planos de ataque"}), 404
+    original = len(waves_data.get("waves", []))
+    waves_data["waves"] = [w for w in waves_data.get("waves", []) if w.get("id") != wave_id]
+    if len(waves_data["waves"]) == original:
+        return jsonify({"error": "Plano não encontrado"}), 404
+    with open(AUTO_ATTACK_WAVES_PATH, "w") as f:
+        json.dump(waves_data, f, indent=2)
+    return jsonify({"status": "cancelled"})
+
+
+@app.route("/api/espionage/auto-attack-settings")
+def api_auto_attack_settings_get():
+    try:
+        with open(AUTO_ATTACK_SETTINGS_PATH) as f:
+            s = json.load(f)
+            for k, v in _DEFAULT_AUTO_ATTACK_SETTINGS.items():
+                s.setdefault(k, v)
+            return jsonify(s)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify(_DEFAULT_AUTO_ATTACK_SETTINGS)
+
+
+@app.route("/api/espionage/auto-attack-settings", methods=["POST"])
+def api_auto_attack_settings_post():
+    data = request.get_json(silent=True) or {}
+    settings = dict(_DEFAULT_AUTO_ATTACK_SETTINGS)
+    settings["enabled"]               = bool(data.get("enabled", False))
+    settings["minLootTotal"]          = int(data.get("minLootTotal", 50000))
+    settings["lootPerWave"]           = int(data.get("lootPerWave", 195000))
+    settings["battleDelayFewMins"]    = int(data.get("battleDelayFewMins", 30))
+    settings["battleDelayMedMins"]    = int(data.get("battleDelayMedMins", 60))
+    settings["battleDelayManyMins"]   = int(data.get("battleDelayManyMins", 120))
+    settings["maxEnemyShipsToEngage"] = int(data.get("maxEnemyShipsToEngage", 20))
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(AUTO_ATTACK_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return jsonify({"status": "ok", "settings": settings})
+
+
 @app.route("/api/health")
 def api_health():
     db_ok = False
@@ -859,6 +955,7 @@ def api_stream():
         EMPIRE_JSON_PATH, RESOURCES_JSON_PATH, STATUS_SUMMARY_JSON_PATH,
         MOVEMENTS_JSON_PATH, QUEUE_SENTINEL_PATH, NEXT_CYCLE_JSON_PATH,
         LAST_ALIVE_JSON_PATH, WORLD_SCAN_JSON_PATH, WORLD_SCAN_STATUS_PATH,
+        AUTO_ATTACK_WAVES_PATH,
     ]
 
     def generate():

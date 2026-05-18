@@ -140,6 +140,19 @@ Volume-mounted files (`empireFunction.py` and all sibling modules, `planRoutes_p
 | `/api/telegram-settings` | GET | Read saved Telegram bot token and chat ID |
 | `/api/telegram-settings` | POST | Save Telegram credentials `{botToken, chatId}` to `/tmp/ikalogs/telegram_settings.json` |
 | `/api/telegram-settings/test` | POST | Send a test message using the currently saved credentials |
+| `/api/military` | GET | Troops and fleet units per city (updated every 8h) |
+| `/api/espionage/missions` | GET | All spy missions with state and results |
+| `/api/espionage/spy-counts` | GET | Available spies per city |
+| `/api/espionage/dispatch` | POST | Queue a spy dispatch `{originCityId, targetCityId, islandId, targetPlayerName, targetCityName, islandX, islandY, numAgents}` |
+| `/api/espionage/settings` | GET | Garrison inspection thresholds |
+| `/api/espionage/settings` | POST | Save garrison thresholds `{garrisonThresholds: {wood, wine, marble, glass, sulfur}}` |
+| `/api/espionage/attack-queue` | GET | Pending manual attack queue |
+| `/api/espionage/attack-queue/add` | POST | Add manual attack `{originCityId, targetCityId, islandId, units, transporters, …}` |
+| `/api/espionage/attack-queue/cancel` | POST | Cancel queued attack `{id}` |
+| `/api/espionage/attack-waves` | GET | Automatic multi-wave attack plans |
+| `/api/espionage/attack-waves/cancel` | POST | Cancel a wave plan `{id}` |
+| `/api/espionage/auto-attack-settings` | GET | Auto-attack configuration |
+| `/api/espionage/auto-attack-settings` | POST | Save auto-attack settings `{enabled, minLootTotal, lootPerWave, battleDelayFewMins, …}` |
 | `/api/health` | GET | Liveness check — `{"status": "ok", "ts": timestamp, "dbOk": bool}` |
 
 ## Dashboard Tabs
@@ -156,8 +169,32 @@ The dashboard defaults to **English**. A toggle in the sidebar footer switches t
 | **History** | Empire-wide charts (gold, resources, ships, population) over the last 7 days. City selector switches to per-city view: resources (5 lines) and wine timer (hours until empty) |
 | **Calculators** | **Building Upgrade**: city/building/level selector, auto-fills costs, estimates time to gather. **ROI Sawmill/Quarry**: island vs city building comparator. **Colony ROI**: current island vs new colony — pre-fillable from the Islands tab |
 | **Construction** | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear, city pills, building list, per-city queue panel with drag-to-reorder, inProgress ETA countdown, transport error banner, queue budget summary. **Template** sub-tab: set target levels per building type and apply to all cities at once |
-| **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note and timestamped action log. Highlights newly inactive players (not seen in previous scan). **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button |
-| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Notifications**: browser notifications toggle; Telegram bot token and chat ID configuration with a live test button |
+| **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note, timestamped action log, spy report summary (warehouse + garrison results), auto-attack wave status with per-wave timestamps. Highlights newly inactive players. **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button |
+| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Espionage**: spy defaults (origin city, number of agents), garrison inspection thresholds, auto-attack toggle and configuration (min loot, loot per wave, battle delays, max enemy ships). **Notifications**: browser notifications toggle; Telegram configuration with live test |
+
+## Espionage System
+
+The espionage module (`espionage_manager.py`) implements a full spy-to-attack pipeline across four phases:
+
+**Phase 1 — Spy dispatch**: from the Inactive players tab, open the spy modal, choose origin city and number of agents. The request is queued in `spy_dispatch_queue.json` and dispatched by the bot with 15–35s delays between consecutive missions. Pre-check against `spy_counts.json` prevents dispatching more agents than available.
+
+**Phase 2 — State machine**: missions progress automatically across cycles:
+```
+TRAVELING → WAITING_AT_CITY → EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON → EXECUTING_GARRISON → DONE / FAILED
+```
+The bot checks `spyMissions` view to detect arrival, then calls `executeMission` for warehouse inspection (mission type 5), waits 5–15 min, then for garrison inspection (mission type 6) if resources exceed the configured thresholds. Reports are fetched via `markReportAsRead`.
+
+**Phase 3 — Manual attack**: once a mission reaches DONE with both warehouse and garrison results, a "Prepare Attack" button appears in the expanded row. The modal shows available troops per city. The attack is queued in `attack_queue.json` and dispatched by the bot during active hours via `deployArmy`.
+
+**Phase 4 — Automatic waves**: after each DONE mission the bot runs `evaluate_auto_attacks()`, which:
+1. Checks total loot against `minLootTotal` (default 50 000) — skips if below threshold
+2. Counts enemy naval units — skips if above `maxEnemyShipsToEngage` (default 20)
+3. Classifies the target: Tier 0 (empty garrison), Tier 1 (troops only), Tier 2 (has fleet)
+4. Finds the closest own city with available troops (and fleet for Tier 2)
+5. Calculates sequential wave plans: `num_waves = ceil(total_loot / lootPerWave)`
+6. For Tier 2: dispatches `deployFleet` first, then `deployArmy` after `battle_delay + (fleet_travel - troop_travel)` seconds
+
+Wave plans and their per-wave status are visible in the expanded row of the Inactive Players tab. Settings (enabled toggle, loot thresholds, battle delays) are configurable in Settings → Espionage.
 
 ## Data Storage
 
@@ -195,6 +232,14 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `last_alive.json` | Each loop iteration | `{lastAlive, cycle}` — stale if bot crashes |
 | `empire_scan_status.json` | During force-refresh | Per-city scan progress |
 | `world_scan_status.json` | During world scan | Scan phase progress |
+| `military.json` | Every 8h | Troops and fleet units per own city `{byCityName: {cityId, troops, fleet}}` |
+| `spy_missions.json` | Each spy cycle | All missions with state machine: TRAVELING → WAITING_AT_CITY → EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON → EXECUTING_GARRISON → DONE/FAILED |
+| `spy_dispatch_queue.json` | On demand | Pending spy dispatches queued from the UI |
+| `spy_counts.json` | Each active-hours cycle | Available/deployed/defense spy counts per city |
+| `espionage_settings.json` | On save via UI | Garrison inspection thresholds per resource |
+| `attack_queue.json` | On demand | Pending manual attack dispatches queued from the UI |
+| `auto_attack_waves.json` | Per cycle | Automatic multi-wave attack plans per target — state: PENDING → IN_PROGRESS → DONE/FAILED/AUTO_SKIPPED |
+| `auto_attack_settings.json` | On save via UI | Auto-attack configuration (enabled, min loot, loot per wave, battle delays, max enemy ships) |
 | `telegram_settings.json` | On save via UI | Telegram bot token and chat ID |
 | `.queue_updated` | On each queue change | Sentinel touched on every queue write — SSE watches this |
 
@@ -205,10 +250,11 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 ├── docker-compose.yml
 ├── empireFunction.py        # Main loop orchestrator (~120 lines)
 ├── empire_utils.py          # Constants, duration parser, i18n log strings, with_retry(), shared logger
-├── empire_collector.py      # City data collection, movements fetch
+├── empire_collector.py      # City data collection, movements fetch, military (troops + fleet) every 8h
 ├── costs_collector.py       # Building costs collection (every 3 days)
 ├── scan_collector.py        # World scan (every 7 days)
 ├── queue_processor.py       # Building queue: transport dispatch, smart sleep, city shuffling
+├── espionage_manager.py     # Full espionage system: spy dispatch, state machine (Phases 1–4), auto-attack waves
 ├── db_manager.py            # SQLite layer: schema init, CRUD, migrations from JSON
 ├── planRoutes_patched.py    # Patched transport helper with anti-detection delays
 ├── telegram_notifier.py     # Telegram Bot API notifications
