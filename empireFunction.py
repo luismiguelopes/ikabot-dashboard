@@ -133,13 +133,14 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     logger.info(lm("queue_movements_refresh"))
                     refresh_movements(session, ids[0])
 
-            # ── Spy counts from safehouse (only during active hours) ──────────
+            # ── Espionage cycle (only during active hours) ───────────────────
             if in_scan_hours:
                 try:
-                    from espionage_manager import fetch_spy_counts
+                    from espionage_manager import fetch_spy_counts, process_spy_cycle
                     fetch_spy_counts(session)
+                    process_spy_cycle(session)
                 except Exception:
-                    logger.warning("[espionage] fetch_spy_counts falhou", exc_info=True)
+                    logger.warning("[espionage] spy cycle falhou", exc_info=True)
 
             # ── Background scans (only during active hours) ───────────────────
             if in_scan_hours:
