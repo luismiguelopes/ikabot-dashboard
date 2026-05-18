@@ -246,6 +246,10 @@ _LM = {
         "en": "[+] Building queue cycle done.",
         "pt": "[+] Ciclo da fila de construção concluído.",
     },
+    "queue_stale_cleanup": {
+        "en": "      -> inProgress entry for {city} ({building}) has no queue items and ETA passed — removing.",
+        "pt": "      -> inProgress de {city} ({building}) sem itens na fila e ETA expirado — a remover.",
+    },
     "queue_wake": {
         "en": "[{ts}] Queue wake-up: checking constructions...",
         "pt": "[{ts}] Acordei para a fila de construção: a verificar construções...",

@@ -47,7 +47,16 @@ def has_building_queue(data=None):
         data = _load_queue()
     if not data.get("enabled", True):
         return False
-    return any(len(items) > 0 for items in data.get("queues", {}).values())
+    if any(len(items) > 0 for items in data.get("queues", {}).values()):
+        return True
+    # Also return True for stale inProgress entries (past ETA, no queue items) so the
+    # cleanup pass in process_building_queue gets a chance to remove them.
+    now = time.time()
+    queues = data.get("queues", {})
+    for city_name, ip in data.get("inProgress", {}).items():
+        if not queues.get(city_name) and ip.get("eta", 0) <= now:
+            return True
+    return False
 
 
 # ── Sleep scheduling ──────────────────────────────────────────────────────────
@@ -796,6 +805,20 @@ def process_building_queue(session, ids, cities):
                 logger.warning("      -> [aviso] %d tentativas falhadas consecutivas para %s. A remover da fila.",
                                next_item["failedAttempts"], next_item["building"])
                 items.pop(0)
+
+    # Clean up inProgress entries whose ETA has passed but have no matching queue items.
+    # This happens when the user clears/removes queue items while a build is running,
+    # leaving an inProgress entry that can never be resolved by the main loop above
+    # (because `if not items: continue` skips cities with empty queues).
+    now = time.time()
+    for city_name in list(in_progress.keys()):
+        if queues.get(city_name):
+            continue  # non-empty queue — main loop already handles this city
+        ip = in_progress[city_name]
+        if ip.get("eta", 0) <= now:
+            logger.info(lm("queue_stale_cleanup", city=city_name, building=ip.get("building", "?")))
+            del in_progress[city_name]
+            changed = True
 
     if changed or transport_errors != transport_errors_snapshot:
         data["queues"] = queues
