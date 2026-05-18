@@ -1699,10 +1699,9 @@ def process_auto_attack_waves(session, in_active_hours=True):
 
 def import_existing_reports(session):
     """
-    Fetch all existing espionage reports from the safehouse for each own city.
-    Match reports to world_scan.json players and import successful reports as
-    synthetic DONE missions into spy_missions.json.
-    Only imports when no newer DONE mission already exists for that targetCityId.
+    Fetch all existing espionage reports from the safehouse (shared across all cities)
+    and import successful ones as synthetic DONE missions into spy_missions.json.
+    Only one city with a safehouse is needed — the reports page is global.
     """
     try:
         with open(OWN_CITIES_PATH) as f:
@@ -1710,6 +1709,23 @@ def import_existing_reports(session):
     except (FileNotFoundError, json.JSONDecodeError):
         logger.warning("[espionage] import_existing_reports: own_cities.json não encontrado")
         return
+
+    # Find any city with a safehouse — reports page is shared, one request is enough
+    origin = next(
+        (c for c in own_cities if c.get("safehousePosition") is not None),
+        None,
+    )
+    if origin is None:
+        logger.warning("[espionage] import_existing_reports: nenhuma cidade com safehouse")
+        return
+
+    city_id  = str(origin.get("cityId", ""))
+    position = origin["safehousePosition"]
+    delay = random.randint(2, 5)
+    logger.info("[espionage] aguardar %ds antes de buscar relatórios (%s)", delay, origin.get("name", ""))
+    time.sleep(delay)
+    all_reports = _fetch_all_reports(session, city_id, position)
+    logger.info("[espionage] %d relatório(s) encontrado(s)", len(all_reports))
 
     world_scan_path = os.path.join(LOGS_DIR, "world_scan.json")
     try:
@@ -1736,23 +1752,6 @@ def import_existing_reports(session):
             ts = (m.get("result") or {}).get("reportedAt", m.get("dispatchedAt", 0))
             if ts > latest_done_ts.get(cid, 0):
                 latest_done_ts[cid] = ts
-
-    # Fetch reports from all cities that have a safehouse
-    all_reports: dict = {}
-    first = True
-    for city in own_cities:
-        city_id   = str(city.get("cityId", ""))
-        city_name = city.get("name", "")
-        position  = city.get("safehousePosition")
-        if position is None:
-            continue
-        delay = random.randint(2, 5) if first else random.randint(5, 15)
-        logger.info("[espionage] aguardar %ds antes de buscar relatórios de %s", delay, city_name)
-        time.sleep(delay)
-        first = False
-        reports = _fetch_all_reports(session, city_id, position)
-        logger.info("[espionage] %d relatório(s) em %s", len(reports), city_name)
-        all_reports.update(reports)
 
     if not all_reports:
         logger.info("[espionage] import_existing_reports: nenhum relatório encontrado")
