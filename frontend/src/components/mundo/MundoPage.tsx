@@ -5,48 +5,37 @@ import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { Td } from '../ui/TableCells'
-import { loadSpyDefaults } from '../SettingsPage'
+import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
 import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCity } from '../../types'
+
+interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
+
+interface SpyMissionResult { success: boolean; targetCityName: string | null; resources: Record<string, number> | null; reportedAt: number }
+interface SpyMission {
+  originCityId: string; targetCityId: string; targetPlayerName: string; targetCityName: string
+  islandX: number; islandY: number; numAgents: number
+  state: 'TRAVELING' | 'WAITING_AT_CITY' | 'EXECUTING' | 'DONE' | 'FAILED'
+  dispatchedAt: number; arrivedAt: number | null; executedAt: number | null
+  missionType: string | null; result: SpyMissionResult | null; error?: string
+}
 
 interface SpyModalProps {
   player: WorldScanPlayer
   ownCities: OwnCity[]
+  spyCounts: Record<string, CitySpyCounts>
+  originCityId: string
   onClose: () => void
   onDispatched: () => void
 }
 
-function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
+function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOriginCityId, onClose, onDispatched }: SpyModalProps) {
   const t = useT()
-  const spyDefaults = loadSpyDefaults()
   const [originCityId, setOriginCityId] = useState<string>(
-    spyDefaults.originCityId || (ownCities.length > 0 ? String(ownCities[0].cityId) : '')
+    defaultOriginCityId || (ownCities.length > 0 ? String(ownCities[0].cityId) : '')
   )
-  const [numAgents, setNumAgents] = useState(spyDefaults.numAgents)
+  const [numAgents, setNumAgents] = useState(loadSpyDefaults().numAgents)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
-  const [spyCounts, setSpyCounts] = useState<Record<string, CitySpyCounts>>({})
-
-  useEffect(() => {
-    fetch('/api/espionage/spy-counts')
-      .then(r => r.json())
-      .then(d => {
-        const counts: Record<string, CitySpyCounts> = {}
-        if (d.counts) {
-          for (const [id, val] of Object.entries(d.counts)) {
-            const v = val as Record<string, number | null>
-            counts[id] = {
-              available:  v.available  ?? null,
-              inDefense:  v.inDefense  ?? null,
-              inTraining: v.inTraining ?? null,
-              deployed:   v.deployed   ?? null,
-            }
-          }
-        }
-        setSpyCounts(counts)
-      })
-      .catch(() => {})
-  }, [])
 
   const hasIslandId = !!player.cityId && !!player.islandId
 
@@ -116,8 +105,8 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
                 const sc = spyCounts[id]
                 let label = c.name
                 if (sc) {
-                  if (sc.available != null)
-                    label = `${c.name} (${sc.available} disponíveis)`
+                  if (sc.inDefense != null)
+                    label = `${c.name} (${sc.inDefense} disponíveis)`
                   else if (sc.deployed != null && sc.deployed > 0)
                     label = `${c.name} (${sc.deployed} em campo)`
                 }
@@ -249,6 +238,9 @@ interface InactivosTabProps {
   setMarks: React.Dispatch<React.SetStateAction<Record<string, string>>>
   onForceRefresh: () => void
   onRefreshScan: () => void
+  ownCities: OwnCity[]
+  spyCounts: Record<string, CitySpyCounts>
+  spyOriginCityId: string
 }
 
 function parseMarkKey(markKey: string): { playerId: string; islandX: string; islandY: string } {
@@ -259,7 +251,7 @@ function parseMarkKey(markKey: string): { playerId: string; islandX: string; isl
   return { playerId, islandX, islandY }
 }
 
-function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan }: InactivosTabProps) {
+function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan, ownCities, spyCounts, spyOriginCityId }: InactivosTabProps) {
   const t    = useT()
   const lang = useLang()
   const [filterDist, setFilterDist] = useState(20)
@@ -272,15 +264,26 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
   const [noteInputs,   setNoteInputs]   = useState<Record<string, string>>({})
   const [actionInputs, setActionInputs] = useState<Record<string, string>>({})
   const [spyTarget,      setSpyTarget]      = useState<PlayerWithMark | null>(null)
-  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
   const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
   const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
+  const [missions,       setMissions]       = useState<SpyMission[]>([])
 
   useEffect(() => {
-    fetch('/api/own-cities').then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setOwnCities(data)
-    }).catch(() => {})
+    const load = () => fetch('/api/espionage/missions').then(r => r.json())
+      .then((d: { missions: SpyMission[] }) => { if (d.missions) setMissions(d.missions) }).catch(() => {})
+    load()
+    const t = setInterval(load, 60000)
+    return () => clearInterval(t)
   }, [])
+
+  const latestMissionByKey = useMemo(() => {
+    const map: Record<string, SpyMission> = {}
+    for (const m of missions) {
+      const key = `${m.targetPlayerName}_${m.islandX}_${m.islandY}`
+      if (!map[key] || m.dispatchedAt > map[key].dispatchedAt) map[key] = m
+    }
+    return map
+  }, [missions])
 
   const handleMark = useCallback((markKey: string, status: string) => {
     setMarks(prev => ({ ...prev, [markKey]: status }))
@@ -523,29 +526,86 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                       {fmtScore(p.scores?.building, lang)}
                     </Td>
                     <Td className="text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <MarkSelect markKey={p.markKey} current={p.mark} onChange={handleMark} />
-                        <button
-                          onClick={() => setSpyTarget(p)}
-                          title={p.cityId && p.islandId ? t('spy_send_btn') : t('spy_no_city_id')}
-                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${
-                            !p.cityId || !p.islandId
-                              ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
-                              : dispatchedKeys.has(p.markKey)
-                                ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
-                                : 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
-                          }`}
-                          disabled={!p.cityId || !p.islandId}
-                        >
-                          <i className="fa-solid fa-user-secret" />
-                        </button>
-                      </div>
+                      {(() => {
+                        const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
+                        const mission = latestMissionByKey[mKey]
+                        const isActive = mission && ['TRAVELING','WAITING_AT_CITY','EXECUTING'].includes(mission.state)
+                        const isDone   = mission?.state === 'DONE'
+                        const isFailed = mission?.state === 'FAILED'
+                        const spyTitle = !p.cityId || !p.islandId ? t('spy_no_city_id')
+                          : isDone   ? t('spy_done')
+                          : isFailed ? t('spy_failed')
+                          : isActive ? (mission.state === 'TRAVELING' ? t('spy_traveling') : mission.state === 'WAITING_AT_CITY' ? t('spy_waiting') : t('spy_executing'))
+                          : t('spy_send_btn')
+                        return (
+                          <div className="flex items-center justify-center gap-1">
+                            <MarkSelect markKey={p.markKey} current={p.mark} onChange={handleMark} />
+                            <button
+                              onClick={() => setSpyTarget(p)}
+                              title={spyTitle}
+                              className={`w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${
+                                !p.cityId || !p.islandId
+                                  ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
+                                  : isDone
+                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                    : isFailed
+                                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                                      : (isActive || dispatchedKeys.has(p.markKey))
+                                        ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
+                                        : 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
+                              }`}
+                              disabled={!p.cityId || !p.islandId}
+                            >
+                              <i className="fa-solid fa-user-secret" />
+                            </button>
+                            {isDone && mission.result && (
+                              <button
+                                onClick={() => handleToggleExpand(p.markKey, p.markNote ?? '')}
+                                title={t('spy_report_title')}
+                                className="w-5 h-5 rounded flex items-center justify-center text-[10px] bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
+                              >
+                                <i className="fa-solid fa-file-lines" />
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </Td>
                   </tr>
                   {isExpanded && (
                     <tr className="bg-indigo-50/40 border-b border-indigo-200">
                       <td colSpan={7} className="px-5 py-3">
                         <div className="flex flex-col gap-3">
+                          {(() => {
+                            const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
+                            const mission = latestMissionByKey[mKey]
+                            if (!mission || mission.state !== 'DONE' || !mission.result) return null
+                            const res = mission.result.resources
+                            const RESOURCE_LABELS: Record<string, string> = { wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', crystal: 'Cristal', sulfur: 'Enxofre' }
+                            return (
+                              <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
+                                <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
+                                  <i className="fa-solid fa-file-lines" /> {t('spy_report_title')} — {mission.result.targetCityName || p.cityName}
+                                </p>
+                                <p className="text-[10px] text-emerald-600 mb-2">
+                                  {mission.result.success ? t('spy_report_success') : t('spy_report_failed')}
+                                  {mission.result.reportedAt && <span className="ml-2 text-slate-400">{new Date(mission.result.reportedAt * 1000).toLocaleString()}</span>}
+                                </p>
+                                {res && Object.keys(res).length > 0 ? (
+                                  <div className="grid grid-cols-5 gap-1">
+                                    {(['wood','wine','marble','crystal','sulfur'] as const).map(k => (
+                                      <div key={k} className="text-center">
+                                        <div className="text-[10px] text-slate-500">{RESOURCE_LABELS[k]}</div>
+                                        <div className="text-xs font-semibold text-slate-700">{res[k]?.toLocaleString() ?? '—'}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
+                                )}
+                              </div>
+                            )
+                          })()}
                           <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide">{t('action_log_title')}</p>
                           <div className="flex gap-2 items-start">
                             <textarea
@@ -614,6 +674,8 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
         <SpyModal
           player={spyTarget}
           ownCities={ownCities}
+          spyCounts={spyCounts}
+          originCityId={spyOriginCityId}
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
             setDispatchedOk(spyTarget.playerName)
@@ -850,6 +912,33 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState<string | null>(null)
   const [marks,      setMarks]      = useState<Record<string, string>>({})
+  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
+  const [spyCounts,      setSpyCounts]      = useState<Record<string, CitySpyCounts>>({})
+  const [spyOriginCityId, setSpyOriginCityId] = useState<string>(() => loadSpyDefaults().originCityId)
+
+  useEffect(() => {
+    fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
+      if (Array.isArray(d)) {
+        setOwnCities(d)
+        setSpyOriginCityId(prev => prev || (d.length > 0 ? String(d[0].cityId) : ''))
+      }
+    }).catch(() => {})
+    fetch('/api/espionage/spy-counts').then(r => r.json()).then(d => {
+      if (d.counts) {
+        const counts: Record<string, CitySpyCounts> = {}
+        for (const [id, val] of Object.entries(d.counts)) {
+          const v = val as Record<string, number | null>
+          counts[id] = { available: v.available ?? null, inDefense: v.inDefense ?? null, inTraining: v.inTraining ?? null, deployed: v.deployed ?? null }
+        }
+        setSpyCounts(counts)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const handleSpyCityChange = useCallback((cityId: string) => {
+    setSpyOriginCityId(cityId)
+    saveSpyDefaults(cityId, loadSpyDefaults().numAgents)
+  }, [])
 
   const fetchScan = useCallback(() => {
     fetch('/api/world-scan')
@@ -953,18 +1042,37 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
         </div>
       </Card>
 
-      <div className="flex gap-1 mb-4 bg-white border border-slate-200 rounded-xl p-1 shadow-sm w-fit">
-        {TABS.map(tb => (
-          <button
-            key={tb.key}
-            onClick={() => setTab(tb.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              tab === tb.key ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <i className={`fa-solid ${tb.icon} text-xs`} />{tb.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+          {TABS.map(tb => (
+            <button
+              key={tb.key}
+              onClick={() => setTab(tb.key)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                tab === tb.key ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <i className={`fa-solid ${tb.icon} text-xs`} />{tb.label}
+            </button>
+          ))}
+        </div>
+        {ownCities.length > 0 && (
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+            <i className="fa-solid fa-user-secret text-slate-400 text-xs" />
+            <select
+              value={spyOriginCityId}
+              onChange={e => handleSpyCityChange(e.target.value)}
+              className="text-sm border-none bg-transparent focus:outline-none text-slate-700 cursor-pointer"
+            >
+              {ownCities.map(c => {
+                const id = String(c.cityId)
+                const sc = spyCounts[id]
+                const label = sc?.inDefense != null ? `${c.name} (${sc.inDefense})` : c.name
+                return <option key={id} value={id}>{label}</option>
+              })}
+            </select>
+          </div>
+        )}
       </div>
 
       {tab === 'inactivos' && (
@@ -977,6 +1085,9 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           setMarks={setMarks}
           onForceRefresh={handleForceRefresh}
           onRefreshScan={fetchScan}
+          ownCities={ownCities}
+          spyCounts={spyCounts}
+          spyOriginCityId={spyOriginCityId}
         />
       )}
       {tab === 'ilhas' && (
