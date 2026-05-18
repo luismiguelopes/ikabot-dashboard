@@ -590,9 +590,124 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
         return False
 
 
-def _fetch_report_ids(session, origin_city_id, position):
-    """GET safehouse reports tab. Returns list of report ID strings (newest first)."""
+_RESOURCE_ALT_MAP = {
+    "material de construção": "wood",
+    "material de constru":    "wood",
+    "madeira":                "wood",
+    "vinho":                  "wine",
+    "mármore":                "marble",
+    "marmore":                "marble",
+    "cristal":                "glass",
+    "enxofre":                "sulfur",
+}
+
+
+def _alt_to_resource_key(alt_text):
+    normalized = alt_text.lower().strip()
+    for k, v in _RESOURCE_ALT_MAP.items():
+        if normalized == k or k in normalized:
+            return v
+    return None
+
+
+def _parse_reports_from_html(html):
+    """
+    Parse all espionage reports embedded in the safehouse reports tab HTML.
+    Returns dict {report_id: parsed_data}. All report content is present in the initial
+    page load for both read and unread reports — no per-report AJAX call needed.
+    """
     import re
+    results = {}
+    if not html:
+        return results
+
+    # Each report occupies a consecutive pair of TR rows:
+    #   <tr id="messageID" class="espionageReports [bold]"> — header (bold = unread)
+    #   <tr id="tbl_mailID" class="report [invisible]">     — detail with full resource/garrison table
+    # Split the HTML at each header row so each chunk covers one full report.
+    splits = list(re.finditer(r'(?=<tr[^>]+id=["\']message(\d+)["\'])', html, re.IGNORECASE))
+    if not splits:
+        logger.debug("[espionage] _parse_reports_from_html: nenhum relatório encontrado no HTML")
+        return results
+
+    for k, split in enumerate(splits):
+        report_id = split.group(1)
+        start = split.start()
+        end = splits[k + 1].start() if k + 1 < len(splits) else len(html)
+        chunk = html[start:end]
+
+        header_m = re.search(
+            r'<tr[^>]+id=["\']message' + re.escape(report_id) + r'["\'][^>]*class=["\']([^"\']+)["\']',
+            chunk, re.IGNORECASE)
+        is_unread = bool(header_m and "bold" in header_m.group(1))
+
+        owner_m = re.search(r'class=["\']targetOwner[^"\']*["\'][^>]*>(.*?)</td>',
+                            chunk, re.DOTALL | re.IGNORECASE)
+        target_owner = re.sub(r'<[^>]+>', '', owner_m.group(1)).strip() if owner_m else None
+
+        # City cell: <a href="...">CityName<br>[x:y]</a>
+        city_m = re.search(r'class=["\']targetCity[^"\']*["\'][^>]*>.*?<a[^>]*>(.*?)</a>',
+                           chunk, re.DOTALL | re.IGNORECASE)
+        target_city = island_x = island_y = None
+        if city_m:
+            city_inner = re.sub(r'<br\s*/?>', ' ', city_m.group(1), flags=re.IGNORECASE)
+            city_text = re.sub(r'<[^>]+>', '', city_inner)
+            city_text = re.sub(r'\s+', ' ', city_text).strip()
+            coord_m = re.search(r'\[(\d+):(\d+)\]', city_text)
+            if coord_m:
+                island_x = int(coord_m.group(1))
+                island_y = int(coord_m.group(2))
+                target_city = city_text[:city_text.rfind('[')].strip()
+            else:
+                target_city = city_text
+
+        success = bool(re.search(r'completada com sucesso|completed successfully',
+                                 chunk, re.IGNORECASE))
+
+        resources = {}
+        res_table_m = re.search(
+            r'<table[^>]+class=["\'][^"\']*resourcesTable[^"\']*["\'][^>]*>(.*?)</table>',
+            chunk, re.DOTALL | re.IGNORECASE)
+        if res_table_m:
+            for row_m in re.finditer(
+                r'<img[^>]+alt=["\']([^"\']+)["\'].*?'
+                r'<td[^>]+class=["\'][^"\']*count[^"\']*["\'][^>]*>([\d.,\s]+)</td>',
+                res_table_m.group(1), re.DOTALL | re.IGNORECASE
+            ):
+                key = _alt_to_resource_key(row_m.group(1))
+                if key:
+                    count_str = row_m.group(2).replace('.', '').replace(',', '').strip()
+                    try:
+                        resources[key] = int(count_str)
+                    except ValueError:
+                        pass
+
+        troops = None
+        if re.search(r'Tropas\s+em\b|Frotas\s+em\b', chunk, re.IGNORECASE):
+            troops = _parse_garrison_troops(chunk) or None
+
+        results[report_id] = {
+            "reportId":       report_id,
+            "isUnread":       is_unread,
+            "targetOwner":    target_owner,
+            "targetCityName": target_city,
+            "islandX":        island_x,
+            "islandY":        island_y,
+            "success":        success,
+            "resources":      resources if resources else None,
+            "troops":         troops,
+            "reportedAt":     int(time.time()),
+        }
+
+    logger.debug("[espionage] _parse_reports_from_html: %d relatório(s) encontrado(s)", len(results))
+    return results
+
+
+def _fetch_all_reports(session, origin_city_id, position):
+    """
+    GET safehouse reports tab once and return all parsed report data {report_id: data}.
+    The page HTML already contains full content for every report (read and unread alike).
+    """
     import ikabot.config as ikabot_config
     url = (
         f"view=safehouse&activeTab=tabReports&cityId={origin_city_id}&position={position}"
@@ -604,7 +719,7 @@ def _fetch_report_ids(session, origin_city_id, position):
         resp_data = json.loads(resp, strict=False)
     except Exception as e:
         logger.error("[espionage] GET reports tab falhou: %s", e)
-        return []
+        return {}
 
     for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "updateGlobalData":
@@ -613,19 +728,19 @@ def _fetch_report_ids(session, origin_city_id, position):
                 ikabot_config.actionRequest = tok
             break
 
-    ids = []
+    html = ""
     for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateTemplateData":
-            td = entry[1]
-            if isinstance(td, dict):
-                for key in td:
-                    m = re.match(r'^js_available_(\d+)$', key)
-                    if m:
-                        ids.append(m.group(1))
+        if isinstance(entry, list) and entry[0] == "changeView":
+            inner = entry[1]
+            if isinstance(inner, list) and len(inner) > 1 and isinstance(inner[1], str):
+                html = inner[1]
             break
-    # Higher IDs are newer reports
-    ids.sort(key=lambda x: int(x), reverse=True)
-    return ids
+
+    if not html:
+        logger.warning("[espionage] reports tab: sem HTML no changeView")
+        return {}
+
+    return _parse_reports_from_html(html)
 
 
 def _parse_garrison_troops(html):
@@ -665,100 +780,6 @@ def _parse_garrison_troops(html):
     return troops
 
 
-def _parse_report_html(html, report_id):
-    """
-    Parse spy report HTML.
-    Warehouse report: contains "Recursos em CITY" section → returns resources dict.
-    Garrison report:  contains "Tropas em CITY" section   → returns troops dict.
-    Returns {reportId, success, targetCityName, resources, troops, reportedAt}.
-    """
-    import re
-
-    # --- stripped text for scalar fields ---
-    text = re.sub(r'<[^>]+>', ' ', html)
-    text = text.replace('&nbsp;', ' ').replace('\xa0', ' ')
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    success = bool(re.search(r'completada com sucesso|completed successfully', text, re.IGNORECASE))
-
-    # city name: try warehouse pattern first, then garrison
-    target_city = None
-    for pat in [
-        r'Recursos\s+em\s+([\w\s\-\']+?)\s+Miss',
-        r'[TF]ropa[s]?\s+em\s+([\w\s\-\']+?)\s+Miss',
-        r'[TF]rota[s]?\s+em\s+([\w\s\-\']+?)\s+Miss',
-    ]:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            target_city = m.group(1).strip()
-            break
-    # fallback: grab city name from "Tropas em X" without "Missão" following
-    if not target_city:
-        m = re.search(r'Tropas\s+em\s+([\w\s\-\'\[\]0-9:]+?)(?:\s{2,}|\Z)', text, re.IGNORECASE)
-        if m:
-            target_city = m.group(1).strip()
-
-    # --- warehouse resources (regex on stripped text) ---
-    resources = {}
-    for pat, key in [
-        (r'Material\s+de\s+constru[çc][aã]o\s+([\d.,]+)', 'wood'),
-        (r'Vinho\s+([\d.,]+)',                             'wine'),
-        (r'M[aá]rmore\s+([\d.,]+)',                        'marble'),
-        (r'Cristal\s+([\d.,]+)',                           'crystal'),
-        (r'Enxofre\s+([\d.,]+)',                           'sulfur'),
-    ]:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).replace('.', '').replace(',', '')
-            try:
-                resources[key] = int(val)
-            except ValueError:
-                pass
-
-    # --- garrison troops (structured table parser on raw HTML) ---
-    troops = None
-    is_garrison = bool(re.search(r'Tropas\s+em\b|Frotas\s+em\b', text, re.IGNORECASE))
-    if is_garrison:
-        troops = _parse_garrison_troops(html) or None
-
-    return {
-        "reportId":       report_id,
-        "success":        success,
-        "targetCityName": target_city,
-        "resources":      resources if resources else None,
-        "troops":         troops,
-        "reportedAt":     int(time.time()),
-    }
-def _fetch_and_parse_report(session, report_id):
-    """GET markReportAsRead for a report, parse HTML, return result dict or None."""
-    import ikabot.config as ikabot_config
-    url = (
-        f"action=Espionage&function=markReportAsRead&id={report_id}"
-        f"&actionRequest={ikabot_config.actionRequest}&ajax=1"
-    )
-    try:
-        resp = session.get(url)
-        resp_data = json.loads(resp, strict=False)
-    except Exception as e:
-        logger.error("[espionage] markReportAsRead %s falhou: %s", report_id, e)
-        return None
-
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
-
-    html = ""
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "changeView":
-            inner = entry[1]
-            if isinstance(inner, list) and len(inner) > 1 and isinstance(inner[1], str):
-                html = inner[1]
-            break
-
-    return _parse_report_html(html, report_id) if html else None
 
 
 # ── Phase 2: public state machine functions ───────────────────────────────────
@@ -870,7 +891,7 @@ def collect_mission_results(session):
     for i, m in enumerate(missions):
         if m.get("state") not in ("EXECUTING", "EXECUTING_WAREHOUSE"):
             continue
-        if now - m.get("executedAt", 0) < 300:
+        if now - m.get("executedAt", 0) < 600:
             continue
 
         origin_id = str(m["originCityId"])
@@ -879,16 +900,18 @@ def collect_mission_results(session):
             continue
 
         time.sleep(random.randint(5, 15))
-        report_ids = _fetch_report_ids(session, origin_id, position)
+        reports = _fetch_all_reports(session, origin_id, position)
+
+        if not reports:
+            continue
 
         matched = False
-        for rid in report_ids[:5]:
-            time.sleep(random.randint(3, 8))
-            report = _fetch_and_parse_report(session, rid)
-            if not report:
+        target = (m.get("targetCityName") or "").lower()
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:5]:
+            report = reports[rid]
+            if not report.get("resources"):
                 continue
-            target = (m.get("targetCityName") or "").lower()
-            found  = (report.get("targetCityName") or "").lower()
+            found = (report.get("targetCityName") or "").lower()
             if target and found and target[:6] not in found and found[:6] not in target:
                 continue
 
@@ -993,7 +1016,7 @@ def collect_garrison_results(session):
     for i, m in enumerate(missions):
         if m.get("state") != "EXECUTING_GARRISON":
             continue
-        if now - m.get("garrisonExecutedAt", 0) < 300:
+        if now - m.get("garrisonExecutedAt", 0) < 600:
             continue
 
         origin_id = str(m["originCityId"])
@@ -1002,16 +1025,18 @@ def collect_garrison_results(session):
             continue
 
         time.sleep(random.randint(5, 15))
-        report_ids = _fetch_report_ids(session, origin_id, position)
+        reports = _fetch_all_reports(session, origin_id, position)
+
+        if not reports:
+            continue
 
         matched = False
-        for rid in report_ids[:5]:
-            time.sleep(random.randint(3, 8))
-            report = _fetch_and_parse_report(session, rid)
-            if not report:
+        target = (m.get("targetCityName") or "").lower()
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:5]:
+            report = reports[rid]
+            if not report.get("troops"):
                 continue
-            target = (m.get("targetCityName") or "").lower()
-            found  = (report.get("targetCityName") or "").lower()
+            found = (report.get("targetCityName") or "").lower()
             if target and found and target[:6] not in found and found[:6] not in target:
                 continue
             missions[i]["state"] = "DONE"
