@@ -44,8 +44,9 @@ ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
 MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
 AUTO_ATTACK_WAVES_PATH     = os.path.join(LOGS_DIR, "auto_attack_waves.json")
-AUTO_ATTACK_SETTINGS_PATH  = os.path.join(LOGS_DIR, "auto_attack_settings.json")
-WORLD_SCAN_SETTINGS_PATH   = os.path.join(LOGS_DIR, "world_scan_settings.json")
+AUTO_ATTACK_SETTINGS_PATH    = os.path.join(LOGS_DIR, "auto_attack_settings.json")
+WORLD_SCAN_SETTINGS_PATH     = os.path.join(LOGS_DIR, "world_scan_settings.json")
+FORCE_IMPORT_REPORTS_FLAG    = os.path.join(LOGS_DIR, ".force_import_reports")
 
 _DEFAULT_ESPIONAGE_SETTINGS = {
     "garrisonThresholdTotal": 50000,
@@ -934,6 +935,13 @@ def api_auto_attack_settings_post():
     with open(AUTO_ATTACK_SETTINGS_PATH, "w") as f:
         json.dump(settings, f, indent=2)
     return jsonify({"status": "ok", "settings": settings})
+
+
+@app.route("/api/espionage/import-reports", methods=["POST"])
+def api_espionage_import_reports():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(FORCE_IMPORT_REPORTS_FLAG, "w").close()
+    return jsonify({"status": "queued"})
 
 
 @app.route("/api/health")

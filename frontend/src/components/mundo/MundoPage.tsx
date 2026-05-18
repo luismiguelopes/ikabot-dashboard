@@ -1123,6 +1123,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [spyOriginCityId, setSpyOriginCityId] = useState<string>(() => loadSpyDefaults().originCityId)
   const [worldScanEnabled,     setWorldScanEnabled]     = useState(true)
   const [spyProcessingEnabled, setSpyProcessingEnabled] = useState(true)
+  const [importingReports,     setImportingReports]     = useState(false)
+  const [importMsg,            setImportMsg]            = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
@@ -1204,6 +1206,19 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
     fetch('/api/world-scan/refresh', { method: 'POST' })
       .then(() => alert(t('scan_scheduled_msg')))
   }
+
+  const handleImportReports = useCallback(() => {
+    setImportingReports(true)
+    setImportMsg(null)
+    fetch('/api/espionage/import-reports', { method: 'POST' })
+      .then(r => r.json())
+      .then(() => {
+        setImportMsg(t('import_reports_ok'))
+        setTimeout(() => setImportMsg(null), 5000)
+      })
+      .catch(() => setImportMsg(null))
+      .finally(() => setImportingReports(false))
+  }, [t])
 
   const isRunning      = scanStatus?.status === 'running'
   const lastUpdated    = scanData?.lastUpdated ? new Date(scanData.lastUpdated * 1000).toLocaleString(getLocale(lang)) : null
@@ -1288,14 +1303,27 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
               </button>
             </div>
           </div>
-          <button
-            onClick={handleForceRefresh}
-            disabled={isRunning}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
-          >
-            <i className="fa-solid fa-rotate" />
-            {isRunning ? t('scanning') : t('force_scan')}
-          </button>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <button
+              onClick={handleForceRefresh}
+              disabled={isRunning}
+              className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className="fa-solid fa-rotate" />
+              {isRunning ? t('scanning') : t('force_scan')}
+            </button>
+            <button
+              onClick={handleImportReports}
+              disabled={importingReports}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className={`fa-solid ${importingReports ? 'fa-spinner fa-spin' : 'fa-file-import'}`} />
+              {t('import_reports_btn')}
+            </button>
+            {importMsg && (
+              <p className="text-xs text-emerald-600 font-medium">{importMsg}</p>
+            )}
+          </div>
         </div>
       </Card>
 

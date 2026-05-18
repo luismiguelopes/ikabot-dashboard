@@ -328,6 +328,8 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     pipeline_failed:'Mission failed', pipeline_attack_done:'Attack done',
     pipeline_skipped:'Auto-skipped',
     world_scan_toggle:'World Scan', spy_processing_toggle:'Spy processing',
+    import_reports_btn:'Import reports', import_reports_ok:'Reports imported',
+    import_reports_none:'No reports found',
   },
   pt: {
     nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
@@ -656,6 +658,8 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     pipeline_failed:'Missão falhada', pipeline_attack_done:'Ataque concluído',
     pipeline_skipped:'Ignorado automaticamente',
     world_scan_toggle:'World Scan', spy_processing_toggle:'Processamento de espias',
+    import_reports_btn:'Importar relatórios', import_reports_ok:'Relatórios importados',
+    import_reports_none:'Nenhum relatório encontrado',
   },
 }
 

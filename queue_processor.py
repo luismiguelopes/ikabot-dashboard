@@ -16,7 +16,8 @@ from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, QUEUE_SETTINGS_PATH, UPDATE_INTERVAL,
     ACTIVE_HOURS_START, ACTIVE_HOURS_END,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
-    FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG, lm, logger,
+    FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
+    FORCE_IMPORT_REPORTS_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -212,6 +213,19 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             break
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
+
+        # Import existing safehouse reports triggered by Flask UI
+        if session and os.path.exists(FORCE_IMPORT_REPORTS_FLAG):
+            try:
+                os.remove(FORCE_IMPORT_REPORTS_FLAG)
+            except Exception:
+                pass
+            try:
+                from espionage_manager import import_existing_reports
+                import_existing_reports(session)
+            except Exception:
+                logger.error("import_existing_reports falhou", exc_info=True)
+            continue
 
         # Pending spy dispatch queued by the Flask UI — process immediately
         if session:
