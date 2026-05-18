@@ -45,9 +45,11 @@ ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
 MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
 AUTO_ATTACK_WAVES_PATH     = os.path.join(LOGS_DIR, "auto_attack_waves.json")
 AUTO_ATTACK_SETTINGS_PATH  = os.path.join(LOGS_DIR, "auto_attack_settings.json")
+WORLD_SCAN_SETTINGS_PATH   = os.path.join(LOGS_DIR, "world_scan_settings.json")
 
 _DEFAULT_ESPIONAGE_SETTINGS = {
-    "garrisonThresholdTotal": 50000
+    "garrisonThresholdTotal": 50000,
+    "processingEnabled": True,
 }
 
 _DEFAULT_AUTO_ATTACK_SETTINGS = {
@@ -706,25 +708,51 @@ def api_own_cities():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/world-scan/settings")
+def api_world_scan_settings_get():
+    try:
+        with open(WORLD_SCAN_SETTINGS_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"enabled": True})
+
+
+@app.route("/api/world-scan/settings", methods=["POST"])
+def api_world_scan_settings_post():
+    body = request.get_json(silent=True) or {}
+    settings = {"enabled": bool(body.get("enabled", True))}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WORLD_SCAN_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/espionage/settings")
 def api_espionage_settings_get():
     try:
         with open(ESPIONAGE_SETTINGS_PATH) as f:
-            return jsonify(json.load(f))
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify(_DEFAULT_ESPIONAGE_SETTINGS)
+        data = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+    data.setdefault("processingEnabled", True)
+    return jsonify(data)
 
 
 @app.route("/api/espionage/settings", methods=["POST"])
 def api_espionage_settings_post():
     body = request.get_json(silent=True) or {}
-    settings = {
-        "garrisonThresholdTotal": max(0, int(body.get("garrisonThresholdTotal",
-                                              _DEFAULT_ESPIONAGE_SETTINGS["garrisonThresholdTotal"])))
-    }
+    try:
+        with open(ESPIONAGE_SETTINGS_PATH) as f:
+            existing = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+    if "garrisonThresholdTotal" in body:
+        existing["garrisonThresholdTotal"] = max(0, int(body["garrisonThresholdTotal"]))
+    if "processingEnabled" in body:
+        existing["processingEnabled"] = bool(body["processingEnabled"])
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(ESPIONAGE_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+        json.dump(existing, f, indent=2)
     return jsonify({"ok": True})
 
 

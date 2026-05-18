@@ -287,6 +287,10 @@ def process_dispatch_queue(session):
     Does a safehouse pre-check (if position data is available) to verify
     there are enough agents before sending.
     """
+    settings = _load_espionage_settings()
+    if not settings.get("processingEnabled", True):
+        logger.info("[espionage] processamento de espias desactivado — a ignorar dispatch queue")
+        return
     q = _load_dispatch_queue()
     pending = q.get("pending", [])
     if not pending:

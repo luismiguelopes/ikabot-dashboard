@@ -23,9 +23,20 @@ _FORCE_FLAG = os.path.join(LOGS_DIR, ".force_world_scan")
 
 # ── State helpers ─────────────────────────────────────────────────────────────
 
+def _world_scan_enabled():
+    settings_path = os.path.join(LOGS_DIR, "world_scan_settings.json")
+    try:
+        with open(settings_path) as f:
+            return json.load(f).get("enabled", True)
+    except Exception:
+        return True
+
+
 def should_start_scan():
     """True if a new world scan should be started.
     Returns False if a scan is already in progress (checkpoint exists)."""
+    if not _world_scan_enabled():
+        return False
     if os.path.exists(_FORCE_FLAG):
         try:
             os.remove(_FORCE_FLAG)

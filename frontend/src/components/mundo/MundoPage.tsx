@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useT, useLang, getLocale } from '../../i18n'
-import { fmtScore, exportCsv } from '../../utils'
+import { exportCsv } from '../../utils'
 import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
@@ -330,145 +330,160 @@ function AttackModal({ player, ownCities, defaultOriginCityId, onClose, onQueued
   )
 }
 
-interface MarkConfigEntry {
-  label: string
-  bg: string
-  text: string
-  ring: string
+// ── Naval unit detection ──────────────────────────────────────────────────────
+
+const NAVAL_KEYWORDS = ['navio', 'ship', 'steam giant', 'galley', 'trireme', 'balloon', 'ram', 'mortar', 'catapult', 'flamethrower']
+
+function isNavalUnit(name: string): boolean {
+  const n = name.toLowerCase()
+  return NAVAL_KEYWORDS.some(k => n.includes(k))
 }
 
-function useMarkConfig(): Record<string, MarkConfigEntry> {
-  const t = useT()
-  return {
-    novo:    { label: t('mark_novo'),    bg: 'bg-blue-100',   text: 'text-blue-700',   ring: 'ring-blue-300'   },
-    alvo:    { label: t('mark_alvo'),    bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300' },
-    visto:   { label: t('mark_visto'),   bg: 'bg-slate-100',  text: 'text-slate-500',  ring: 'ring-slate-300'  },
-    ignorar: { label: t('mark_ignorar'), bg: 'bg-slate-50',   text: 'text-slate-400',  ring: 'ring-slate-200'  },
-  }
+// ── EnrichedPlayer ────────────────────────────────────────────────────────────
+
+interface EnrichedPlayer extends WorldScanPlayer {
+  mission: SpyMission | undefined
+  wave: AttackWaveEntry | undefined
+  totalResources: number | null
+  hasTroops: boolean | null   // null = no garrison data; false = clear; true = has troops
+  hasShips: boolean | null
+  priority: number
+  mKey: string  // `${playerName}_${islandX}_${islandY}` — mission lookup
+  pKey: string  // `${playerId}_${islandX}_${islandY}` — mark/ignore key
 }
 
-function useResourceLabels(): string[] {
-  const t = useT()
-  return ['', t('res_wine'), t('res_marble'), t('res_crystal'), t('res_sulfur')]
-}
+// ── MissionStatePill ──────────────────────────────────────────────────────────
 
-function MarkBadge({ status }: { status: string }) {
-  const MARK_CONFIG = useMarkConfig()
-  const cfg = MARK_CONFIG[status] || MARK_CONFIG.novo
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}>
-      {cfg.label}
-    </span>
-  )
-}
-
-function MarkSelect({ markKey, current, onChange }: {
-  markKey: string
-  current: string
-  onChange: (key: string, status: string) => void
+function MissionStatePill({ priority, mission, wave }: {
+  priority: number
+  mission: SpyMission | undefined
+  wave: AttackWaveEntry | undefined
 }) {
-  const MARK_CONFIG = useMarkConfig()
-  const cfg = MARK_CONFIG[current] || MARK_CONFIG.novo
-  return (
-    <select
-      value={current}
-      onChange={e => onChange(markKey, e.target.value)}
-      className={`text-xs rounded-full px-2 py-0.5 border font-medium cursor-pointer focus:outline-none ${cfg.bg} ${cfg.text} border-transparent`}
-    >
-      {Object.entries(MARK_CONFIG).map(([k, v]) => (
-        <option key={k} value={k}>{v.label}</option>
-      ))}
-    </select>
-  )
-}
-
-function StatePill({ state }: { state: string }) {
   const t = useT()
-  if (state === 'inactive') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-      <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" /> {t('state_inactive')}
+
+  if (wave && wave.state === 'IN_PROGRESS') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+      <i className="fa-solid fa-crosshairs text-[9px]" /> {t('pipeline_attacking')}
     </span>
   )
-  if (state === 'vacation') return (
+  if (wave && wave.state === 'PENDING') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+      <i className="fa-solid fa-clock text-[9px]" /> {t('pipeline_attack_pending')}
+    </span>
+  )
+  if (wave && (wave.state === 'DONE' || wave.state === 'AUTO_SKIPPED' || wave.state === 'FAILED')) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-400">
+      {wave.state === 'DONE' ? t('pipeline_attack_done') : t('pipeline_skipped')}
+    </span>
+  )
+
+  if (priority === 6) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+      <i className="fa-solid fa-check text-[9px]" /> {t('pipeline_ready')}
+    </span>
+  )
+  if (priority === 5) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+      <i className="fa-solid fa-ship text-[9px]" /> {t('pipeline_has_ships')}
+    </span>
+  )
+  if (priority === 4) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
-      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" /> {t('state_vacation')}
+      <i className="fa-solid fa-coins text-[9px]" /> {t('pipeline_low_resources')}
     </span>
   )
-  return <span className="text-slate-400 text-xs">{state}</span>
+  if (priority === 3) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+      <i className="fa-solid fa-warehouse text-[9px]" /> {t('pipeline_warehouse_known')}
+    </span>
+  )
+  if (priority === 2 && mission) {
+    const subLabel = mission.state === 'TRAVELING' ? t('spy_traveling')
+      : mission.state === 'WAITING_AT_CITY' ? t('spy_waiting')
+      : mission.state === 'WAITING_FOR_GARRISON' ? t('spy_waiting_garrison')
+      : mission.state === 'EXECUTING_GARRISON' ? t('spy_executing_garrison')
+      : t('spy_executing')
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse inline-block" /> {subLabel}
+      </span>
+    )
+  }
+  if (priority === 0) return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">
+      <i className="fa-solid fa-xmark text-[9px]" /> {t('pipeline_failed')}
+    </span>
+  )
+  // priority === 1: no mission data
+  return <span className="text-slate-300 text-xs">—</span>
 }
 
-function parseScore(s: string | undefined | null): number {
-  if (!s) return 0
-  return parseInt(String(s).replace(/[,.\s ]/g, ''), 10) || 0
-}
-
-type PlayerSortKey = 'distance' | 'army' | 'building' | 'player'
-type IslandSortKey = 'freeSlots' | 'wood' | 'luxury' | 'distance'
-
-interface PlayerWithMark extends WorldScanPlayer {
-  markKey: string
-  mark: string
-}
+// ── InactivosTab ──────────────────────────────────────────────────────────────
 
 interface InactivosTabProps {
   scanData: WorldScanData | null
-  scanStatus: ScanStatus | null
   loading: boolean
   error: string | null
-  marks: Record<string, string>
-  setMarks: React.Dispatch<React.SetStateAction<Record<string, string>>>
   onForceRefresh: () => void
-  onRefreshScan: () => void
   ownCities: OwnCity[]
   spyCounts: Record<string, CitySpyCounts>
   spyOriginCityId: string
 }
 
-function parseMarkKey(markKey: string): { playerId: string; islandX: string; islandY: string } {
-  const parts   = markKey.split('_')
-  const islandY = parts.pop()!
-  const islandX = parts.pop()!
-  const playerId = parts.join('_')
-  return { playerId, islandX, islandY }
+const RES_LABELS: Record<string, string> = {
+  wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', glass: 'Cristal', sulfur: 'Enxofre',
 }
+const RES_KEYS = ['wood', 'wine', 'marble', 'glass', 'sulfur'] as const
 
-function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan, ownCities, spyCounts, spyOriginCityId }: InactivosTabProps) {
-  const t    = useT()
-  const lang = useLang()
-  const [filterDist, setFilterDist] = useState(20)
-  const [filterMark, setFilterMark] = useState('excl_ignorar')
-  const [filterNew,  setFilterNew]  = useState(false)
-  const [search,     setSearch]     = useState('')
-  const [sortKey,    setSortKey]    = useState<PlayerSortKey>('distance')
-  const [sortAsc,    setSortAsc]    = useState(true)
-  const [expandedKey,  setExpandedKey]  = useState<string | null>(null)
-  const [noteInputs,   setNoteInputs]   = useState<Record<string, string>>({})
-  const [actionInputs, setActionInputs] = useState<Record<string, string>>({})
-  const [spyTarget,      setSpyTarget]      = useState<PlayerWithMark | null>(null)
-  const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
+const _ACTIVE_SPY_STATES = new Set([
+  'TRAVELING', 'WAITING_AT_CITY', 'EXECUTING', 'EXECUTING_WAREHOUSE',
+  'WAITING_FOR_GARRISON', 'EXECUTING_GARRISON',
+])
+
+function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spyCounts, spyOriginCityId }: InactivosTabProps) {
+  const t = useT()
+  const [expandedKey,    setExpandedKey]    = useState<string | null>(null)
+  const [spyTarget,      setSpyTarget]      = useState<EnrichedPlayer | null>(null)
+  const [attackTarget,   setAttackTarget]   = useState<EnrichedPlayer | null>(null)
   const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
-  const [missions,       setMissions]       = useState<SpyMission[]>([])
-  const [attackTarget,   setAttackTarget]   = useState<PlayerWithMark | null>(null)
+  const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
   const [attackOk,       setAttackOk]       = useState<string | null>(null)
+  const [missions,       setMissions]       = useState<SpyMission[]>([])
   const [attackWaves,    setAttackWaves]    = useState<AttackWaveEntry[]>([])
+  const [minLootTotal,   setMinLootTotal]   = useState(50000)
+  const [ignoredKeys,    setIgnoredKeys]    = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!scanData?.players) return
+    setIgnoredKeys(new Set(
+      scanData.players
+        .filter(p => p.mark === 'ignorar')
+        .map(p => `${p.playerId}_${p.islandX}_${p.islandY}`)
+    ))
+  }, [scanData])
 
   useEffect(() => {
     const load = () => fetch('/api/espionage/missions').then(r => r.json())
       .then((d: { missions: SpyMission[] }) => { if (d.missions) setMissions(d.missions) }).catch(() => {})
     load()
-    const t = setInterval(load, 60000)
-    return () => clearInterval(t)
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
     const load = () => fetch('/api/espionage/attack-waves').then(r => r.json())
       .then((d: AttackWaves) => { if (d.waves) setAttackWaves(d.waves) }).catch(() => {})
     load()
-    const t = setInterval(load, 60000)
-    return () => clearInterval(t)
+    const id = setInterval(load, 60000)
+    return () => clearInterval(id)
   }, [])
 
-  const latestMissionByKey = useMemo(() => {
+  useEffect(() => {
+    fetch('/api/espionage/auto-attack-settings').then(r => r.json())
+      .then(d => { if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal) }).catch(() => {})
+  }, [])
+
+  const latestMissionByMKey = useMemo(() => {
     const map: Record<string, SpyMission> = {}
     for (const m of missions) {
       const key = `${m.targetPlayerName}_${m.islandX}_${m.islandY}`
@@ -477,108 +492,90 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
     return map
   }, [missions])
 
-  const handleMark = useCallback((markKey: string, status: string) => {
-    setMarks(prev => ({ ...prev, [markKey]: status }))
-    const { playerId, islandX, islandY } = parseMarkKey(markKey)
+  const latestWaveByWKey = useMemo(() => {
+    const map: Record<string, AttackWaveEntry> = {}
+    for (const w of attackWaves) {
+      // sourceMissionKey = `${targetCityId}_${islandX}_${islandY}`
+      const key = w.sourceMissionKey
+      if (!map[key] || w.createdAt > map[key].createdAt) map[key] = w
+    }
+    return map
+  }, [attackWaves])
+
+  const handleIgnore = useCallback((p: EnrichedPlayer) => {
+    setIgnoredKeys(prev => new Set([...prev, p.pKey]))
     fetch('/api/world-scan/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId, islandX, islandY, status }),
+      body: JSON.stringify({ playerId: p.playerId, islandX: p.islandX, islandY: p.islandY, status: 'ignorar' }),
     }).catch(() => {})
-  }, [setMarks])
-
-  const handleToggleExpand = useCallback((markKey: string, currentNote: string) => {
-    setExpandedKey(prev => {
-      if (prev === markKey) return null
-      setNoteInputs(n => ({ ...n, [markKey]: n[markKey] ?? currentNote ?? '' }))
-      return markKey
-    })
   }, [])
 
-  const handleSaveNote = useCallback((markKey: string, currentStatus: string) => {
-    const { playerId, islandX, islandY } = parseMarkKey(markKey)
-    const note = noteInputs[markKey] ?? ''
-    fetch('/api/world-scan/mark', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId, islandX, islandY, status: currentStatus, note }),
-    }).then(() => onRefreshScan()).catch(() => {})
-  }, [noteInputs, onRefreshScan])
-
-  const handleAddAction = useCallback((markKey: string) => {
-    const text = (actionInputs[markKey] || '').trim()
-    if (!text) return
-    const { playerId, islandX, islandY } = parseMarkKey(markKey)
-    fetch('/api/world-scan/action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId, islandX, islandY, text }),
-    }).then(() => {
-      setActionInputs(prev => ({ ...prev, [markKey]: '' }))
-      onRefreshScan()
-    }).catch(() => {})
-  }, [actionInputs, onRefreshScan])
-
-  const players = useMemo((): PlayerWithMark[] => {
+  const players = useMemo((): EnrichedPlayer[] => {
     if (!scanData?.players) return []
-    let list = scanData.players
-      .filter(p => p.state === 'inactive')
-      .map(p => {
-        const markKey = `${p.playerId}_${p.islandX}_${p.islandY}`
-        return { ...p, markKey, mark: marks[markKey] || p.mark || 'novo' }
-      })
+    const enriched: EnrichedPlayer[] = []
 
-    if (filterNew) list = list.filter(p => p.isNew)
-    if (filterMark === 'excl_ignorar')      list = list.filter(p => p.mark !== 'ignorar')
-    else if (filterMark !== 'all')          list = list.filter(p => p.mark === filterMark)
-    if (filterDist > 0)  list = list.filter(p => p.distance <= filterDist)
-    if (search.trim())   list = list.filter(p => (p.playerName || '').toLowerCase().includes(search.trim().toLowerCase()))
+    for (const p of scanData.players) {
+      if (p.state !== 'inactive' && p.state !== 'vacation') continue
+      const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
+      if (ignoredKeys.has(pKey)) continue
 
-    list.sort((a, b) => {
-      let va: number | string, vb: number | string
-      if      (sortKey === 'distance') { va = a.distance; vb = b.distance }
-      else if (sortKey === 'army')     { va = parseScore(a.scores?.army); vb = parseScore(b.scores?.army) }
-      else if (sortKey === 'building') { va = parseScore(a.scores?.building); vb = parseScore(b.scores?.building) }
-      else                             { va = a.playerName.toLowerCase(); vb = b.playerName.toLowerCase() }
-      if (va < vb) return sortAsc ? -1 : 1
-      if (va > vb) return sortAsc ? 1 : -1
-      return 0
+      const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
+      const wKey = `${p.cityId}_${p.islandX}_${p.islandY}`
+      const mission = latestMissionByMKey[mKey]
+      const wave = latestWaveByWKey[wKey]
+
+      let totalResources: number | null = null
+      let hasTroops: boolean | null = null
+      let hasShips: boolean | null = null
+
+      if (mission?.state === 'DONE' && mission.result) {
+        const res = mission.result.resources
+        if (res) totalResources = Object.values(res).reduce((s, v) => s + (v || 0), 0)
+        if (mission.garrisonResult && !mission.garrisonResult.error) {
+          hasTroops = false
+          hasShips = false
+          for (const [name, count] of Object.entries(mission.garrisonResult.troops || {})) {
+            if ((count as number) > 0) {
+              if (isNavalUnit(name)) hasShips = true
+              else hasTroops = true
+            }
+          }
+        }
+      }
+
+      let priority = 1
+      if (wave) {
+        if (wave.state === 'IN_PROGRESS') priority = 8
+        else if (wave.state === 'PENDING') priority = 7
+        else priority = -1
+      } else if (mission) {
+        if (mission.state === 'FAILED') priority = 0
+        else if (_ACTIVE_SPY_STATES.has(mission.state)) priority = 2
+        else if (mission.state === 'DONE') {
+          if (!mission.result) priority = 1
+          else if (mission.garrisonResult && !mission.garrisonResult.error) {
+            priority = (totalResources || 0) >= minLootTotal ? (hasShips ? 5 : 6) : 4
+          } else {
+            priority = 3
+          }
+        }
+      }
+
+      enriched.push({ ...p, mission, wave, totalResources, hasTroops, hasShips, priority, mKey, pKey })
+    }
+
+    enriched.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority
+      if (a.totalResources !== null && b.totalResources !== null && a.totalResources !== b.totalResources)
+        return b.totalResources - a.totalResources
+      if (a.totalResources !== null && b.totalResources === null) return -1
+      if (a.totalResources === null && b.totalResources !== null) return 1
+      return a.distance - b.distance
     })
-    return list
-  }, [scanData, marks, filterMark, filterDist, filterNew, search, sortKey, sortAsc])
 
-  const newCount = useMemo(() =>
-    (scanData?.players || []).filter(p => p.state === 'inactive' && p.isNew).length, [scanData])
-
-  const handleSort = (key: PlayerSortKey) => {
-    if (sortKey === key) setSortAsc(a => !a)
-    else { setSortKey(key); setSortAsc(true) }
-  }
-
-  const SortTh = ({ colKey, children, align = 'text-center' }: {
-    colKey: PlayerSortKey; children: React.ReactNode; align?: string
-  }) => (
-    <th
-      className={`px-3 py-3 font-semibold ${align} whitespace-nowrap cursor-pointer select-none hover:bg-slate-700 transition-colors`}
-      onClick={() => handleSort(colKey)}
-    >
-      {children}
-      {sortKey === colKey && <span className="ml-1 opacity-70">{sortAsc ? '↑' : '↓'}</span>}
-    </th>
-  )
-
-  const handleExportCsv = () => {
-    const header = [t('col_player'), t('col_alliance'), 'New?', t('col_island'), 'Coord', 'Nearest city', t('col_dist'),
-                    'Military score', 'Building score', 'Rank', t('col_mark')]
-    const rows = [header, ...players.map(p => [
-      p.playerName, p.allyTag || '—', p.isNew ? 'Yes' : 'No',
-      p.islandName, `(${p.islandX},${p.islandY})`,
-      p.nearestOwnCity, p.distance,
-      fmtScore(p.scores?.army, lang), fmtScore(p.scores?.building, lang), p.scores?.rank || '—',
-      p.mark,
-    ])]
-    exportCsv(`inactive_${new Date().toISOString().slice(0, 10)}.csv`, rows)
-  }
+    return enriched
+  }, [scanData, ignoredKeys, latestMissionByMKey, latestWaveByWKey, minLootTotal])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -589,372 +586,264 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
       </button>
     </Card>
   )
+  if (players.length === 0) return (
+    <Card className="p-8 text-center text-slate-400 text-sm">{t('no_players_found')}</Card>
+  )
 
   return (
     <div>
-      <Card className="mb-4">
-        <div className="px-5 py-3 flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setFilterNew(v => !v)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-              filterNew
-                ? 'bg-emerald-500 text-white border-emerald-500'
-                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            <i className="fa-solid fa-star" />
-            {t('new_this_week')}
-            {newCount > 0 && (
-              <span className={`ml-1 px-1.5 rounded-full text-[10px] font-bold ${filterNew ? 'bg-emerald-400 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
-                {newCount}
-              </span>
-            )}
-          </button>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-slate-500 whitespace-nowrap">{t('max_dist')}</label>
-            <select
-              value={filterDist}
-              onChange={e => setFilterDist(Number(e.target.value))}
-              className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            >
-              {[5, 8, 10, 15, 20, 30, 0].map(v => <option key={v} value={v}>{v === 0 ? t('all') : `≤ ${v}`}</option>)}
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-slate-500">{t('filter_mark')}</label>
-            <select
-              value={filterMark}
-              onChange={e => setFilterMark(e.target.value)}
-              className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            >
-              <option value="excl_ignorar">{t('excl_ignored')}</option>
-              <option value="all">{t('all')}</option>
-              <option value="novo">{t('only_new')}</option>
-              <option value="alvo">{t('only_target')}</option>
-              <option value="visto">{t('only_seen')}</option>
-            </select>
-          </div>
-          <input
-            type="text"
-            placeholder={t('search_player')}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-1 min-w-[160px]"
-          />
-          <button
-            onClick={handleExportCsv}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-          >
-            <i className="fa-solid fa-download" /> CSV
-          </button>
-        </div>
-      </Card>
+      <Card>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_state')}</th>
+                <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_city')}</th>
+                <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_player')}</th>
+                <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_troops')}</th>
+                <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_ships')}</th>
+                <th className="px-3 py-3 font-semibold text-right whitespace-nowrap">{t('col_resources')}</th>
+                <th className="px-3 py-3 font-semibold text-center" colSpan={3} />
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((p, idx) => {
+                const isExpanded  = expandedKey === p.pKey
+                const hasReport   = p.mission?.state === 'DONE' && !!p.mission.result
+                const isActiveSpy = !!p.mission && _ACTIVE_SPY_STATES.has(p.mission.state)
 
-      {players.length === 0 ? (
-        <Card className="p-8 text-center text-slate-400 text-sm">{t('no_players_found')}</Card>
-      ) : (
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                  <SortTh colKey="player" align="text-left">{t('col_player')}</SortTh>
-                  <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_alliance')}</th>
-                  <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_island')}</th>
-                  <SortTh colKey="distance">{t('col_dist')}</SortTh>
-                  <SortTh colKey="army">{t('col_military')}</SortTh>
-                  <SortTh colKey="building">{t('col_buildings_score')}</SortTh>
-                  <th className="px-3 py-3 font-semibold text-center whitespace-nowrap">{t('col_mark')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {players.map((p, idx) => {
-                  const isExpanded = expandedKey === p.markKey
-                  const actions = p.markActions || []
-                  return (
-                  <React.Fragment key={p.markKey}>
-                  <tr
-                    className={`border-b ${isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100'} hover:bg-slate-50 transition-colors ${p.mark === 'ignorar' ? 'opacity-40' : ''} ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}
-                  >
-                    <Td className="font-medium text-slate-800">
-                      <div className="flex items-center gap-1.5">
+                return (
+                  <React.Fragment key={p.pKey}>
+                    <tr className={`border-b transition-colors ${
+                      isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100 hover:bg-slate-50'
+                    } ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}>
+                      <Td>
+                        <MissionStatePill priority={p.priority} mission={p.mission} wave={p.wave} />
+                      </Td>
+                      <Td>
+                        <div className="font-medium text-slate-700 text-sm">{p.cityName}</div>
+                        <div className="text-xs text-slate-400">{p.islandName} ({p.islandX},{p.islandY})</div>
+                      </Td>
+                      <Td>
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium text-slate-800 text-sm">{p.playerName}</span>
+                          <span className="text-[11px]" title={p.state}>{p.state === 'vacation' ? '🏖' : '💤'}</span>
+                        </div>
+                        {p.allyTag && (
+                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
+                        )}
+                      </Td>
+                      <Td className="text-center">
+                        {p.hasTroops === null
+                          ? <span className="text-slate-300 text-xs">—</span>
+                          : p.hasTroops
+                            ? <span className="text-red-500 font-bold text-sm">✗</span>
+                            : <span className="text-emerald-500 font-bold text-sm">✓</span>}
+                      </Td>
+                      <Td className="text-center">
+                        {p.hasShips === null
+                          ? <span className="text-slate-300 text-xs">—</span>
+                          : p.hasShips
+                            ? <span className="text-red-500 font-bold text-sm">✗</span>
+                            : <span className="text-emerald-500 font-bold text-sm">✓</span>}
+                      </Td>
+                      <Td className="text-right font-mono">
+                        {p.totalResources !== null
+                          ? <span className="text-slate-700">{p.totalResources.toLocaleString()}</span>
+                          : <span className="text-slate-300 text-xs">—</span>}
+                      </Td>
+                      {/* Spy button */}
+                      <Td className="text-center px-1">
                         <button
-                          onClick={() => handleToggleExpand(p.markKey, p.markNote || '')}
-                          className={`w-5 h-5 rounded flex items-center justify-center text-[10px] transition-colors ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-500'}`}
-                          title={t('action_log_title')}
+                          onClick={() => setSpyTarget(p)}
+                          title={!p.cityId || !p.islandId ? t('spy_no_city_id') : t('spy_send_btn')}
+                          disabled={!p.cityId || !p.islandId}
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors ${
+                            !p.cityId || !p.islandId
+                              ? 'bg-slate-50 text-slate-200 cursor-not-allowed'
+                              : dispatchedKeys.has(p.pKey)
+                                ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
+                                : p.mission?.state === 'DONE'
+                                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                  : isActiveSpy
+                                    ? 'bg-indigo-100 text-indigo-600 hover:bg-indigo-200'
+                                    : p.mission?.state === 'FAILED'
+                                      ? 'bg-red-100 text-red-500 hover:bg-red-200'
+                                      : 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
+                          }`}
                         >
-                          <i className={`fa-solid ${isExpanded ? 'fa-chevron-up' : 'fa-chevron-down'}`} />
+                          <i className="fa-solid fa-user-secret" />
                         </button>
-                        {p.playerName}
-                        {p.isNew && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
-                            <i className="fa-solid fa-star text-[8px]" /> {t('new_badge')}
-                          </span>
-                        )}
-                        {actions.length > 0 && (
-                          <span className="text-[10px] font-semibold text-indigo-500 bg-indigo-50 px-1.5 rounded-full border border-indigo-200">{actions.length}</span>
-                        )}
-                      </div>
-                    </Td>
-                    <Td className="text-center">
-                      {p.allyTag
-                        ? <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs font-mono">{p.allyTag}</span>
-                        : <span className="text-slate-300">—</span>}
-                    </Td>
-                    <Td className="text-center">
-                      <span className="text-slate-700 font-medium">{p.islandName}</span>
-                      <span className="text-slate-400 text-xs ml-1">({p.islandX},{p.islandY})</span>
-                      <br /><span className="text-slate-400 text-xs">{p.cityName}</span>
-                    </Td>
-                    <Td className="text-center">
-                      <span className="font-mono text-slate-700 text-sm font-semibold">{p.distance}</span>
-                      <br /><span className="text-slate-400 text-xs">{p.nearestOwnCity}</span>
-                    </Td>
-                    <Td className="text-center font-mono text-slate-700">
-                      {fmtScore(p.scores?.army, lang)}
-                      {p.scores?.rank && <div className="text-slate-400 text-[10px]">#{p.scores.rank}</div>}
-                    </Td>
-                    <Td className="text-center font-mono text-slate-600 text-xs">
-                      {fmtScore(p.scores?.building, lang)}
-                    </Td>
-                    <Td className="text-center">
-                      {(() => {
-                        const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
-                        const mission = latestMissionByKey[mKey]
-                        const isActive = mission && ['TRAVELING','WAITING_AT_CITY','EXECUTING','EXECUTING_WAREHOUSE','WAITING_FOR_GARRISON','EXECUTING_GARRISON'].includes(mission.state)
-                        const isDone   = mission?.state === 'DONE'
-                        const isFailed = mission?.state === 'FAILED'
-                        const spyTitle = !p.cityId || !p.islandId ? t('spy_no_city_id')
-                          : isDone   ? t('spy_done')
-                          : isFailed ? t('spy_failed')
-                          : isActive ? (
-                              mission.state === 'TRAVELING' ? t('spy_traveling')
-                            : mission.state === 'WAITING_AT_CITY' ? t('spy_waiting')
-                            : mission.state === 'WAITING_FOR_GARRISON' ? t('spy_waiting_garrison')
-                            : mission.state === 'EXECUTING_GARRISON' ? t('spy_executing_garrison')
-                            : t('spy_executing')
-                          )
-                          : t('spy_send_btn')
-                        return (
-                          <div className="flex items-center justify-center gap-1">
-                            <MarkSelect markKey={p.markKey} current={p.mark} onChange={handleMark} />
-                            <button
-                              onClick={() => setSpyTarget(p)}
-                              title={spyTitle}
-                              className={`w-6 h-6 rounded flex items-center justify-center text-[11px] transition-colors ${
-                                !p.cityId || !p.islandId
-                                  ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
-                                  : isDone
-                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                                    : isFailed
-                                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                                      : (isActive || dispatchedKeys.has(p.markKey))
-                                        ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
-                                        : 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
-                              }`}
-                              disabled={!p.cityId || !p.islandId}
-                            >
-                              <i className="fa-solid fa-user-secret" />
-                            </button>
-                            {isDone && mission.result && (
-                              <button
-                                onClick={() => handleToggleExpand(p.markKey, p.markNote ?? '')}
-                                title={t('spy_report_title')}
-                                className="w-5 h-5 rounded flex items-center justify-center text-[10px] bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors"
-                              >
-                                <i className="fa-solid fa-file-lines" />
-                              </button>
-                            )}
-                          </div>
-                        )
-                      })()}
-                    </Td>
-                  </tr>
-                  {isExpanded && (
-                    <tr className="bg-indigo-50/40 border-b border-indigo-200">
-                      <td colSpan={7} className="px-5 py-3">
-                        <div className="flex flex-col gap-3">
-                          {(() => {
-                            const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
-                            const mission = latestMissionByKey[mKey]
-                            if (!mission || mission.state !== 'DONE' || !mission.result) return null
-                            const res = mission.result.resources
-                            const RES_LABELS: Record<string, string> = { wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', crystal: 'Cristal', sulfur: 'Enxofre' }
-                            return (
-                              <div className="flex flex-col gap-2">
-                                <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
-                                  <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
-                                    <i className="fa-solid fa-warehouse" /> {t('spy_report_resources')} — {mission.result.targetCityName || p.cityName}
-                                  </p>
-                                  <p className="text-[10px] text-emerald-600 mb-2">
-                                    {mission.result.success ? t('spy_report_success') : t('spy_report_failed')}
-                                    {mission.result.reportedAt && <span className="ml-2 text-slate-400">{new Date(mission.result.reportedAt * 1000).toLocaleString()}</span>}
-                                  </p>
-                                  {res && Object.keys(res).length > 0 ? (
-                                    <div className="grid grid-cols-5 gap-1">
-                                      {(['wood','wine','marble','crystal','sulfur'] as const).map(k => (
-                                        <div key={k} className="text-center">
-                                          <div className="text-[10px] text-slate-500">{RES_LABELS[k]}</div>
-                                          <div className="text-xs font-semibold text-slate-700">{res[k]?.toLocaleString() ?? '—'}</div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
-                                  )}
-                                </div>
-                                {mission.garrisonResult && !mission.garrisonResult.error && (
-                                  <div className="bg-white rounded-lg border border-amber-200 px-4 py-3">
-                                    <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
-                                      <i className="fa-solid fa-shield-halved" /> {t('spy_garrison_title')} — {mission.garrisonResult.targetCityName || p.cityName}
-                                    </p>
-                                    {mission.garrisonResult.reportedAt && (
-                                      <p className="text-[10px] text-slate-400 mb-2">{new Date(mission.garrisonResult.reportedAt * 1000).toLocaleString()}</p>
-                                    )}
-                                    {mission.garrisonResult.troops && Object.keys(mission.garrisonResult.troops).length > 0 ? (
-                                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                        {Object.entries(mission.garrisonResult.troops).map(([name, count]) => (
-                                          <div key={name} className="flex justify-between text-xs">
-                                            <span className="text-slate-600">{name}</span>
-                                            <span className="font-semibold text-slate-800">{count.toLocaleString()}</span>
-                                          </div>
-                                        ))}
+                      </Td>
+                      {/* Report button */}
+                      <Td className="text-center px-1">
+                        {hasReport ? (
+                          <button
+                            onClick={() => setExpandedKey(prev => prev === p.pKey ? null : p.pKey)}
+                            title={t('spy_report_title')}
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors ${
+                              isExpanded ? 'bg-indigo-500 text-white' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                            }`}
+                          >
+                            <i className="fa-solid fa-file-lines" />
+                          </button>
+                        ) : <span className="block w-7 h-7" />}
+                      </Td>
+                      {/* Ignore button */}
+                      <Td className="text-center px-1">
+                        <button
+                          onClick={() => handleIgnore(p)}
+                          title={t('btn_ignore_city')}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors"
+                        >
+                          🚫
+                        </button>
+                      </Td>
+                    </tr>
+
+                    {isExpanded && p.mission?.state === 'DONE' && p.mission.result && (
+                      <tr className="bg-indigo-50/40 border-b border-indigo-200">
+                        <td colSpan={9} className="px-5 py-4">
+                          <div className="flex flex-col gap-3 max-w-2xl">
+                            {/* Warehouse */}
+                            <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
+                              <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
+                                <i className="fa-solid fa-warehouse" />
+                                {t('spy_report_resources')} — {p.mission.result.targetCityName || p.cityName}
+                              </p>
+                              <p className="text-[10px] mb-2">
+                                <span className={p.mission.result.success ? 'text-emerald-600' : 'text-red-500'}>
+                                  {p.mission.result.success ? t('spy_report_success') : t('spy_report_failed')}
+                                </span>
+                                {p.mission.result.reportedAt && (
+                                  <span className="ml-2 text-slate-400">{new Date(p.mission.result.reportedAt * 1000).toLocaleString()}</span>
+                                )}
+                              </p>
+                              {p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0 ? (
+                                <div className="grid grid-cols-5 gap-1">
+                                  {RES_KEYS.map(k => (
+                                    <div key={k} className="text-center">
+                                      <div className="text-[10px] text-slate-500">{RES_LABELS[k]}</div>
+                                      <div className="text-xs font-semibold text-slate-700">
+                                        {(p.mission!.result!.resources![k] ?? 0).toLocaleString()}
                                       </div>
-                                    ) : (
-                                      <p className="text-xs text-slate-400 italic">{t('spy_garrison_no_troops')}</p>
-                                    )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
+                              )}
+                            </div>
+
+                            {/* Garrison */}
+                            {p.mission.garrisonResult && !p.mission.garrisonResult.error && (
+                              <div className="bg-white rounded-lg border border-amber-200 px-4 py-3">
+                                <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
+                                  <i className="fa-solid fa-shield-halved" />
+                                  {t('spy_garrison_title')} — {p.mission.garrisonResult.targetCityName || p.cityName}
+                                </p>
+                                {p.mission.garrisonResult.reportedAt && (
+                                  <p className="text-[10px] text-slate-400 mb-2">
+                                    {new Date(p.mission.garrisonResult.reportedAt * 1000).toLocaleString()}
+                                  </p>
+                                )}
+                                {p.mission.garrisonResult.troops && Object.keys(p.mission.garrisonResult.troops).length > 0 ? (
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                    {Object.entries(p.mission.garrisonResult.troops).map(([name, count]) => (
+                                      <div key={name} className="flex justify-between text-xs">
+                                        <span className="text-slate-600">{name}</span>
+                                        <span className="font-semibold text-slate-800">{(count as number).toLocaleString()}</span>
+                                      </div>
+                                    ))}
                                   </div>
+                                ) : (
+                                  <p className="text-xs text-slate-400 italic">{t('spy_garrison_no_troops')}</p>
                                 )}
-                                {mission.garrisonResult?.error && (
-                                  <p className="text-xs text-slate-400 italic px-1">{mission.garrisonResult.error}</p>
-                                )}
+                              </div>
+                            )}
+                            {p.mission.garrisonResult?.error && (
+                              <p className="text-xs text-slate-400 italic px-1">{p.mission.garrisonResult.error}</p>
+                            )}
+
+                            {/* Wave plan */}
+                            {p.wave && (
+                              <div className="bg-white rounded-lg border border-slate-200 px-4 py-3">
                                 {(() => {
-                                  const waveKey = `${p.cityId}_${p.islandX}_${p.islandY}`
-                                  const wavePlan = attackWaves.find(w => w.sourceMissionKey === waveKey)
-                                  if (!wavePlan) return null
                                   const stateColor: Record<string, string> = {
                                     PENDING: 'text-amber-600', IN_PROGRESS: 'text-blue-600',
-                                    DONE: 'text-green-600', FAILED: 'text-red-600', AUTO_SKIPPED: 'text-slate-400',
+                                    DONE: 'text-emerald-600', FAILED: 'text-red-600', AUTO_SKIPPED: 'text-slate-400',
                                   }
                                   return (
-                                    <div className="bg-white rounded-lg border border-slate-200 px-4 py-3">
-                                      <p className={`text-xs font-semibold mb-2 flex items-center justify-between gap-1.5 ${stateColor[wavePlan.state] || 'text-slate-600'}`}>
+                                    <>
+                                      <p className={`text-xs font-semibold mb-2 flex items-center justify-between gap-1.5 ${stateColor[p.wave!.state] || 'text-slate-600'}`}>
                                         <span><i className="fa-solid fa-bolt" /> {t('auto_attack_title')}</span>
                                         <span className="font-normal">
-                                          {t(`auto_attack_state_${wavePlan.state}` as 'auto_attack_title')}
-                                          {wavePlan.tier !== null && ` — ${t(`auto_attack_tier${wavePlan.tier}` as 'auto_attack_title')}`}
+                                          {t(`auto_attack_state_${p.wave!.state}` as 'auto_attack_title')}
+                                          {p.wave!.tier !== null && ` — ${t(`auto_attack_tier${p.wave!.tier}` as 'auto_attack_title')}`}
                                         </span>
                                         <button
                                           onClick={() => {
                                             fetch('/api/espionage/attack-waves/cancel', {
                                               method: 'POST',
                                               headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({ id: wavePlan.id }),
-                                            }).then(() => setAttackWaves(prev => prev.filter(w => w.id !== wavePlan.id)))
+                                              body: JSON.stringify({ id: p.wave!.id }),
+                                            }).then(() => setAttackWaves(prev => prev.filter(w => w.id !== p.wave!.id)))
                                           }}
                                           className="text-[10px] font-normal text-slate-400 hover:text-red-500 transition-colors"
                                         >
                                           {t('auto_attack_cancel')}
                                         </button>
                                       </p>
-                                      {wavePlan.skippedReason && (
-                                        <p className="text-[10px] text-slate-400 italic mb-1">{t('auto_attack_skipped_reason', { r: wavePlan.skippedReason })}</p>
+                                      {p.wave!.skippedReason && (
+                                        <p className="text-[10px] text-slate-400 italic mb-1">{t('auto_attack_skipped_reason', { r: p.wave!.skippedReason })}</p>
                                       )}
-                                      {wavePlan.wavePlans.map(wave => {
+                                      {p.wave!.wavePlans.map(wv => {
                                         const wColor: Record<string, string> = {
                                           PENDING: 'text-slate-500', FLEET_DISPATCHED: 'text-blue-600',
-                                          ARMY_DISPATCHED: 'text-indigo-600', DONE: 'text-green-600', FAILED: 'text-red-600',
+                                          ARMY_DISPATCHED: 'text-indigo-600', DONE: 'text-emerald-600', FAILED: 'text-red-600',
                                         }
                                         return (
-                                          <div key={wave.waveNum} className={`text-[11px] mb-1.5 ${wColor[wave.status] || 'text-slate-500'}`}>
-                                            <span className="font-medium">{t('auto_attack_wave_num', { n: String(wave.waveNum) })}</span>
-                                            {' — '}{wave.originCityName}
-                                            {' · '}{t('auto_attack_transporters', { n: String(wave.transporters) })}
-                                            {wave.armyDispatchAfter && (
+                                          <div key={wv.waveNum} className={`text-[11px] mb-1.5 ${wColor[wv.status] || 'text-slate-500'}`}>
+                                            <span className="font-medium">{t('auto_attack_wave_num', { n: String(wv.waveNum) })}</span>
+                                            {' — '}{wv.originCityName}
+                                            {' · '}{t('auto_attack_transporters', { n: String(wv.transporters) })}
+                                            {wv.armyDispatchAfter && (
                                               <span className="text-slate-400 ml-1">
-                                                ({t('auto_attack_army_dispatch')}: {new Date(wave.armyDispatchAfter * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                                ({t('auto_attack_army_dispatch')}: {new Date(wv.armyDispatchAfter * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
                                               </span>
                                             )}
                                           </div>
                                         )
                                       })}
-                                    </div>
+                                    </>
                                   )
                                 })()}
-                                <div className="flex justify-end pt-1">
-                                  <button
-                                    onClick={() => setAttackTarget(p)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-                                  >
-                                    <i className="fa-solid fa-crosshairs" /> {t('attack_prepare')}
-                                  </button>
-                                </div>
                               </div>
-                            )
-                          })()}
-                          <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide">{t('action_log_title')}</p>
-                          <div className="flex gap-2 items-start">
-                            <textarea
-                              value={noteInputs[p.markKey] ?? p.markNote ?? ''}
-                              onChange={e => setNoteInputs(prev => ({ ...prev, [p.markKey]: e.target.value }))}
-                              placeholder={t('action_log_note_lbl')}
-                              rows={2}
-                              className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none bg-white"
-                            />
-                            <button
-                              onClick={() => handleSaveNote(p.markKey, p.mark)}
-                              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
-                            >
-                              {t('action_log_save')}
-                            </button>
-                          </div>
-                          <div>
-                            {actions.length === 0 ? (
-                              <p className="text-xs text-slate-400 italic">{t('action_log_empty')}</p>
-                            ) : (
-                              <ul className="space-y-1 mb-2">
-                                {actions.map((a, ai) => (
-                                  <li key={ai} className="flex gap-2 text-xs">
-                                    <span className="text-slate-400 shrink-0 font-mono">{new Date(a.ts * 1000).toLocaleDateString()}</span>
-                                    <span className="text-slate-700">{a.text}</span>
-                                  </li>
-                                ))}
-                              </ul>
                             )}
-                            <div className="flex gap-2 mt-2">
-                              <input
-                                type="text"
-                                value={actionInputs[p.markKey] || ''}
-                                onChange={e => setActionInputs(prev => ({ ...prev, [p.markKey]: e.target.value }))}
-                                onKeyDown={e => { if (e.key === 'Enter') handleAddAction(p.markKey) }}
-                                placeholder={t('action_log_placeholder')}
-                                className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-                              />
+
+                            {/* Manual attack button */}
+                            <div className="flex justify-end pt-1">
                               <button
-                                onClick={() => handleAddAction(p.markKey)}
-                                disabled={!(actionInputs[p.markKey] || '').trim()}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-colors shrink-0"
+                                onClick={() => setAttackTarget(p)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
                               >
-                                {t('action_log_add')}
+                                <i className="fa-solid fa-crosshairs" /> {t('attack_prepare')}
                               </button>
                             </div>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                        </td>
+                      </tr>
+                    )}
                   </React.Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
-            {players.length !== 1 ? t('player_count_plural', { n: players.length }) : t('player_count_single', { n: players.length })}
-            {newCount > 0 && <span className="ml-2 text-emerald-600 font-medium">{t('new_count_note', { n: newCount })}</span>}
-          </div>
-        </Card>
-      )}
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">
+          {players.length !== 1 ? t('player_count_plural', { n: players.length }) : t('player_count_single', { n: players.length })}
+        </div>
+      </Card>
 
       {spyTarget && (
         <SpyModal
@@ -965,7 +854,7 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
             setDispatchedOk(spyTarget.playerName)
-            setDispatchedKeys(prev => new Set(prev).add(spyTarget.markKey))
+            setDispatchedKeys(prev => new Set([...prev, spyTarget.pKey]))
             setTimeout(() => setDispatchedOk(null), 4000)
           }}
         />
@@ -1000,6 +889,15 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
     </div>
   )
 }
+
+// ── IlhasTab ──────────────────────────────────────────────────────────────────
+
+function useResourceLabels(): string[] {
+  const t = useT()
+  return ['', t('res_wine'), t('res_marble'), t('res_crystal'), t('res_sulfur')]
+}
+
+type IslandSortKey = 'freeSlots' | 'wood' | 'luxury' | 'distance'
 
 interface IlhasTabProps {
   scanData: WorldScanData | null
@@ -1209,6 +1107,8 @@ function IlhasTab({ scanData, loading, error, onForceRefresh, onSelectIsland }: 
   )
 }
 
+// ── MundoPage ─────────────────────────────────────────────────────────────────
+
 export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resType: 'wood' | 'marble', level: number }) => void }) {
   const t    = useT()
   const lang = useLang()
@@ -1217,10 +1117,11 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null)
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState<string | null>(null)
-  const [marks,      setMarks]      = useState<Record<string, string>>({})
-  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
-  const [spyCounts,      setSpyCounts]      = useState<Record<string, CitySpyCounts>>({})
+  const [ownCities,       setOwnCities]       = useState<OwnCity[]>([])
+  const [spyCounts,       setSpyCounts]       = useState<Record<string, CitySpyCounts>>({})
   const [spyOriginCityId, setSpyOriginCityId] = useState<string>(() => loadSpyDefaults().originCityId)
+  const [worldScanEnabled,     setWorldScanEnabled]     = useState(true)
+  const [spyProcessingEnabled, setSpyProcessingEnabled] = useState(true)
 
   useEffect(() => {
     fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
@@ -1239,6 +1140,10 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
         setSpyCounts(counts)
       }
     }).catch(() => {})
+    fetch('/api/world-scan/settings').then(r => r.json())
+      .then(d => { if (d.enabled !== undefined) setWorldScanEnabled(d.enabled) }).catch(() => {})
+    fetch('/api/espionage/settings').then(r => r.json())
+      .then(d => { if (d.processingEnabled !== undefined) setSpyProcessingEnabled(d.processingEnabled) }).catch(() => {})
   }, [])
 
   const handleSpyCityChange = useCallback((cityId: string) => {
@@ -1246,17 +1151,31 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
     saveSpyDefaults(cityId, loadSpyDefaults().numAgents)
   }, [])
 
+  const handleWorldScanToggle = useCallback(() => {
+    const next = !worldScanEnabled
+    setWorldScanEnabled(next)
+    fetch('/api/world-scan/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    }).catch(() => setWorldScanEnabled(!next))
+  }, [worldScanEnabled])
+
+  const handleSpyProcessingToggle = useCallback(() => {
+    const next = !spyProcessingEnabled
+    setSpyProcessingEnabled(next)
+    fetch('/api/espionage/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processingEnabled: next }),
+    }).catch(() => setSpyProcessingEnabled(!next))
+  }, [spyProcessingEnabled])
+
   const fetchScan = useCallback(() => {
     fetch('/api/world-scan')
       .then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
       .then((d: WorldScanData) => {
         setScanData(d)
-        const m: Record<string, string> = {}
-        ;(d.players || []).forEach(p => {
-          const mk = `${p.playerId}_${p.islandX}_${p.islandY}`
-          m[mk] = p.mark || 'novo'
-        })
-        setMarks(m)
         setLoading(false)
       })
       .catch((e: unknown) => {
@@ -1301,8 +1220,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       <PageHeader icon="fa-earth-europe" title={t('world_title')} />
 
       <Card className="mb-4">
-        <div className="px-5 py-4 flex flex-wrap items-center gap-4">
-          <div className="flex-1 min-w-0 space-y-1">
+        <div className="px-5 py-4 flex flex-wrap items-start gap-4">
+          <div className="flex-1 min-w-0 space-y-2">
             {lastUpdated ? (
               <p className="text-sm text-slate-600">
                 <i className="fa-regular fa-clock mr-1.5 text-slate-400" />
@@ -1321,7 +1240,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
               </p>
             )}
             {isRunning && (
-              <div className="mt-2">
+              <div>
                 <p className="text-xs text-indigo-600 mb-1 flex items-center gap-1.5">
                   <span className="w-3 h-3 rounded-full border-2 border-indigo-300 border-t-indigo-600 animate-spin inline-block" />
                   {scanStatus!.message}
@@ -1336,11 +1255,42 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
                 )}
               </div>
             )}
+            {/* Enable/disable toggles */}
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={handleWorldScanToggle}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border transition-colors ${
+                  worldScanEnabled
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                    : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                }`}
+              >
+                <i className={`fa-solid ${worldScanEnabled ? 'fa-earth-europe' : 'fa-earth-europe opacity-40'} text-[10px]`} />
+                {t('world_scan_toggle')}
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${worldScanEnabled ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-200 text-slate-500'}`}>
+                  {worldScanEnabled ? 'ON' : 'OFF'}
+                </span>
+              </button>
+              <button
+                onClick={handleSpyProcessingToggle}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border transition-colors ${
+                  spyProcessingEnabled
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                    : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                }`}
+              >
+                <i className={`fa-solid fa-user-secret text-[10px] ${spyProcessingEnabled ? '' : 'opacity-40'}`} />
+                {t('spy_processing_toggle')}
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${spyProcessingEnabled ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-200 text-slate-500'}`}>
+                  {spyProcessingEnabled ? 'ON' : 'OFF'}
+                </span>
+              </button>
+            </div>
           </div>
           <button
             onClick={handleForceRefresh}
             disabled={isRunning}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors shrink-0"
           >
             <i className="fa-solid fa-rotate" />
             {isRunning ? t('scanning') : t('force_scan')}
@@ -1384,13 +1334,9 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       {tab === 'inactivos' && (
         <InactivosTab
           scanData={scanData}
-          scanStatus={scanStatus}
           loading={loading}
           error={error}
-          marks={marks}
-          setMarks={setMarks}
           onForceRefresh={handleForceRefresh}
-          onRefreshScan={fetchScan}
           ownCities={ownCities}
           spyCounts={spyCounts}
           spyOriginCityId={spyOriginCityId}
