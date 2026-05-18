@@ -109,8 +109,8 @@ function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOriginCit
                 if (sc) {
                   if (sc.available != null)
                     label = `${c.name} (${sc.available} disponíveis)`
-                  else if (sc.deployed != null && sc.deployed > 0)
-                    label = `${c.name} (${sc.deployed} em campo)`
+                  else if (sc.inDefense != null && sc.inDefense > 0)
+                    label = `${c.name} (${sc.inDefense} em campo)`
                 }
                 return <option key={c.cityId} value={id}>{label}</option>
               })}
