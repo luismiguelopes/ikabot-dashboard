@@ -152,8 +152,23 @@ function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOriginCit
 }
 
 interface MilitaryUnit { name: string; amount: number }
-interface CityMilitary { cityId: string; units: Record<string, MilitaryUnit> }
+interface CityMilitary { cityId: string; troops: Record<string, MilitaryUnit>; fleet: Record<string, MilitaryUnit> }
 interface MilitaryData { lastUpdated: number; byCityName: Record<string, CityMilitary> }
+
+interface AttackWavePlan {
+  waveNum: number; originCityId: string; originCityName: string
+  fleetUnits: Record<string, number>; troopUnits: Record<string, number>
+  transporters: number; fleetDispatchAfter: number | null; armyDispatchAfter: number
+  fleetDispatchedAt: number | null; armyDispatchedAt: number | null
+  estimatedReturnAt: number; status: string
+}
+interface AttackWaveEntry {
+  id: string; sourceMissionKey: string; targetPlayerName: string
+  targetCityId: string; targetIslandId: string; islandX: number; islandY: number
+  state: string; tier: number | null; wavePlans: AttackWavePlan[]
+  createdAt: number; skippedReason: string | null
+}
+interface AttackWaves { waves: AttackWaveEntry[] }
 
 interface AttackModalProps {
   player: WorldScanPlayer
@@ -179,7 +194,7 @@ function AttackModal({ player, ownCities, defaultOriginCityId, onClose, onQueued
   }, [])
 
   const originCityName = ownCities.find(c => String(c.cityId) === originCityId)?.name || ''
-  const units = military?.byCityName[originCityName]?.units || {}
+  const units = military?.byCityName[originCityName]?.troops || {}
   const hasUnits = Object.values(unitInputs).some(v => v > 0)
 
   async function handleConfirm() {
@@ -435,10 +450,19 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
   const [missions,       setMissions]       = useState<SpyMission[]>([])
   const [attackTarget,   setAttackTarget]   = useState<PlayerWithMark | null>(null)
   const [attackOk,       setAttackOk]       = useState<string | null>(null)
+  const [attackWaves,    setAttackWaves]    = useState<AttackWaveEntry[]>([])
 
   useEffect(() => {
     const load = () => fetch('/api/espionage/missions').then(r => r.json())
       .then((d: { missions: SpyMission[] }) => { if (d.missions) setMissions(d.missions) }).catch(() => {})
+    load()
+    const t = setInterval(load, 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  useEffect(() => {
+    const load = () => fetch('/api/espionage/attack-waves').then(r => r.json())
+      .then((d: AttackWaves) => { if (d.waves) setAttackWaves(d.waves) }).catch(() => {})
     load()
     const t = setInterval(load, 60000)
     return () => clearInterval(t)
@@ -804,6 +828,59 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                                 {mission.garrisonResult?.error && (
                                   <p className="text-xs text-slate-400 italic px-1">{mission.garrisonResult.error}</p>
                                 )}
+                                {(() => {
+                                  const waveKey = `${p.cityId}_${p.islandX}_${p.islandY}`
+                                  const wavePlan = attackWaves.find(w => w.sourceMissionKey === waveKey)
+                                  if (!wavePlan) return null
+                                  const stateColor: Record<string, string> = {
+                                    PENDING: 'text-amber-600', IN_PROGRESS: 'text-blue-600',
+                                    DONE: 'text-green-600', FAILED: 'text-red-600', AUTO_SKIPPED: 'text-slate-400',
+                                  }
+                                  return (
+                                    <div className="bg-white rounded-lg border border-slate-200 px-4 py-3">
+                                      <p className={`text-xs font-semibold mb-2 flex items-center justify-between gap-1.5 ${stateColor[wavePlan.state] || 'text-slate-600'}`}>
+                                        <span><i className="fa-solid fa-bolt" /> {t('auto_attack_title')}</span>
+                                        <span className="font-normal">
+                                          {t(`auto_attack_state_${wavePlan.state}` as 'auto_attack_title')}
+                                          {wavePlan.tier !== null && ` — ${t(`auto_attack_tier${wavePlan.tier}` as 'auto_attack_title')}`}
+                                        </span>
+                                        <button
+                                          onClick={() => {
+                                            fetch('/api/espionage/attack-waves/cancel', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({ id: wavePlan.id }),
+                                            }).then(() => setAttackWaves(prev => prev.filter(w => w.id !== wavePlan.id)))
+                                          }}
+                                          className="text-[10px] font-normal text-slate-400 hover:text-red-500 transition-colors"
+                                        >
+                                          {t('auto_attack_cancel')}
+                                        </button>
+                                      </p>
+                                      {wavePlan.skippedReason && (
+                                        <p className="text-[10px] text-slate-400 italic mb-1">{t('auto_attack_skipped_reason', { r: wavePlan.skippedReason })}</p>
+                                      )}
+                                      {wavePlan.wavePlans.map(wave => {
+                                        const wColor: Record<string, string> = {
+                                          PENDING: 'text-slate-500', FLEET_DISPATCHED: 'text-blue-600',
+                                          ARMY_DISPATCHED: 'text-indigo-600', DONE: 'text-green-600', FAILED: 'text-red-600',
+                                        }
+                                        return (
+                                          <div key={wave.waveNum} className={`text-[11px] mb-1.5 ${wColor[wave.status] || 'text-slate-500'}`}>
+                                            <span className="font-medium">{t('auto_attack_wave_num', { n: String(wave.waveNum) })}</span>
+                                            {' — '}{wave.originCityName}
+                                            {' · '}{t('auto_attack_transporters', { n: String(wave.transporters) })}
+                                            {wave.armyDispatchAfter && (
+                                              <span className="text-slate-400 ml-1">
+                                                ({t('auto_attack_army_dispatch')}: {new Date(wave.armyDispatchAfter * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                              </span>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )
+                                })()}
                                 <div className="flex justify-end pt-1">
                                   <button
                                     onClick={() => setAttackTarget(p)}

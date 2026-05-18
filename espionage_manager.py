@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import json
+import math
 import os
 import random
 import time
+import uuid
 
 from empire_utils import LOGS_DIR, logger
 
@@ -1149,3 +1151,515 @@ def process_spy_cycle(session):
             fn(session)
         except Exception:
             logger.warning("[espionage] %s falhou", label, exc_info=True)
+
+
+# ── Phase 4: Auto-attack waves ────────────────────────────────────────────────
+
+AUTO_ATTACK_WAVES_PATH    = os.path.join(LOGS_DIR, "auto_attack_waves.json")
+AUTO_ATTACK_SETTINGS_PATH = os.path.join(LOGS_DIR, "auto_attack_settings.json")
+MILITARY_JSON_PATH        = os.path.join(LOGS_DIR, "military.json")
+
+_NAVAL_UNIT_NAMES = {
+    "navio de guerra", "steam giant", "navio a vapor", "ram ship", "galley",
+    "trireme", "mortar ship", "balloon ship", "catapult ship",
+    "náu de guerra", "navios de guerra",
+}
+
+_DEFAULT_AUTO_ATTACK_SETTINGS = {
+    "enabled":                False,
+    "minLootTotal":           50000,
+    "lootPerWave":            195000,
+    "battleDelayFewMins":     30,
+    "battleDelayMedMins":     60,
+    "battleDelayManyMins":    120,
+    "maxEnemyShipsToEngage":  20,
+}
+
+
+def _load_auto_attack_settings():
+    try:
+        with open(AUTO_ATTACK_SETTINGS_PATH) as f:
+            s = json.load(f)
+            for k, v in _DEFAULT_AUTO_ATTACK_SETTINGS.items():
+                s.setdefault(k, v)
+            return s
+    except (FileNotFoundError, json.JSONDecodeError):
+        return dict(_DEFAULT_AUTO_ATTACK_SETTINGS)
+
+
+def _save_auto_attack_settings(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(AUTO_ATTACK_SETTINGS_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_auto_attack_waves():
+    try:
+        with open(AUTO_ATTACK_WAVES_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"waves": []}
+
+
+def _save_auto_attack_waves(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(AUTO_ATTACK_WAVES_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def get_auto_attack_waves():
+    return _load_auto_attack_waves()
+
+
+def get_auto_attack_settings():
+    return _load_auto_attack_settings()
+
+
+def save_auto_attack_settings(data):
+    _save_auto_attack_settings(data)
+
+
+def _enemy_fleet_count(garrison_troops):
+    """Count naval units in enemy garrison troops dict {unit_name: count}."""
+    if not garrison_troops:
+        return 0
+    total = 0
+    for name, count in garrison_troops.items():
+        if any(nav in name.lower() for nav in _NAVAL_UNIT_NAMES):
+            total += count
+    return total
+
+
+def _estimate_battle_delay_mins(enemy_ships, settings):
+    if enemy_ships == 0:
+        return 0
+    if enemy_ships <= 3:
+        return settings.get("battleDelayFewMins", 30)
+    if enemy_ships <= 10:
+        return settings.get("battleDelayMedMins", 60)
+    return settings.get("battleDelayManyMins", 120)
+
+
+def _determine_attack_tier(garrison_troops):
+    """Tier 0=empty, Tier 1=troops only, Tier 2=has naval units."""
+    if not garrison_troops:
+        return 0
+    if _enemy_fleet_count(garrison_troops) > 0:
+        return 2
+    if any(v > 0 for v in garrison_troops.values()):
+        return 1
+    return 0
+
+
+def _calc_travel_secs(origin_x, origin_y, target_x, target_y):
+    if origin_x == target_x and origin_y == target_y:
+        return 600
+    return math.ceil(1200 * math.sqrt((origin_x - target_x) ** 2 + (origin_y - target_y) ** 2))
+
+
+def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False):
+    """Closest own city with troops (and fleet if needs_fleet). Returns (name, id, x, y) or None."""
+    try:
+        with open(OWN_CITIES_PATH) as f:
+            own_cities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    by_city   = (military_data or {}).get("byCityName", {})
+    best      = None
+    best_dist = float("inf")
+
+    for city in own_cities:
+        name = city.get("name", "")
+        cid  = str(city.get("cityId", ""))
+        cx   = city.get("x", 0)
+        cy   = city.get("y", 0)
+
+        mil    = by_city.get(name, {})
+        troops = mil.get("troops", {})
+        fleet  = mil.get("fleet", {})
+
+        if not any(v.get("amount", 0) > 0 for v in troops.values()):
+            continue
+        if needs_fleet and not any(v.get("amount", 0) > 0 for v in fleet.values()):
+            continue
+
+        dist = _calc_travel_secs(cx, cy, target_x, target_y)
+        if dist < best_dist:
+            best_dist = dist
+            best = (name, cid, cx, cy)
+
+    return best
+
+
+def _build_fleet_units(city_name, military_data):
+    fleet = (military_data or {}).get("byCityName", {}).get(city_name, {}).get("fleet", {})
+    return {uid: v["amount"] for uid, v in fleet.items() if v.get("amount", 0) > 0}
+
+
+def _build_troop_units(city_name, military_data):
+    troops = (military_data or {}).get("byCityName", {}).get(city_name, {}).get("troops", {})
+    return {uid: v["amount"] for uid, v in troops.items() if v.get("amount", 0) > 0}
+
+
+def _calc_transporters(loot_amount, ship_capacity):
+    if ship_capacity <= 0:
+        return 10
+    return math.ceil(loot_amount / ship_capacity)
+
+
+def _record_skipped(waves_data, mission_key, mission, reason):
+    waves_data["waves"].append({
+        "id":               uuid.uuid4().hex[:8],
+        "sourceMissionKey": mission_key,
+        "targetPlayerName": mission.get("targetPlayerName"),
+        "targetCityId":     str(mission.get("targetCityId", "")),
+        "targetIslandId":   str(mission.get("targetIslandId", "")),
+        "islandX":          mission.get("islandX"),
+        "islandY":          mission.get("islandY"),
+        "state":            "AUTO_SKIPPED",
+        "tier":             None,
+        "wavePlans":        [],
+        "createdAt":        int(time.time()),
+        "skippedReason":    reason,
+    })
+
+
+def evaluate_auto_attacks(session):
+    """
+    For each DONE mission with garrisonResult not yet evaluated, decide whether to attack
+    and build a wave plan in auto_attack_waves.json.
+    """
+    settings = _load_auto_attack_settings()
+    if not settings.get("enabled", False):
+        return
+
+    missions_data = _load_missions()
+    waves_data    = _load_auto_attack_waves()
+    existing_keys = {w.get("sourceMissionKey") for w in waves_data.get("waves", [])}
+
+    ship_capacity = 400
+    try:
+        from ikabot.helpers.pedirInfo import getShipCapacity
+        cap, _ = getShipCapacity(session)
+        if cap > 0:
+            ship_capacity = cap
+    except Exception:
+        logger.warning("[auto-attack] getShipCapacity falhou — usando %d", ship_capacity)
+
+    military_data = None
+    try:
+        with open(MILITARY_JSON_PATH) as f:
+            military_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("[auto-attack] military.json não disponível — a saltar evaluate")
+        return
+
+    changed = False
+    for m in missions_data.get("missions", []):
+        if m.get("state") != "DONE":
+            continue
+        if not m.get("garrisonResult"):
+            continue
+
+        mission_key = f"{m['targetCityId']}_{m['islandX']}_{m['islandY']}"
+        if mission_key in existing_keys:
+            continue
+
+        resources   = (m.get("result") or {}).get("resources") or {}
+        garrison    = (m.get("garrisonResult") or {}).get("troops") or {}
+        total_loot  = sum(resources.values())
+        min_loot    = settings.get("minLootTotal", 50000)
+
+        if total_loot < min_loot:
+            reason = f"Botim insuficiente: {total_loot} < {min_loot}"
+            logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
+            _record_skipped(waves_data, mission_key, m, reason)
+            existing_keys.add(mission_key)
+            changed = True
+            continue
+
+        tier        = _determine_attack_tier(garrison)
+        enemy_ships = _enemy_fleet_count(garrison)
+        max_engage  = settings.get("maxEnemyShipsToEngage", 20)
+
+        if enemy_ships > max_engage:
+            reason = f"Frota inimiga demasiado grande: {enemy_ships} > máximo {max_engage}"
+            logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
+            _record_skipped(waves_data, mission_key, m, reason)
+            existing_keys.add(mission_key)
+            changed = True
+            continue
+
+        target_x = m.get("islandX", 0)
+        target_y = m.get("islandY", 0)
+        origin   = _get_best_origin_city(target_x, target_y, military_data, needs_fleet=(tier == 2))
+
+        if not origin:
+            reason = "Sem cidade de origem com tropas" + (" e frota" if tier == 2 else "")
+            logger.warning("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
+            _record_skipped(waves_data, mission_key, m, reason)
+            existing_keys.add(mission_key)
+            changed = True
+            continue
+
+        origin_name, origin_id, origin_x, origin_y = origin
+        travel_secs       = _calc_travel_secs(origin_x, origin_y, target_x, target_y)
+        battle_delay_secs = _estimate_battle_delay_mins(enemy_ships, settings) * 60
+        # Troops move ~50% faster than combat ships (speed 60 vs 40)
+        troop_travel_secs = int(travel_secs * 2 / 3)
+        army_extra_delay  = battle_delay_secs + travel_secs - troop_travel_secs
+
+        loot_per_wave = settings.get("lootPerWave", 195000)
+        num_waves     = max(1, math.ceil(total_loot / loot_per_wave))
+        troop_units   = _build_troop_units(origin_name, military_data)
+        fleet_units   = _build_fleet_units(origin_name, military_data) if tier == 2 else {}
+
+        wave_plans    = []
+        now           = int(time.time())
+        prev_return   = now + random.randint(5, 20) * 60
+
+        for wn in range(1, num_waves + 1):
+            dispatch_after = prev_return if wn > 1 else now + random.randint(5, 20) * 60
+            if wn > 1:
+                dispatch_after += random.randint(15, 60) * 60
+
+            wave_loot    = min(loot_per_wave, total_loot - (wn - 1) * loot_per_wave)
+            transporters = _calc_transporters(wave_loot, ship_capacity)
+
+            if tier == 2:
+                fleet_dispatch_ts = dispatch_after
+                army_dispatch_ts  = fleet_dispatch_ts + army_extra_delay
+            else:
+                fleet_dispatch_ts = None
+                army_dispatch_ts  = dispatch_after
+
+            return_ts = army_dispatch_ts + troop_travel_secs * 2
+
+            wave_plans.append({
+                "waveNum":            wn,
+                "originCityId":       origin_id,
+                "originCityName":     origin_name,
+                "fleetUnits":         fleet_units,
+                "troopUnits":         troop_units,
+                "transporters":       transporters,
+                "fleetDispatchAfter": fleet_dispatch_ts,
+                "armyDispatchAfter":  army_dispatch_ts,
+                "fleetDispatchedAt":  None,
+                "armyDispatchedAt":   None,
+                "estimatedReturnAt":  return_ts,
+                "status":             "PENDING",
+            })
+            prev_return = return_ts
+
+        waves_data["waves"].append({
+            "id":               uuid.uuid4().hex[:8],
+            "sourceMissionKey": mission_key,
+            "targetPlayerName": m.get("targetPlayerName"),
+            "targetCityId":     str(m.get("targetCityId", "")),
+            "targetIslandId":   str(m.get("targetIslandId", "")),
+            "islandX":          target_x,
+            "islandY":          target_y,
+            "state":            "PENDING",
+            "tier":             tier,
+            "wavePlans":        wave_plans,
+            "createdAt":        int(time.time()),
+            "skippedReason":    None,
+        })
+        existing_keys.add(mission_key)
+        changed = True
+        logger.info("[auto-attack] plano criado para %s: tier=%d, %d vaga(s), botim total=%d",
+                    m["targetPlayerName"], tier, num_waves, total_loot)
+
+    if changed:
+        _save_auto_attack_waves(waves_data)
+
+
+def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units):
+    """POST deployFleet to destroy enemy naval presence. Returns True on success."""
+    import ikabot.config as ikabot_config
+
+    params = {
+        "action":            "transportOperations",
+        "function":          "deployFleet",
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(island_id),
+        "destinationCityId": str(target_id),
+        "deploymentType":    "fleet",
+        "backgroundView":    "city",
+        "currentCityId":     str(origin_id),
+        "templateView":      "deployment",
+        "ajax":              1,
+    }
+    for unit_id, count in fleet_units.items():
+        params[f"cargo_fleet_{unit_id}"] = int(count)
+
+    try:
+        resp      = session.post(params=params)
+        resp_data = json.loads(resp, strict=False)
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "updateGlobalData":
+                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+                if tok:
+                    ikabot_config.actionRequest = tok
+                break
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "provideFeedback":
+                if isinstance(entry[1], list):
+                    for fb in entry[1]:
+                        if isinstance(fb, dict) and fb.get("type") == 10:
+                            return True
+        logger.warning("[auto-attack] deployFleet sem type=10 — raw: %.300s", resp)
+        return False
+    except Exception as e:
+        logger.error("[auto-attack] deployFleet exception: %s", e)
+        return False
+
+
+def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, transporters):
+    """POST deployArmy for a pillage wave. Returns True on success."""
+    import ikabot.config as ikabot_config
+
+    params = {
+        "action":            "transportOperations",
+        "function":          "deployArmy",
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(island_id),
+        "destinationCityId": str(target_id),
+        "deploymentType":    "army",
+        "backgroundView":    "city",
+        "currentCityId":     str(origin_id),
+        "templateView":      "deployment",
+        "transporter":       int(transporters),
+        "ajax":              1,
+    }
+    for unit_id, count in troop_units.items():
+        params[f"cargo_army_{unit_id}"] = int(count)
+
+    try:
+        resp      = session.post(params=params)
+        resp_data = json.loads(resp, strict=False)
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "updateGlobalData":
+                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+                if tok:
+                    ikabot_config.actionRequest = tok
+                break
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "provideFeedback":
+                if isinstance(entry[1], list):
+                    for fb in entry[1]:
+                        if isinstance(fb, dict) and fb.get("type") == 10:
+                            return True
+        logger.warning("[auto-attack] deployArmy sem type=10 — raw: %.300s", resp)
+        return False
+    except Exception as e:
+        logger.error("[auto-attack] deployArmy exception: %s", e)
+        return False
+
+
+def process_auto_attack_waves(session, in_active_hours=True):
+    """Dispatch pending attack wave plans: fleet (tier 2) then army."""
+    if not in_active_hours:
+        return
+
+    settings = _load_auto_attack_settings()
+    if not settings.get("enabled", False):
+        return
+
+    waves_data = _load_auto_attack_waves()
+    now        = int(time.time())
+    changed    = False
+
+    for pi, plan in enumerate(waves_data.get("waves", [])):
+        if plan.get("state") not in ("PENDING", "IN_PROGRESS"):
+            continue
+
+        tier = plan.get("tier", 0)
+
+        for wi, wave in enumerate(plan.get("wavePlans", [])):
+            status = wave.get("status")
+
+            if status == "PENDING":
+                fleet_after = wave.get("fleetDispatchAfter")
+                army_after  = wave.get("armyDispatchAfter", 0)
+
+                if tier == 2 and fleet_after and now >= fleet_after and not wave.get("fleetDispatchedAt"):
+                    ok = _dispatch_fleet_attack(
+                        session, wave["originCityId"],
+                        plan["targetCityId"], plan["targetIslandId"],
+                        wave["fleetUnits"],
+                    )
+                    if ok:
+                        waves_data["waves"][pi]["wavePlans"][wi]["fleetDispatchedAt"] = now
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "FLEET_DISPATCHED"
+                        waves_data["waves"][pi]["state"] = "IN_PROGRESS"
+                        logger.info("[auto-attack] frota despachada → %s vaga %d",
+                                    plan["targetPlayerName"], wave["waveNum"])
+                    else:
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "FAILED"
+                        waves_data["waves"][pi]["state"] = "FAILED"
+                    changed = True
+                    time.sleep(random.randint(30, 60))
+                    break
+
+                elif (tier != 2 or not fleet_after) and now >= army_after:
+                    ok = _dispatch_army_wave(
+                        session, wave["originCityId"],
+                        plan["targetCityId"], plan["targetIslandId"],
+                        wave["troopUnits"], wave["transporters"],
+                    )
+                    if ok:
+                        waves_data["waves"][pi]["wavePlans"][wi]["armyDispatchedAt"] = now
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "ARMY_DISPATCHED"
+                        waves_data["waves"][pi]["state"] = "IN_PROGRESS"
+                        logger.info("[auto-attack] tropas despachadas → %s vaga %d",
+                                    plan["targetPlayerName"], wave["waveNum"])
+                    else:
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "FAILED"
+                        waves_data["waves"][pi]["state"] = "FAILED"
+                    changed = True
+                    time.sleep(random.randint(30, 60))
+                    break
+
+            elif status == "FLEET_DISPATCHED":
+                army_after = wave.get("armyDispatchAfter", 0)
+                if now >= army_after:
+                    ok = _dispatch_army_wave(
+                        session, wave["originCityId"],
+                        plan["targetCityId"], plan["targetIslandId"],
+                        wave["troopUnits"], wave["transporters"],
+                    )
+                    if ok:
+                        waves_data["waves"][pi]["wavePlans"][wi]["armyDispatchedAt"] = now
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "ARMY_DISPATCHED"
+                        logger.info("[auto-attack] tropas pós-frota → %s vaga %d",
+                                    plan["targetPlayerName"], wave["waveNum"])
+                    else:
+                        waves_data["waves"][pi]["wavePlans"][wi]["status"] = "FAILED"
+                        waves_data["waves"][pi]["state"] = "FAILED"
+                    changed = True
+                    time.sleep(random.randint(30, 60))
+                    break
+
+            elif status == "ARMY_DISPATCHED":
+                if now >= wave.get("estimatedReturnAt", now + 1):
+                    waves_data["waves"][pi]["wavePlans"][wi]["status"] = "DONE"
+                    changed = True
+
+        # Recalculate plan state after processing waves
+        wave_statuses = [w.get("status") for w in plan.get("wavePlans", [])]
+        if "FAILED" in wave_statuses and waves_data["waves"][pi]["state"] not in ("FAILED",):
+            waves_data["waves"][pi]["state"] = "FAILED"
+            changed = True
+        elif wave_statuses and all(s == "DONE" for s in wave_statuses):
+            waves_data["waves"][pi]["state"] = "DONE"
+            logger.info("[auto-attack] todas as vagas concluídas → %s", plan["targetPlayerName"])
+            changed = True
+
+    if changed:
+        _save_auto_attack_waves(waves_data)
