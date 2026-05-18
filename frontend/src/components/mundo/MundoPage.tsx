@@ -107,8 +107,8 @@ function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOriginCit
                 const sc = spyCounts[id]
                 let label = c.name
                 if (sc) {
-                  if (sc.inDefense != null)
-                    label = `${c.name} (${sc.inDefense} disponíveis)`
+                  if (sc.available != null)
+                    label = `${c.name} (${sc.available} disponíveis)`
                   else if (sc.deployed != null && sc.deployed > 0)
                     label = `${c.name} (${sc.deployed} em campo)`
                 }
@@ -1324,7 +1324,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
               {ownCities.map(c => {
                 const id = String(c.cityId)
                 const sc = spyCounts[id]
-                const label = sc?.inDefense != null ? `${c.name} (${sc.inDefense})` : c.name
+                const label = sc?.available != null ? `${c.name} (${sc.available})` : c.name
                 return <option key={id} value={id}>{label}</option>
               })}
             </select>

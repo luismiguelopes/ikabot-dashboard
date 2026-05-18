@@ -308,11 +308,11 @@ def process_dispatch_queue(session):
         origin_id  = str(item["originCityId"])
         num_agents = int(item.get("numAgents", 1))
 
-        # Pre-check: inDefense = agents stationed at city, available for dispatch
+        # Pre-check: usar campo "available" (espiões prontos para despacho)
         city_counts = spy_data.get(origin_id, {})
-        available   = city_counts.get("inDefense")
+        available   = city_counts.get("available")
         if available is not None and available < num_agents:
-            error = f"Espiões insuficientes: {available} em defesa, {num_agents} pedidos"
+            error = f"Espiões insuficientes: {available} disponíveis, {num_agents} pedidos"
             logger.warning("[espionage] pre-check falhou para %s: %s",
                            item["targetPlayerName"], error)
             _append_failed_mission(item, error)
@@ -409,8 +409,14 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                             success = True
                             break
         if not success:
-            logger.warning("[espionage] dispatch falhou — raw: %s", resp[:300])
-            return False, "Servidor rejeitou o dispatch (sem type=10)"
+            feedback_types = []
+            for entry in resp_data:
+                if isinstance(entry, list) and entry[0] == "provideFeedback":
+                    fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
+                    feedback_types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
+            logger.warning("[espionage] dispatch falhou — provideFeedback types=%s raw: %s",
+                           feedback_types, resp[:400])
+            return False, f"Servidor rejeitou o dispatch (sem type=10; tipos recebidos: {feedback_types})"
     except Exception as e:
         logger.error("[espionage] dispatch exception: %s", e)
         return False, str(e)
