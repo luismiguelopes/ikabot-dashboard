@@ -264,12 +264,78 @@ def collect_city_data(session, ids, cities):
     return status_summary, formatted_empire, resources_data
 
 
+def _collect_military_data(session):
+    """Fetch troop counts per city and write military.json. Gated to run at most once every 8 hours."""
+    import re
+
+    military_path = os.path.join(LOGS_DIR, "military.json")
+    try:
+        with open(os.path.join(LOGS_DIR, "own_cities.json")) as f:
+            own_cities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+
+    result = {}
+    for city_info in random.sample(own_cities, len(own_cities)):
+        city_id   = city_info.get("cityId")
+        city_name = city_info.get("name", "")
+        if not city_id:
+            continue
+        time.sleep(random.randint(3, 8))
+        try:
+            params = {
+                "view":             "cityMilitary",
+                "activeTab":        "tabUnits",
+                "cityId":           city_id,
+                "backgroundView":   "city",
+                "currentCityId":    city_id,
+                "currentTab":       "multiTab1",
+                "actionRequest":    actionRequest,
+                "ajax":             "1",
+            }
+            resp      = session.post(params=params)
+            resp_data = json.loads(resp, strict=False)
+            html      = resp_data[1][1][1]
+            html      = html.split('<div class="fleet')[0]
+            unit_id_names = re.findall(
+                r'<div class="army (.*?)">\s*<div class="tooltip">(.*?)<\/div>', html
+            )
+            unit_amounts = re.findall(r"<td>(.*?)\s*</td>", html)
+            units = {}
+            for i in range(min(len(unit_id_names), len(unit_amounts))):
+                raw = unit_amounts[i].replace(",", "").replace(".", "").replace("-", "0").strip()
+                try:
+                    amount = int(raw)
+                except ValueError:
+                    amount = 0
+                uid   = unit_id_names[i][0].lstrip("_")
+                uname = unit_id_names[i][1]
+                units[uid] = {"name": uname, "amount": amount}
+            result[city_name] = {"cityId": str(city_id), "units": units}
+            logger.info("[military] %s: %d tipo(s) de unidades", city_name, len(units))
+        except Exception:
+            logger.warning("[military] erro %s", city_name, exc_info=True)
+
+    if result:
+        try:
+            with open(military_path, "w") as f:
+                json.dump({"lastUpdated": int(time.time()), "byCityName": result}, f, indent=2)
+        except Exception:
+            logger.error("[military] erro ao escrever military.json", exc_info=True)
+
+
 def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resources_data):
     """Collect movements and write all empire JSON files + history."""
     time.sleep(random.randint(5, 10))
     movements = _collect_movements(session, ids[0])
 
     os.makedirs(LOGS_DIR, exist_ok=True)
+
+    # Collect military data when stale (>8 h) to keep attack modal current
+    _mil_path = os.path.join(LOGS_DIR, "military.json")
+    _mil_age  = (time.time() - os.path.getmtime(_mil_path)) if os.path.exists(_mil_path) else float("inf")
+    if _mil_age > 8 * 3600:
+        _collect_military_data(session)
 
     with open(os.path.join(LOGS_DIR, "statusSummary.json"), "w") as f:
         json.dump(status_summary, f, indent=4)

@@ -41,6 +41,8 @@ SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_DISPATCH_QUEUE_PATH    = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
 SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
 ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
+ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
+MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
 
 _DEFAULT_ESPIONAGE_SETTINGS = {
     "garrisonThresholds": {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
@@ -752,6 +754,90 @@ def api_espionage_dispatch():
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"status": "queued"})
+
+
+@app.route("/api/military")
+def api_military():
+    try:
+        with open(MILITARY_JSON_PATH) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"lastUpdated": 0, "byCityName": {}})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/espionage/attack-queue")
+def api_attack_queue_get():
+    try:
+        with open(ATTACK_QUEUE_PATH) as f:
+            return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"pending": []})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/espionage/attack-queue/add", methods=["POST"])
+def api_attack_queue_add():
+    import uuid, random as _rnd
+    data = request.get_json(silent=True) or {}
+    for field in ["originCityId", "originCityName", "targetCityId", "targetCityName",
+                  "targetPlayerName", "islandX", "islandY", "islandId"]:
+        if not str(data.get(field, "")).strip():
+            return jsonify({"error": f"Campo obrigatório: {field}"}), 400
+    units = {str(k): int(v) for k, v in (data.get("units") or {}).items() if int(v) > 0}
+    if not units:
+        return jsonify({"error": "units não pode estar vazio"}), 400
+
+    try:
+        with open(ATTACK_QUEUE_PATH) as f:
+            q = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        q = {"pending": []}
+
+    delay_min = _rnd.randint(5, 20)
+    item = {
+        "id":               str(uuid.uuid4())[:8],
+        "originCityId":     str(data["originCityId"]),
+        "originCityName":   str(data["originCityName"]),
+        "targetCityId":     str(data["targetCityId"]),
+        "targetCityName":   str(data["targetCityName"]),
+        "targetPlayerName": str(data["targetPlayerName"]),
+        "islandX":          int(data["islandX"]),
+        "islandY":          int(data["islandY"]),
+        "islandId":         str(data["islandId"]),
+        "units":            units,
+        "transporters":     int(data.get("transporters", 0)),
+        "addedAt":          int(time.time()),
+        "dispatchAfter":    int(time.time()) + delay_min * 60,
+        "missionId":        data.get("missionId"),
+    }
+    q["pending"].append(item)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ATTACK_QUEUE_PATH, "w") as f:
+        json.dump(q, f, indent=2)
+    return jsonify({"status": "queued", "item": item})
+
+
+@app.route("/api/espionage/attack-queue/cancel", methods=["POST"])
+def api_attack_queue_cancel():
+    data = request.get_json(silent=True) or {}
+    attack_id = data.get("id")
+    if not attack_id:
+        return jsonify({"error": "id obrigatório"}), 400
+    try:
+        with open(ATTACK_QUEUE_PATH) as f:
+            q = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"error": "Fila vazia"}), 404
+    original = len(q.get("pending", []))
+    q["pending"] = [it for it in q.get("pending", []) if it.get("id") != attack_id]
+    if len(q["pending"]) == original:
+        return jsonify({"error": "Ataque não encontrado"}), 404
+    with open(ATTACK_QUEUE_PATH, "w") as f:
+        json.dump(q, f, indent=2)
+    return jsonify({"status": "cancelled"})
 
 
 @app.route("/api/health")

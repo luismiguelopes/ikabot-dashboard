@@ -1032,6 +1032,110 @@ def collect_garrison_results(session):
         _save_missions(data)
 
 
+ATTACK_QUEUE_PATH = os.path.join(LOGS_DIR, "attack_queue.json")
+
+
+def _load_attack_queue():
+    try:
+        with open(ATTACK_QUEUE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"pending": []}
+
+
+def _save_attack_queue(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ATTACK_QUEUE_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def has_pending_attacks():
+    try:
+        return bool(_load_attack_queue().get("pending"))
+    except Exception:
+        return False
+
+
+def _dispatch_attack(session, item):
+    """POST deployArmy to attack a player city."""
+    import ikabot.config as ikabot_config
+
+    params = {
+        "action":            "transportOperations",
+        "function":          "deployArmy",
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(item["islandId"]),
+        "destinationCityId": str(item["targetCityId"]),
+        "deploymentType":    "army",
+        "backgroundView":    "city",
+        "currentCityId":     str(item["originCityId"]),
+        "templateView":      "deployment",
+        "transporter":       int(item.get("transporters", 0)),
+        "ajax":              1,
+    }
+    for unit_id, count in item.get("units", {}).items():
+        params[f"cargo_army_{unit_id}"] = int(count)
+
+    try:
+        resp      = session.post(params=params)
+        resp_data = json.loads(resp, strict=False)
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "updateGlobalData":
+                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+                if tok:
+                    ikabot_config.actionRequest = tok
+                break
+
+        for entry in resp_data:
+            if isinstance(entry, list) and entry[0] == "provideFeedback":
+                feedback = entry[1]
+                if isinstance(feedback, list):
+                    for fb in feedback:
+                        if isinstance(fb, dict) and fb.get("type") == 10:
+                            return True
+        logger.warning("[attack] deployArmy sem type=10 — raw: %.300s", resp)
+        return False
+    except Exception as e:
+        logger.error("[attack] dispatch exception: %s", e)
+        return False
+
+
+def process_attack_queue(session, in_active_hours=True):
+    """Dispatch pending attacks during active hours with random delays."""
+    if not in_active_hours:
+        return
+
+    q = _load_attack_queue()
+    pending = q.get("pending", [])
+    if not pending:
+        return
+
+    remaining = []
+    dispatched = 0
+    for item in pending:
+        if int(time.time()) < item.get("dispatchAfter", 0):
+            remaining.append(item)
+            continue
+
+        if dispatched > 0:
+            delay = random.randint(30, 90)
+            logger.info("[attack] aguardar %ds antes do próximo ataque", delay)
+            time.sleep(delay)
+
+        ok = _dispatch_attack(session, item)
+        dispatched += 1
+        if ok:
+            logger.info("[attack] ataque despachado → %s (%s)",
+                        item.get("targetPlayerName"), item.get("targetCityName"))
+        else:
+            logger.warning("[attack] dispatch falhou para %s — removido da fila",
+                           item.get("targetPlayerName"))
+
+    q["pending"] = remaining
+    _save_attack_queue(q)
+
+
 def process_spy_cycle(session):
     """Progress all spy mission state machines. Called once per bot cycle."""
     for label, fn in [

@@ -136,9 +136,10 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── Espionage cycle (only during active hours) ───────────────────
             if in_scan_hours:
                 try:
-                    from espionage_manager import fetch_spy_counts, process_spy_cycle
+                    from espionage_manager import fetch_spy_counts, process_spy_cycle, process_attack_queue
                     fetch_spy_counts(session)
                     process_spy_cycle(session)
+                    process_attack_queue(session, in_active_hours=in_scan_hours)
                 except Exception:
                     logger.warning("[espionage] spy cycle falhou", exc_info=True)
 
