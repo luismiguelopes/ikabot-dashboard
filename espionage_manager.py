@@ -626,28 +626,84 @@ def _fetch_report_ids(session, origin_city_id, position):
     return ids
 
 
+def _parse_garrison_troops(html):
+    """
+    Parse the table-structured garrison report HTML.
+    Format: header row (Quartel/Estaleiro + unit names),
+            data row (Tropas/Frotas em CITY + counts or "-")
+    Returns {unit_name: count} for all non-zero units.
+    """
+    import re
+    troops = {}
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+    current_headers = []
+    for row in rows:
+        cells_raw = re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL | re.IGNORECASE)
+        cells = [re.sub(r'<[^>]+>', '', c).replace('\xa0', ' ').strip() for c in cells_raw]
+        cells = [re.sub(r'\s+', ' ', c).strip() for c in cells]
+        if not cells:
+            continue
+        first = cells[0]
+        if first in ('Quartel', 'Estaleiro'):
+            current_headers = cells[1:]
+        elif first.startswith('Tropas em') or first.startswith('Frotas em'):
+            values = cells[1:]
+            for i, val in enumerate(values):
+                if i >= len(current_headers):
+                    break
+                unit_name = current_headers[i].strip()
+                if not unit_name or val in ('-', '', 'Nenhuma unidade disponível.'):
+                    continue
+                try:
+                    count = int(val.replace('.', '').replace(',', ''))
+                    if count > 0:
+                        troops[unit_name] = troops.get(unit_name, 0) + count
+                except ValueError:
+                    pass
+    return troops
+
+
 def _parse_report_html(html, report_id):
-    """Parse spy report HTML. Returns {reportId, success, targetCityName, resources}."""
+    """
+    Parse spy report HTML.
+    Warehouse report: contains "Recursos em CITY" section → returns resources dict.
+    Garrison report:  contains "Tropas em CITY" section   → returns troops dict.
+    Returns {reportId, success, targetCityName, resources, troops, reportedAt}.
+    """
     import re
 
+    # --- stripped text for scalar fields ---
     text = re.sub(r'<[^>]+>', ' ', html)
-    text = text.replace('&nbsp;', ' ').replace(' ', ' ')
+    text = text.replace('&nbsp;', ' ').replace('\xa0', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
 
     success = bool(re.search(r'completada com sucesso|completed successfully', text, re.IGNORECASE))
 
+    # city name: try warehouse pattern first, then garrison
     target_city = None
-    m = re.search(r'Recursos\s+em\s+([\w\s\-\']+)\s+Miss', text, re.IGNORECASE)
-    if m:
-        target_city = m.group(1).strip()
+    for pat in [
+        r'Recursos\s+em\s+([\w\s\-\']+?)\s+Miss',
+        r'[TF]ropa[s]?\s+em\s+([\w\s\-\']+?)\s+Miss',
+        r'[TF]rota[s]?\s+em\s+([\w\s\-\']+?)\s+Miss',
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            target_city = m.group(1).strip()
+            break
+    # fallback: grab city name from "Tropas em X" without "Missão" following
+    if not target_city:
+        m = re.search(r'Tropas\s+em\s+([\w\s\-\'\[\]0-9:]+?)(?:\s{2,}|\Z)', text, re.IGNORECASE)
+        if m:
+            target_city = m.group(1).strip()
 
+    # --- warehouse resources (regex on stripped text) ---
     resources = {}
     for pat, key in [
         (r'Material\s+de\s+constru[çc][aã]o\s+([\d.,]+)', 'wood'),
-        (r'Vinho\s+([\d.,]+)', 'wine'),
-        (r'M[aá]rmore\s+([\d.,]+)', 'marble'),
-        (r'Cristal\s+([\d.,]+)', 'crystal'),
-        (r'Enxofre\s+([\d.,]+)', 'sulfur'),
+        (r'Vinho\s+([\d.,]+)',                             'wine'),
+        (r'M[aá]rmore\s+([\d.,]+)',                        'marble'),
+        (r'Cristal\s+([\d.,]+)',                           'crystal'),
+        (r'Enxofre\s+([\d.,]+)',                           'sulfur'),
     ]:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
@@ -657,15 +713,20 @@ def _parse_report_html(html, report_id):
             except ValueError:
                 pass
 
+    # --- garrison troops (structured table parser on raw HTML) ---
+    troops = None
+    is_garrison = bool(re.search(r'Tropas\s+em\b|Frotas\s+em\b', text, re.IGNORECASE))
+    if is_garrison:
+        troops = _parse_garrison_troops(html) or None
+
     return {
         "reportId":       report_id,
         "success":        success,
         "targetCityName": target_city,
         "resources":      resources if resources else None,
+        "troops":         troops,
         "reportedAt":     int(time.time()),
     }
-
-
 def _fetch_and_parse_report(session, report_id):
     """GET markReportAsRead for a report, parse HTML, return result dict or None."""
     import ikabot.config as ikabot_config
