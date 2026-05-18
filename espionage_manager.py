@@ -1757,20 +1757,34 @@ def import_existing_reports(session):
         logger.info("[espionage] import_existing_reports: nenhum relatório encontrado")
         return
 
-    imported = 0
-    skipped  = 0
+    imported  = 0
+    skipped   = 0
+    n_failed  = 0
+    n_no_data = 0
+    n_no_scan = 0
+    n_no_cid  = 0
+
     for report in all_reports.values():
         if not report.get("success"):
+            n_failed += 1
+            logger.debug("[espionage] import: relatório %s ignorado — missão falhou",
+                         report.get("reportId"))
             continue
         target_owner = report.get("targetOwner")
         island_x     = report.get("islandX")
         island_y     = report.get("islandY")
         if not target_owner or island_x is None or island_y is None:
+            n_no_data += 1
+            logger.debug("[espionage] import: relatório %s ignorado — owner/coords em falta (owner=%s x=%s y=%s)",
+                         report.get("reportId"), target_owner, island_x, island_y)
             continue
 
         key = (target_owner.lower(), island_x, island_y)
         candidates = scan_lookup.get(key, [])
         if not candidates:
+            n_no_scan += 1
+            logger.debug("[espionage] import: %s [%s:%s] não está no world scan",
+                         target_owner, island_x, island_y)
             continue
 
         city_name_report = report.get("targetCityName", "")
@@ -1784,6 +1798,8 @@ def import_existing_reports(session):
 
         target_city_id = str(matched.get("cityId", ""))
         if not target_city_id:
+            n_no_cid += 1
+            logger.debug("[espionage] import: %s — cityId em branco no world scan", target_owner)
             continue
 
         reported_at = report.get("reportedAt", int(time.time()))
@@ -1840,5 +1856,8 @@ def import_existing_reports(session):
         imported += 1
 
     _save_missions(missions_data)
-    logger.info("[espionage] import_existing_reports: %d importado(s), %d ignorado(s)",
-                imported, skipped)
+    logger.info(
+        "[espionage] import_existing_reports: %d importado(s), %d ignorado(s) "
+        "(falhados=%d, sem_coords=%d, fora_scan=%d, sem_cityId=%d)",
+        imported, skipped, n_failed, n_no_data, n_no_scan, n_no_cid,
+    )
