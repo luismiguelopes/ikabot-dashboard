@@ -5,48 +5,28 @@ import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { Td } from '../ui/TableCells'
-import { loadSpyDefaults } from '../SettingsPage'
+import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
 import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCity } from '../../types'
+
+interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
 
 interface SpyModalProps {
   player: WorldScanPlayer
   ownCities: OwnCity[]
+  spyCounts: Record<string, CitySpyCounts>
+  originCityId: string
   onClose: () => void
   onDispatched: () => void
 }
 
-function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
+function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOriginCityId, onClose, onDispatched }: SpyModalProps) {
   const t = useT()
-  const spyDefaults = loadSpyDefaults()
   const [originCityId, setOriginCityId] = useState<string>(
-    spyDefaults.originCityId || (ownCities.length > 0 ? String(ownCities[0].cityId) : '')
+    defaultOriginCityId || (ownCities.length > 0 ? String(ownCities[0].cityId) : '')
   )
-  const [numAgents, setNumAgents] = useState(spyDefaults.numAgents)
+  const [numAgents, setNumAgents] = useState(loadSpyDefaults().numAgents)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
-  const [spyCounts, setSpyCounts] = useState<Record<string, CitySpyCounts>>({})
-
-  useEffect(() => {
-    fetch('/api/espionage/spy-counts')
-      .then(r => r.json())
-      .then(d => {
-        const counts: Record<string, CitySpyCounts> = {}
-        if (d.counts) {
-          for (const [id, val] of Object.entries(d.counts)) {
-            const v = val as Record<string, number | null>
-            counts[id] = {
-              available:  v.available  ?? null,
-              inDefense:  v.inDefense  ?? null,
-              inTraining: v.inTraining ?? null,
-              deployed:   v.deployed   ?? null,
-            }
-          }
-        }
-        setSpyCounts(counts)
-      })
-      .catch(() => {})
-  }, [])
 
   const hasIslandId = !!player.cityId && !!player.islandId
 
@@ -116,8 +96,8 @@ function SpyModal({ player, ownCities, onClose, onDispatched }: SpyModalProps) {
                 const sc = spyCounts[id]
                 let label = c.name
                 if (sc) {
-                  if (sc.available != null)
-                    label = `${c.name} (${sc.available} disponíveis)`
+                  if (sc.inDefense != null)
+                    label = `${c.name} (${sc.inDefense} disponíveis)`
                   else if (sc.deployed != null && sc.deployed > 0)
                     label = `${c.name} (${sc.deployed} em campo)`
                 }
@@ -249,6 +229,9 @@ interface InactivosTabProps {
   setMarks: React.Dispatch<React.SetStateAction<Record<string, string>>>
   onForceRefresh: () => void
   onRefreshScan: () => void
+  ownCities: OwnCity[]
+  spyCounts: Record<string, CitySpyCounts>
+  spyOriginCityId: string
 }
 
 function parseMarkKey(markKey: string): { playerId: string; islandX: string; islandY: string } {
@@ -259,7 +242,7 @@ function parseMarkKey(markKey: string): { playerId: string; islandX: string; isl
   return { playerId, islandX, islandY }
 }
 
-function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan }: InactivosTabProps) {
+function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefresh, onRefreshScan, ownCities, spyCounts, spyOriginCityId }: InactivosTabProps) {
   const t    = useT()
   const lang = useLang()
   const [filterDist, setFilterDist] = useState(20)
@@ -272,15 +255,8 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
   const [noteInputs,   setNoteInputs]   = useState<Record<string, string>>({})
   const [actionInputs, setActionInputs] = useState<Record<string, string>>({})
   const [spyTarget,      setSpyTarget]      = useState<PlayerWithMark | null>(null)
-  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
   const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
   const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
-
-  useEffect(() => {
-    fetch('/api/own-cities').then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setOwnCities(data)
-    }).catch(() => {})
-  }, [])
 
   const handleMark = useCallback((markKey: string, status: string) => {
     setMarks(prev => ({ ...prev, [markKey]: status }))
@@ -614,6 +590,8 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
         <SpyModal
           player={spyTarget}
           ownCities={ownCities}
+          spyCounts={spyCounts}
+          originCityId={spyOriginCityId}
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
             setDispatchedOk(spyTarget.playerName)
@@ -850,6 +828,33 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState<string | null>(null)
   const [marks,      setMarks]      = useState<Record<string, string>>({})
+  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
+  const [spyCounts,      setSpyCounts]      = useState<Record<string, CitySpyCounts>>({})
+  const [spyOriginCityId, setSpyOriginCityId] = useState<string>(() => loadSpyDefaults().originCityId)
+
+  useEffect(() => {
+    fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
+      if (Array.isArray(d)) {
+        setOwnCities(d)
+        setSpyOriginCityId(prev => prev || (d.length > 0 ? String(d[0].cityId) : ''))
+      }
+    }).catch(() => {})
+    fetch('/api/espionage/spy-counts').then(r => r.json()).then(d => {
+      if (d.counts) {
+        const counts: Record<string, CitySpyCounts> = {}
+        for (const [id, val] of Object.entries(d.counts)) {
+          const v = val as Record<string, number | null>
+          counts[id] = { available: v.available ?? null, inDefense: v.inDefense ?? null, inTraining: v.inTraining ?? null, deployed: v.deployed ?? null }
+        }
+        setSpyCounts(counts)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const handleSpyCityChange = useCallback((cityId: string) => {
+    setSpyOriginCityId(cityId)
+    saveSpyDefaults(cityId, loadSpyDefaults().numAgents)
+  }, [])
 
   const fetchScan = useCallback(() => {
     fetch('/api/world-scan')
@@ -953,18 +958,37 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
         </div>
       </Card>
 
-      <div className="flex gap-1 mb-4 bg-white border border-slate-200 rounded-xl p-1 shadow-sm w-fit">
-        {TABS.map(tb => (
-          <button
-            key={tb.key}
-            onClick={() => setTab(tb.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              tab === tb.key ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <i className={`fa-solid ${tb.icon} text-xs`} />{tb.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+          {TABS.map(tb => (
+            <button
+              key={tb.key}
+              onClick={() => setTab(tb.key)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                tab === tb.key ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <i className={`fa-solid ${tb.icon} text-xs`} />{tb.label}
+            </button>
+          ))}
+        </div>
+        {ownCities.length > 0 && (
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+            <i className="fa-solid fa-user-secret text-slate-400 text-xs" />
+            <select
+              value={spyOriginCityId}
+              onChange={e => handleSpyCityChange(e.target.value)}
+              className="text-sm border-none bg-transparent focus:outline-none text-slate-700 cursor-pointer"
+            >
+              {ownCities.map(c => {
+                const id = String(c.cityId)
+                const sc = spyCounts[id]
+                const label = sc?.inDefense != null ? `${c.name} (${sc.inDefense})` : c.name
+                return <option key={id} value={id}>{label}</option>
+              })}
+            </select>
+          </div>
+        )}
       </div>
 
       {tab === 'inactivos' && (
@@ -977,6 +1001,9 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           setMarks={setMarks}
           onForceRefresh={handleForceRefresh}
           onRefreshScan={fetchScan}
+          ownCities={ownCities}
+          spyCounts={spyCounts}
+          spyOriginCityId={spyOriginCityId}
         />
       )}
       {tab === 'ilhas' && (

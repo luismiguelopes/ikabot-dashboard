@@ -4,7 +4,6 @@
 import json
 import os
 import random
-import re
 import time
 
 from empire_utils import LOGS_DIR, logger
@@ -61,12 +60,14 @@ def _save_spy_counts(data):
 
 # ── Safehouse HTML parsing ────────────────────────────────────────────────────
 
-def _parse_safehouse_html(html, city_name):
+def _parse_safehouse_page(html, city_name):
     """
-    Extract spy counts from the safehouse updateTemplateData HTML.
+    Parse spy counts from the full safehouse page HTML (non-AJAX).
+    Strips HTML tags first so regex works on clean text regardless of markup.
     Returns a dict with keys: available, inDefense, inTraining, deployed, trainable.
-    Any value that cannot be parsed is left as None.
     """
+    import re
+
     counts = {
         "available":  None,
         "inDefense":  None,
@@ -78,56 +79,71 @@ def _parse_safehouse_html(html, city_name):
     if not html:
         return counts
 
-    # "20 estão em uso" → deployed on missions
-    m = re.search(r'(\d+)\s+est[aã]o?\s+em\s+uso', html, re.IGNORECASE)
+    # Strip tags and decode HTML entities for reliable matching
+    text = re.sub(r'<[^>]+>', ' ', html)
+    text = text.replace('&nbsp;', ' ').replace(' ', ' ')
+    text = re.sub(r'\s+', ' ', text)
+
+    # "24 estão em uso" → deployed on missions
+    m = re.search(r'(\d+)\s+est[aã]o?\s+em\s+uso', text, re.IGNORECASE)
     if m:
         counts["deployed"] = int(m.group(1))
 
-    # "20 estão a trabalhar na defesa" → defense assignment
-    m = re.search(r'(\d+)\s+est[aã]o?\s+a\s+trabalhar\s+na\s+defesa', html, re.IGNORECASE)
+    # "15 estão a trabalhar na defesa" → defense assignment
+    m = re.search(r'(\d+)\s+est[aã]o?\s+a\s+trabalhar\s+na\s+defesa', text, re.IGNORECASE)
     if m:
         counts["inDefense"] = int(m.group(1))
 
-    # "0 esperam por treino" → agents in training queue
-    m = re.search(r'(\d+)\s+esperam?\s+por\s+treino', html, re.IGNORECASE)
+    # "1 esperam por treino" → agents in training queue
+    m = re.search(r'(\d+)\s+esperam?\s+por\s+treino', text, re.IGNORECASE)
     if m:
         counts["inTraining"] = int(m.group(1))
 
-    # "Podes treinar 40" → remaining training capacity (safehouse level - total trained)
-    m = re.search(r'[Pp]odes\s+treinar\s+(\d+)', html, re.IGNORECASE)
+    # "Podes treinar 40" → remaining capacity
+    m = re.search(r'[Pp]odes\s+treinar\s+(\d+)', text, re.IGNORECASE)
     if m:
         counts["trainable"] = int(m.group(1))
 
-    # explicit available count — game may show "X disponíveis" or "X espiões disponíveis"
-    m = re.search(r'(\d+)\s+(?:espi[oõ]es?\s+)?dispon[ií]veis?', html, re.IGNORECASE)
+    # "X disponíveis" → stationed agents (if shown directly)
+    m = re.search(r'(\d+)\s+(?:espi[oõ]es?\s+)?dispon[ií]veis?', text, re.IGNORECASE)
     if m:
         counts["available"] = int(m.group(1))
 
-    # fallback: if we have deployed/defense/training but not available,
-    # available = trainable_total - inDefense - deployed - inTraining
-    # trainable_total = current_total + trainable_capacity; we don't know current_total directly.
-    # Log so the real HTML can be inspected to add a better pattern.
-    if counts["available"] is None:
-        logger.debug(
-            "[espionage] %s: não foi possível parsear 'disponíveis' do HTML "
-            "(deployed=%s defense=%s training=%s). HTML excerpt: %.200s",
-            city_name, counts["deployed"], counts["inDefense"], counts["inTraining"], html
-        )
+    # derive available from known values when not shown directly:
+    # available = total_trained - inDefense - deployed - inTraining
+    # total_trained is not directly available; compute when all three are known
+    if counts["available"] is None and None not in (
+        counts["deployed"], counts["inDefense"], counts["inTraining"]
+    ):
+        # log relevant text to find total_trained pattern if needed later
+        logger.debug("[espionage] %s: deployed=%s defense=%s training=%s — available desconhecido",
+                     city_name, counts["deployed"], counts["inDefense"], counts["inTraining"])
+
+    # log relevant text snippet when inDefense or deployed are still missing
+    if counts["inDefense"] is None or counts["deployed"] is None:
+        keywords = ("treino", "defesa", "uso", "dispon", "espião", "espioes", "agente")
+        snippet = " | ".join(
+            seg.strip() for seg in re.split(r'[.!?\n]', text)
+            if any(kw in seg.lower() for kw in keywords)
+        )[:500]
+        logger.warning("[espionage] safehouse %s: faltam inDefense/deployed. Texto relevante: %s",
+                       city_name, snippet or "(nenhum)")
 
     return counts
 
 
 def _fetch_city_spy_counts(session, city_id, city_name, position):
     """
-    GET the safehouse view for a single city and return parsed counts dict.
-    Returns None on error.
+    GET the safehouse AJAX view and parse spy counts from the changeView HTML.
+    The response changeView[1][1] contains the full safehouse HTML with all counters.
+    Returns parsed counts dict, or None on error.
     """
     import ikabot.config as ikabot_config
 
     url = (
         f"view=safehouse&cityId={city_id}&position={position}"
         f"&backgroundView=city&currentCityId={city_id}"
-        f"&templateView=safehouse&actionRequest={ikabot_config.actionRequest}&ajax=1"
+        f"&actionRequest={ikabot_config.actionRequest}&ajax=1"
     )
     try:
         resp = session.get(url)
@@ -144,23 +160,21 @@ def _fetch_city_spy_counts(session, city_id, city_name, position):
                 ikabot_config.actionRequest = tok
             break
 
-    # Find template HTML
+    # changeView[1][1] contains the full safehouse building HTML with spy stats
     html_content = ""
     for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateTemplateData":
-            payload = entry[1]
-            if isinstance(payload, str):
-                html_content = payload
-            elif isinstance(payload, dict):
-                html_content = json.dumps(payload)
+        if isinstance(entry, list) and entry[0] == "changeView":
+            inner = entry[1]
+            if isinstance(inner, list) and len(inner) > 1 and isinstance(inner[1], str):
+                html_content = inner[1]
             break
 
     if not html_content:
-        logger.warning("[espionage] safehouse %s: sem conteúdo HTML (tipos na resposta: %s)",
+        logger.warning("[espionage] safehouse %s: sem HTML no changeView (tipos: %s)",
                        city_name, [e[0] if isinstance(e, list) else e for e in resp_data[:6]])
         return None
 
-    counts = _parse_safehouse_html(html_content, city_name)
+    counts = _parse_safehouse_page(html_content, city_name)
     counts["cityName"] = city_name
     return counts
 
@@ -266,11 +280,11 @@ def process_dispatch_queue(session):
         origin_id  = str(item["originCityId"])
         num_agents = int(item.get("numAgents", 1))
 
-        # Pre-check: if we have fresh safehouse data, verify available >= requested
+        # Pre-check: inDefense = agents stationed at city, available for dispatch
         city_counts = spy_data.get(origin_id, {})
-        available   = city_counts.get("available")
+        available   = city_counts.get("inDefense")
         if available is not None and available < num_agents:
-            error = f"Espiões insuficientes: {available} disponíveis, {num_agents} pedidos"
+            error = f"Espiões insuficientes: {available} em defesa, {num_agents} pedidos"
             logger.warning("[espionage] pre-check falhou para %s: %s",
                            item["targetPlayerName"], error)
             _append_failed_mission(item, error)

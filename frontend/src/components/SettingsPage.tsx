@@ -16,7 +16,7 @@ export function loadSpyDefaults(): { originCityId: string; numAgents: number } {
   }
 }
 
-function saveSpyDefaults(originCityId: string, numAgents: number) {
+export function saveSpyDefaults(originCityId: string, numAgents: number) {
   localStorage.setItem(SPY_ORIGIN_KEY, originCityId)
   localStorage.setItem(SPY_AGENTS_KEY, String(numAgents))
 }
