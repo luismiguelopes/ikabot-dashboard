@@ -348,8 +348,8 @@ interface EnrichedPlayer extends WorldScanPlayer {
   hasTroops: boolean | null   // null = no garrison data; false = clear; true = has troops
   hasShips: boolean | null
   priority: number
-  mKey: string  // `${playerName}_${islandX}_${islandY}` — mission lookup
-  pKey: string  // `${playerId}_${islandX}_${islandY}` — mark/ignore key
+  cKey: string  // cityId (or fallback) — mission/dispatched lookup, unique per city
+  pKey: string  // `${playerId}_${islandX}_${islandY}` — mark/ignore key (per player+island)
 }
 
 // ── MissionStatePill ──────────────────────────────────────────────────────────
@@ -483,10 +483,11 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       .then(d => { if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal) }).catch(() => {})
   }, [])
 
-  const latestMissionByMKey = useMemo(() => {
+  const latestMissionByCityId = useMemo(() => {
     const map: Record<string, SpyMission> = {}
     for (const m of missions) {
-      const key = `${m.targetPlayerName}_${m.islandX}_${m.islandY}`
+      const key = m.targetCityId
+      if (!key) continue
       if (!map[key] || m.dispatchedAt > map[key].dispatchedAt) map[key] = m
     }
     return map
@@ -516,13 +517,13 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     const enriched: EnrichedPlayer[] = []
 
     for (const p of scanData.players) {
-      if (p.state !== 'inactive' && p.state !== 'vacation') continue
+      if (p.state !== 'inactive') continue
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
       if (ignoredKeys.has(pKey)) continue
 
-      const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
+      const cKey = p.cityId || `${p.playerName}_${p.cityName}_${p.islandX}_${p.islandY}`
       const wKey = `${p.cityId}_${p.islandX}_${p.islandY}`
-      const mission = latestMissionByMKey[mKey]
+      const mission = p.cityId ? latestMissionByCityId[p.cityId] : undefined
       const wave = latestWaveByWKey[wKey]
 
       let totalResources: number | null = null
@@ -562,7 +563,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
         }
       }
 
-      enriched.push({ ...p, mission, wave, totalResources, hasTroops, hasShips, priority, mKey, pKey })
+      enriched.push({ ...p, mission, wave, totalResources, hasTroops, hasShips, priority, cKey, pKey })
     }
 
     enriched.sort((a, b) => {
@@ -575,7 +576,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     })
 
     return enriched
-  }, [scanData, ignoredKeys, latestMissionByMKey, latestWaveByWKey, minLootTotal])
+  }, [scanData, ignoredKeys, latestMissionByCityId, latestWaveByWKey, minLootTotal])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -627,7 +628,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                       <Td>
                         <div className="flex items-center gap-1">
                           <span className="font-medium text-slate-800 text-sm">{p.playerName}</span>
-                          <span className="text-[11px]" title={p.state}>{p.state === 'vacation' ? '🏖' : '💤'}</span>
+                          <span className="text-[11px]" title={p.state}>💤</span>
                         </div>
                         {p.allyTag && (
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
@@ -661,7 +662,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                           className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors ${
                             !p.cityId || !p.islandId
                               ? 'bg-slate-50 text-slate-200 cursor-not-allowed'
-                              : dispatchedKeys.has(p.pKey)
+                              : dispatchedKeys.has(p.cKey)
                                 ? 'bg-amber-200 text-amber-700 hover:bg-amber-300'
                                 : p.mission?.state === 'DONE'
                                   ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
@@ -854,7 +855,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
             setDispatchedOk(spyTarget.playerName)
-            setDispatchedKeys(prev => new Set([...prev, spyTarget.pKey]))
+            setDispatchedKeys(prev => new Set([...prev, spyTarget.cKey]))
             setTimeout(() => setDispatchedOk(null), 4000)
           }}
         />
