@@ -8,13 +8,36 @@ import time
 
 from empire_utils import LOGS_DIR, logger
 
-SPY_MISSIONS_PATH       = os.path.join(LOGS_DIR, "spy_missions.json")
-SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
-SPY_COUNTS_PATH         = os.path.join(LOGS_DIR, "spy_counts.json")
-OWN_CITIES_PATH         = os.path.join(LOGS_DIR, "own_cities.json")
+SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
+SPY_DISPATCH_QUEUE_PATH    = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
+SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
+OWN_CITIES_PATH            = os.path.join(LOGS_DIR, "own_cities.json")
+ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 
 MISSION_WAREHOUSE = 5
 MISSION_GARRISON  = 6
+
+_DEFAULT_GARRISON_THRESHOLDS = {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
+
+
+def _load_espionage_settings():
+    try:
+        with open(ESPIONAGE_SETTINGS_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"garrisonThresholds": _DEFAULT_GARRISON_THRESHOLDS}
+
+
+def _check_garrison_threshold(resources, thresholds):
+    """AND logic: ALL resources with threshold > 0 must be >= their minimum."""
+    if not resources:
+        return False
+    for key, min_val in thresholds.items():
+        if min_val <= 0:
+            continue
+        if resources.get(key, 0) < min_val:
+            return False
+    return True
 
 
 # ── Persistence helpers ───────────────────────────────────────────────────────
@@ -759,7 +782,7 @@ def execute_waiting_missions(session):
         )
 
         if ok:
-            missions[i]["state"] = "EXECUTING"
+            missions[i]["state"] = "EXECUTING_WAREHOUSE"
             missions[i]["executedAt"] = now
             missions[i]["missionType"] = "warehouse"
             missions[i]["spySessionId"] = spy_id
@@ -775,16 +798,16 @@ def execute_waiting_missions(session):
 
 
 def collect_mission_results(session):
-    """EXECUTING → DONE/FAILED: fetch and parse reports from safehouse reports tab."""
+    """EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON or DONE/FAILED."""
     data = _load_missions()
     missions = data.get("missions", [])
     changed = False
     now = int(time.time())
 
     for i, m in enumerate(missions):
-        if m.get("state") != "EXECUTING":
+        if m.get("state") not in ("EXECUTING", "EXECUTING_WAREHOUSE"):
             continue
-        if now - m.get("executedAt", 0) < 300:  # wait 5 min after execution
+        if now - m.get("executedAt", 0) < 300:
             continue
 
         origin_id = str(m["originCityId"])
@@ -801,17 +824,34 @@ def collect_mission_results(session):
             report = _fetch_and_parse_report(session, rid)
             if not report:
                 continue
-            # Match report to mission by target city name
             target = (m.get("targetCityName") or "").lower()
             found  = (report.get("targetCityName") or "").lower()
             if target and found and target[:6] not in found and found[:6] not in target:
                 continue
-            missions[i]["state"] = "DONE" if report.get("success") else "FAILED"
-            if not report.get("success"):
-                missions[i]["error"] = "Missão de espionagem falhou"
+
             missions[i]["result"] = report
-            logger.info("[espionage] relatório %s → %s success=%s recursos=%s",
-                        rid, m["targetCityName"], report.get("success"), report.get("resources"))
+
+            if report.get("success"):
+                settings   = _load_espionage_settings()
+                thresholds = settings.get("garrisonThresholds", _DEFAULT_GARRISON_THRESHOLDS)
+                resources  = report.get("resources") or {}
+                if _check_garrison_threshold(resources, thresholds):
+                    delay_min = random.randint(5, 15)
+                    missions[i]["state"] = "WAITING_FOR_GARRISON"
+                    missions[i]["garrisonExecuteAfter"] = now + delay_min * 60
+                    missions[i]["garrisonExecutedAt"]   = None
+                    missions[i]["garrisonResult"]       = None
+                    logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %dmin",
+                                m["targetCityName"], resources, delay_min)
+                else:
+                    missions[i]["state"] = "DONE"
+                    logger.info("[espionage] armazém %s → recursos=%s — threshold não atingido, DONE",
+                                m["targetCityName"], resources)
+            else:
+                missions[i]["state"] = "FAILED"
+                missions[i]["error"] = "Missão de espionagem falhou"
+                logger.info("[espionage] armazém %s → falhou", m["targetCityName"])
+
             matched = True
             changed = True
             break
@@ -827,12 +867,118 @@ def collect_mission_results(session):
         _save_missions(data)
 
 
+def execute_garrison_missions(session):
+    """WAITING_FOR_GARRISON → EXECUTING_GARRISON after delay."""
+    data = _load_missions()
+    missions = data.get("missions", [])
+    changed = False
+    now = int(time.time())
+
+    for i, m in enumerate(missions):
+        if m.get("state") != "WAITING_FOR_GARRISON":
+            continue
+        if now < m.get("garrisonExecuteAfter", now + 1):
+            continue
+
+        origin_id = str(m["originCityId"])
+        position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
+        if not position:
+            continue
+
+        time.sleep(random.randint(10, 25))
+        spy_count, html = _fetch_spy_missions_view(session, origin_id, m["targetCityId"], position)
+
+        if not spy_count:
+            # Spy left before garrison — keep warehouse result, mark DONE
+            missions[i]["state"] = "DONE"
+            logger.info("[espionage] %s: espião regressou antes da garrison — DONE (só armazém)",
+                        m["targetCityName"])
+            changed = True
+            continue
+
+        spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
+
+        time.sleep(random.randint(5, 15))
+        ok = _execute_spy_mission(
+            session, origin_id, m["targetCityId"], position,
+            spy_id, m.get("numAgents", 1), MISSION_GARRISON,
+        )
+
+        if ok:
+            missions[i]["state"] = "EXECUTING_GARRISON"
+            missions[i]["garrisonExecutedAt"] = now
+            missions[i]["spySessionId"] = spy_id
+            logger.info("[espionage] missão garrison executada → %s", m["targetCityName"])
+        else:
+            missions[i]["state"] = "DONE"
+            missions[i]["garrisonResult"] = {"error": "executeMission garrison rejeitado"}
+            logger.warning("[espionage] %s: garrison rejeitada → DONE com só armazém", m["targetCityName"])
+        changed = True
+
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+
+
+def collect_garrison_results(session):
+    """EXECUTING_GARRISON → DONE: fetch and parse garrison reports."""
+    data = _load_missions()
+    missions = data.get("missions", [])
+    changed = False
+    now = int(time.time())
+
+    for i, m in enumerate(missions):
+        if m.get("state") != "EXECUTING_GARRISON":
+            continue
+        if now - m.get("garrisonExecutedAt", 0) < 300:
+            continue
+
+        origin_id = str(m["originCityId"])
+        position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
+        if not position:
+            continue
+
+        time.sleep(random.randint(5, 15))
+        report_ids = _fetch_report_ids(session, origin_id, position)
+
+        matched = False
+        for rid in report_ids[:5]:
+            time.sleep(random.randint(3, 8))
+            report = _fetch_and_parse_report(session, rid)
+            if not report:
+                continue
+            target = (m.get("targetCityName") or "").lower()
+            found  = (report.get("targetCityName") or "").lower()
+            if target and found and target[:6] not in found and found[:6] not in target:
+                continue
+            missions[i]["state"] = "DONE"
+            missions[i]["garrisonResult"] = report
+            logger.info("[espionage] garrison %s → tropas=%s",
+                        m["targetCityName"], report.get("troops"))
+            matched = True
+            changed = True
+            break
+
+        if not matched and now - m.get("garrisonExecutedAt", 0) > 7200:
+            missions[i]["state"] = "DONE"
+            missions[i]["garrisonResult"] = {"error": "Relatório garrison não encontrado após 2h"}
+            logger.warning("[espionage] %s: relatório garrison ausente após 2h → DONE com só armazém",
+                           m["targetCityName"])
+            changed = True
+
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+
+
 def process_spy_cycle(session):
     """Progress all spy mission state machines. Called once per bot cycle."""
     for label, fn in [
-        ("check_spy_arrivals",      check_spy_arrivals),
-        ("execute_waiting_missions", execute_waiting_missions),
-        ("collect_mission_results",  collect_mission_results),
+        ("check_spy_arrivals",        check_spy_arrivals),
+        ("execute_waiting_missions",  execute_waiting_missions),
+        ("collect_mission_results",   collect_mission_results),
+        ("execute_garrison_missions", execute_garrison_missions),
+        ("collect_garrison_results",  collect_garrison_results),
     ]:
         try:
             fn(session)

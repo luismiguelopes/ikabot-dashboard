@@ -10,13 +10,15 @@ import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCi
 
 interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
 
-interface SpyMissionResult { success: boolean; targetCityName: string | null; resources: Record<string, number> | null; reportedAt: number }
+interface SpyMissionResult { success: boolean; targetCityName: string | null; resources: Record<string, number> | null; troops?: Record<string, number> | null; reportedAt: number }
+interface SpyGarrisonResult { success?: boolean; targetCityName?: string | null; troops: Record<string, number> | null; reportedAt?: number; error?: string }
 interface SpyMission {
   originCityId: string; targetCityId: string; targetPlayerName: string; targetCityName: string
   islandX: number; islandY: number; numAgents: number
-  state: 'TRAVELING' | 'WAITING_AT_CITY' | 'EXECUTING' | 'DONE' | 'FAILED'
+  state: 'TRAVELING' | 'WAITING_AT_CITY' | 'EXECUTING' | 'EXECUTING_WAREHOUSE' | 'WAITING_FOR_GARRISON' | 'EXECUTING_GARRISON' | 'DONE' | 'FAILED'
   dispatchedAt: number; arrivedAt: number | null; executedAt: number | null
-  missionType: string | null; result: SpyMissionResult | null; error?: string
+  garrisonExecuteAfter: number | null; garrisonExecutedAt: number | null
+  missionType: string | null; result: SpyMissionResult | null; garrisonResult: SpyGarrisonResult | null; error?: string
 }
 
 interface SpyModalProps {
@@ -529,13 +531,19 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                       {(() => {
                         const mKey = `${p.playerName}_${p.islandX}_${p.islandY}`
                         const mission = latestMissionByKey[mKey]
-                        const isActive = mission && ['TRAVELING','WAITING_AT_CITY','EXECUTING'].includes(mission.state)
+                        const isActive = mission && ['TRAVELING','WAITING_AT_CITY','EXECUTING','EXECUTING_WAREHOUSE','WAITING_FOR_GARRISON','EXECUTING_GARRISON'].includes(mission.state)
                         const isDone   = mission?.state === 'DONE'
                         const isFailed = mission?.state === 'FAILED'
                         const spyTitle = !p.cityId || !p.islandId ? t('spy_no_city_id')
                           : isDone   ? t('spy_done')
                           : isFailed ? t('spy_failed')
-                          : isActive ? (mission.state === 'TRAVELING' ? t('spy_traveling') : mission.state === 'WAITING_AT_CITY' ? t('spy_waiting') : t('spy_executing'))
+                          : isActive ? (
+                              mission.state === 'TRAVELING' ? t('spy_traveling')
+                            : mission.state === 'WAITING_AT_CITY' ? t('spy_waiting')
+                            : mission.state === 'WAITING_FOR_GARRISON' ? t('spy_waiting_garrison')
+                            : mission.state === 'EXECUTING_GARRISON' ? t('spy_executing_garrison')
+                            : t('spy_executing')
+                          )
                           : t('spy_send_btn')
                         return (
                           <div className="flex items-center justify-center gap-1">
@@ -581,27 +589,54 @@ function InactivosTab({ scanData, loading, error, marks, setMarks, onForceRefres
                             const mission = latestMissionByKey[mKey]
                             if (!mission || mission.state !== 'DONE' || !mission.result) return null
                             const res = mission.result.resources
-                            const RESOURCE_LABELS: Record<string, string> = { wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', crystal: 'Cristal', sulfur: 'Enxofre' }
+                            const RES_LABELS: Record<string, string> = { wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', crystal: 'Cristal', sulfur: 'Enxofre' }
                             return (
-                              <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
-                                <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
-                                  <i className="fa-solid fa-file-lines" /> {t('spy_report_title')} — {mission.result.targetCityName || p.cityName}
-                                </p>
-                                <p className="text-[10px] text-emerald-600 mb-2">
-                                  {mission.result.success ? t('spy_report_success') : t('spy_report_failed')}
-                                  {mission.result.reportedAt && <span className="ml-2 text-slate-400">{new Date(mission.result.reportedAt * 1000).toLocaleString()}</span>}
-                                </p>
-                                {res && Object.keys(res).length > 0 ? (
-                                  <div className="grid grid-cols-5 gap-1">
-                                    {(['wood','wine','marble','crystal','sulfur'] as const).map(k => (
-                                      <div key={k} className="text-center">
-                                        <div className="text-[10px] text-slate-500">{RESOURCE_LABELS[k]}</div>
-                                        <div className="text-xs font-semibold text-slate-700">{res[k]?.toLocaleString() ?? '—'}</div>
+                              <div className="flex flex-col gap-2">
+                                <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
+                                  <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
+                                    <i className="fa-solid fa-warehouse" /> {t('spy_report_resources')} — {mission.result.targetCityName || p.cityName}
+                                  </p>
+                                  <p className="text-[10px] text-emerald-600 mb-2">
+                                    {mission.result.success ? t('spy_report_success') : t('spy_report_failed')}
+                                    {mission.result.reportedAt && <span className="ml-2 text-slate-400">{new Date(mission.result.reportedAt * 1000).toLocaleString()}</span>}
+                                  </p>
+                                  {res && Object.keys(res).length > 0 ? (
+                                    <div className="grid grid-cols-5 gap-1">
+                                      {(['wood','wine','marble','crystal','sulfur'] as const).map(k => (
+                                        <div key={k} className="text-center">
+                                          <div className="text-[10px] text-slate-500">{RES_LABELS[k]}</div>
+                                          <div className="text-xs font-semibold text-slate-700">{res[k]?.toLocaleString() ?? '—'}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
+                                  )}
+                                </div>
+                                {mission.garrisonResult && !mission.garrisonResult.error && (
+                                  <div className="bg-white rounded-lg border border-amber-200 px-4 py-3">
+                                    <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
+                                      <i className="fa-solid fa-shield-halved" /> {t('spy_garrison_title')} — {mission.garrisonResult.targetCityName || p.cityName}
+                                    </p>
+                                    {mission.garrisonResult.reportedAt && (
+                                      <p className="text-[10px] text-slate-400 mb-2">{new Date(mission.garrisonResult.reportedAt * 1000).toLocaleString()}</p>
+                                    )}
+                                    {mission.garrisonResult.troops && Object.keys(mission.garrisonResult.troops).length > 0 ? (
+                                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                        {Object.entries(mission.garrisonResult.troops).map(([name, count]) => (
+                                          <div key={name} className="flex justify-between text-xs">
+                                            <span className="text-slate-600">{name}</span>
+                                            <span className="font-semibold text-slate-800">{count.toLocaleString()}</span>
+                                          </div>
+                                        ))}
                                       </div>
-                                    ))}
+                                    ) : (
+                                      <p className="text-xs text-slate-400 italic">{t('spy_garrison_no_troops')}</p>
+                                    )}
                                   </div>
-                                ) : (
-                                  <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
+                                )}
+                                {mission.garrisonResult?.error && (
+                                  <p className="text-xs text-slate-400 italic px-1">{mission.garrisonResult.error}</p>
                                 )}
                               </div>
                             )

@@ -426,13 +426,22 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   )
 }
 
+const RESOURCE_LABELS: Record<string, string> = {
+  wood: 'Madeira', wine: 'Vinho', marble: 'Mármore', glass: 'Cristal', sulfur: 'Enxofre',
+}
+const GARRISON_KEYS = ['wood', 'wine', 'marble', 'glass', 'sulfur'] as const
+type GarrisonThresholds = Record<typeof GARRISON_KEYS[number], number>
+const DEFAULT_GARRISON: GarrisonThresholds = { wood: 5000, wine: 0, marble: 5000, glass: 0, sulfur: 0 }
+
 function EspionagemTab() {
   const t = useT()
-  const [ownCities, setOwnCities] = useState<OwnCity[]>([])
+  const [ownCities, setOwnCities]     = useState<OwnCity[]>([])
   const defaults = loadSpyDefaults()
   const [originCityId, setOriginCityId] = useState(defaults.originCityId)
-  const [numAgents, setNumAgents] = useState(defaults.numAgents)
-  const [saved, setSaved] = useState(false)
+  const [numAgents, setNumAgents]     = useState(defaults.numAgents)
+  const [saved, setSaved]             = useState(false)
+  const [thresholds, setThresholds]   = useState<GarrisonThresholds>(DEFAULT_GARRISON)
+  const [thSaved, setThSaved]         = useState(false)
 
   useEffect(() => {
     fetch('/api/own-cities')
@@ -440,10 +449,12 @@ function EspionagemTab() {
       .then(d => {
         const cities: OwnCity[] = Array.isArray(d) ? d : (d.cities || [])
         setOwnCities(cities)
-        if (!originCityId && cities.length > 0) {
-          setOriginCityId(String(cities[0].cityId))
-        }
+        if (!originCityId && cities.length > 0) setOriginCityId(String(cities[0].cityId))
       })
+      .catch(() => {})
+    fetch('/api/espionage/settings')
+      .then(r => r.json())
+      .then(d => { if (d.garrisonThresholds) setThresholds({ ...DEFAULT_GARRISON, ...d.garrisonThresholds }) })
       .catch(() => {})
   }, [])
 
@@ -451,6 +462,17 @@ function EspionagemTab() {
     saveSpyDefaults(originCityId, numAgents)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
+  }
+
+  const handleSaveThresholds = () => {
+    fetch('/api/espionage/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ garrisonThresholds: thresholds }),
+    }).then(() => {
+      setThSaved(true)
+      setTimeout(() => setThSaved(false), 3000)
+    }).catch(() => {})
   }
 
   return (
@@ -477,10 +499,7 @@ function EspionagemTab() {
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">{t('spy_num_agents')}</label>
               <input
-                type="number"
-                min={1}
-                max={99}
-                value={numAgents}
+                type="number" min={1} max={99} value={numAgents}
                 onChange={e => setNumAgents(Math.max(1, parseInt(e.target.value) || 1))}
                 className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
@@ -489,13 +508,38 @@ function EspionagemTab() {
         </div>
       </Card>
       <div className="flex items-center gap-3">
-        <button
-          onClick={handleSave}
-          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
-        >
+        <button onClick={handleSave} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors">
           {t('save')}
         </button>
         {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+      </div>
+
+      <Card>
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+            <i className="fa-solid fa-shield-halved text-amber-400" /> {t('spy_garrison_threshold_title')}
+          </p>
+          <p className="text-xs text-slate-400 mb-4">{t('spy_garrison_threshold_desc')}</p>
+          <div className="grid grid-cols-2 gap-3">
+            {GARRISON_KEYS.map(key => (
+              <div key={key}>
+                <label className="block text-xs font-medium text-slate-600 mb-1">{RESOURCE_LABELS[key]}</label>
+                <input
+                  type="number" min={0} step={1000}
+                  value={thresholds[key]}
+                  onChange={e => setThresholds(prev => ({ ...prev, [key]: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+      <div className="flex items-center gap-3">
+        <button onClick={handleSaveThresholds} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors">
+          {t('save')}
+        </button>
+        {thSaved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
       </div>
     </div>
   )

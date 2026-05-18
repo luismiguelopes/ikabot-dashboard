@@ -37,9 +37,14 @@ QUEUE_SETTINGS_JSON_PATH    = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
-SPY_MISSIONS_PATH       = os.path.join(LOGS_DIR, "spy_missions.json")
-SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
-SPY_COUNTS_PATH         = os.path.join(LOGS_DIR, "spy_counts.json")
+SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
+SPY_DISPATCH_QUEUE_PATH    = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
+SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
+ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
+
+_DEFAULT_ESPIONAGE_SETTINGS = {
+    "garrisonThresholds": {"wood": 5000, "wine": 0, "marble": 5000, "glass": 0, "sulfur": 0}
+}
 
 
 def get_last_modified_date(filepath):
@@ -685,6 +690,30 @@ def api_own_cities():
         return jsonify([])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/espionage/settings")
+def api_espionage_settings_get():
+    try:
+        with open(ESPIONAGE_SETTINGS_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify(_DEFAULT_ESPIONAGE_SETTINGS)
+
+
+@app.route("/api/espionage/settings", methods=["POST"])
+def api_espionage_settings_post():
+    body = request.get_json(silent=True) or {}
+    settings = {
+        "garrisonThresholds": {
+            k: max(0, int(body.get("garrisonThresholds", {}).get(k, v)))
+            for k, v in _DEFAULT_ESPIONAGE_SETTINGS["garrisonThresholds"].items()
+        }
+    }
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ESPIONAGE_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/espionage/dispatch", methods=["POST"])
