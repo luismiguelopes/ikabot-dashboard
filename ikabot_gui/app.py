@@ -945,6 +945,34 @@ def api_espionage_import_reports():
     return jsonify({"status": "queued"})
 
 
+@app.route("/api/espionage/force-warehouse", methods=["POST"])
+def api_espionage_force_warehouse():
+    body   = request.get_json(force=True)
+    city_id = str(body.get("cityId", ""))
+    if not city_id:
+        return jsonify({"error": "cityId required"}), 400
+    try:
+        from espionage_manager import force_warehouse_mission
+        force_warehouse_mission(city_id)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/espionage/recall-spy", methods=["POST"])
+def api_espionage_recall_spy():
+    body    = request.get_json(force=True)
+    city_id = str(body.get("cityId", ""))
+    if not city_id:
+        return jsonify({"error": "cityId required"}), 400
+    try:
+        from espionage_manager import recall_spy_mission
+        recall_spy_mission(city_id)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health")
 def api_health():
     db_ok = False

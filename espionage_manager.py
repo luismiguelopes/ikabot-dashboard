@@ -1544,6 +1544,65 @@ def process_attack_queue(session, in_active_hours=True):
     _save_attack_queue(q)
 
 
+def force_warehouse_mission(target_city_id):
+    """Force warehouse inspection for a city.
+    - WAITING_AT_CITY → reset executeAfter to now so it runs on next cycle.
+    - No active mission → add a new dispatch queue item from world scan data.
+    """
+    data     = _load_missions()
+    missions = data.get("missions", [])
+
+    for i, m in enumerate(missions):
+        if m.get("state") == "WAITING_AT_CITY" and str(m.get("targetCityId", "")) == str(target_city_id):
+            missions[i]["executeAfter"] = int(time.time()) - 1
+            data["missions"] = missions
+            _save_missions(data)
+            logger.info("[espionage] force-warehouse %s — executeAfter resetado", m.get("targetCityName"))
+            return
+
+    # No active mission — look up city in world_scan and add to dispatch queue
+    try:
+        with open(WORLD_SCAN_JSON_PATH) as f:
+            scan = json.load(f)
+        city = next((p for p in scan.get("players", []) if str(p.get("cityId")) == str(target_city_id)), None)
+        if not city:
+            logger.warning("[espionage] force-warehouse: cidade %s não encontrada no world scan", target_city_id)
+            return
+        queue = _load_dispatch_queue()
+        queue.setdefault("pending", []).append({
+            "targetCityId":     str(target_city_id),
+            "targetPlayerName": city.get("playerName", ""),
+            "targetCityName":   city.get("cityName", ""),
+            "targetIslandId":   str(city.get("islandId", "")),
+            "islandX":          city.get("islandX"),
+            "islandY":          city.get("islandY"),
+            "numAgents":        1,
+            "numDecoys":        0,
+            "queuedAt":         int(time.time()),
+            "forceWarehouse":   True,
+        })
+        _save_dispatch_queue(queue)
+        logger.info("[espionage] force-warehouse %s — adicionado à fila de dispatch", city.get("cityName"))
+    except Exception:
+        logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
+
+
+def recall_spy_mission(target_city_id):
+    """Mark TRAVELING/WAITING_AT_CITY mission as RECALLED so the bot stops acting on it."""
+    data     = _load_missions()
+    missions = data.get("missions", [])
+    changed  = False
+    for i, m in enumerate(missions):
+        if m.get("state") in ("TRAVELING", "WAITING_AT_CITY") and str(m.get("targetCityId", "")) == str(target_city_id):
+            missions[i]["state"] = "RECALLED"
+            missions[i]["recalledAt"] = int(time.time())
+            changed = True
+            logger.info("[espionage] recall %s — missão marcada como RECALLED", m.get("targetCityName"))
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+
+
 def process_spy_cycle(session):
     """Progress all spy mission state machines. Called once per bot cycle."""
     for label, fn in [

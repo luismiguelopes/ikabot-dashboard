@@ -503,6 +503,22 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     return map
   }, [attackWaves])
 
+  const handleForceWarehouse = useCallback((p: EnrichedPlayer) => {
+    fetch('/api/espionage/force-warehouse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cityId: p.cityId }),
+    }).catch(() => {})
+  }, [])
+
+  const handleRecallSpy = useCallback((p: EnrichedPlayer) => {
+    fetch('/api/espionage/recall-spy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cityId: p.cityId }),
+    }).catch(() => {})
+  }, [])
+
   const handleIgnore = useCallback((p: EnrichedPlayer) => {
     setIgnoredKeys(prev => new Set([...prev, p.pKey]))
     fetch('/api/world-scan/mark', {
@@ -562,7 +578,8 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
         if (mission.state === 'FAILED') priority = 0
         else if (_ACTIVE_SPY_STATES.has(mission.state)) priority = 2
         else if (mission.state === 'DONE') {
-          if (!mission.result) priority = 1
+          const hasResources = !!(mission.result?.resources && Object.keys(mission.result.resources).length > 0)
+          if (!mission.result || !hasResources) priority = 1
           else if (mission.garrisonResult && !mission.garrisonResult.error) {
             priority = (totalResources || 0) >= minLootTotal ? (hasShips ? 5 : 6) : 4
           } else {
@@ -580,7 +597,8 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
         return b.totalResources - a.totalResources
       if (a.totalResources !== null && b.totalResources === null) return -1
       if (a.totalResources === null && b.totalResources !== null) return 1
-      return a.distance - b.distance
+      if (a.distance !== b.distance) return a.distance - b.distance
+      return a.cKey.localeCompare(b.cKey)
     })
 
     return enriched
@@ -617,12 +635,13 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
             </thead>
             <tbody>
               {players.map((p, idx) => {
-                const isExpanded  = expandedKey === p.pKey
-                const hasReport   = p.mission?.state === 'DONE' && !!p.mission.result
+                const isExpanded  = expandedKey === p.cKey
+                const hasReport   = p.mission?.state === 'DONE' && !!p.mission.result &&
+                  !!(p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0)
                 const isActiveSpy = !!p.mission && _ACTIVE_SPY_STATES.has(p.mission.state)
 
                 return (
-                  <React.Fragment key={p.pKey}>
+                  <React.Fragment key={p.cKey}>
                     <tr className={`border-b transition-colors ${
                       isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100 hover:bg-slate-50'
                     } ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}>
@@ -689,35 +708,49 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                           <i className="fa-solid fa-user-secret" />
                         </button>
                       </Td>
-                      {/* Report button */}
+                      {/* Action buttons: report / force-warehouse / recall / ignore */}
                       <Td className="text-center px-1">
-                        {hasReport ? (
+                        <div className="flex items-center justify-center gap-0.5">
+                          {hasReport ? (
+                            <button
+                              onClick={() => setExpandedKey(prev => prev === p.cKey ? null : p.cKey)}
+                              title={t('spy_report_title')}
+                              className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors ${
+                                isExpanded ? 'bg-indigo-500 text-white' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                              }`}
+                            >
+                              <i className="fa-solid fa-file-lines" />
+                            </button>
+                          ) : <span className="block w-7 h-7" />}
                           <button
-                            onClick={() => setExpandedKey(prev => prev === p.pKey ? null : p.pKey)}
-                            title={t('spy_report_title')}
-                            className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors ${
-                              isExpanded ? 'bg-indigo-500 text-white' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                            }`}
+                            onClick={() => handleForceWarehouse(p)}
+                            title={t('btn_force_warehouse')}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
                           >
-                            <i className="fa-solid fa-file-lines" />
+                            <i className="fa-solid fa-magnifying-glass" />
                           </button>
-                        ) : <span className="block w-7 h-7" />}
-                      </Td>
-                      {/* Ignore button */}
-                      <Td className="text-center px-1">
-                        <button
-                          onClick={() => handleIgnore(p)}
-                          title={t('btn_ignore_city')}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors"
-                        >
-                          🚫
-                        </button>
+                          <button
+                            onClick={() => handleRecallSpy(p)}
+                            title={t('btn_recall_spy')}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                          >
+                            <i className="fa-solid fa-arrow-rotate-left" />
+                          </button>
+                          <button
+                            onClick={() => handleIgnore(p)}
+                            title={t('btn_ignore_city')}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors"
+                          >
+                            🚫
+                          </button>
+                        </div>
                       </Td>
                     </tr>
 
-                    {isExpanded && p.mission?.state === 'DONE' && p.mission.result && (
+                    {isExpanded && p.mission?.state === 'DONE' && p.mission.result &&
+                      p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0 && (
                       <tr className="bg-indigo-50/40 border-b border-indigo-200">
-                        <td colSpan={9} className="px-5 py-4">
+                        <td colSpan={8} className="px-5 py-4">
                           <div className="flex flex-col gap-3 max-w-2xl">
                             {/* Warehouse */}
                             <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
@@ -1458,7 +1491,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
         )}
       </div>
 
-      {tab === 'inactivos' && (
+      <div style={{ display: tab === 'inactivos' ? undefined : 'none' }}>
         <InactivosTab
           scanData={scanData}
           loading={loading}
@@ -1468,8 +1501,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           spyCounts={spyCounts}
           spyOriginCityId={spyOriginCityId}
         />
-      )}
-      {tab === 'ilhas' && (
+      </div>
+      <div style={{ display: tab === 'ilhas' ? undefined : 'none' }}>
         <IlhasTab
           scanData={scanData}
           loading={loading}
@@ -1477,10 +1510,10 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           onForceRefresh={handleForceRefresh}
           onSelectIsland={onSelectIsland}
         />
-      )}
-      {tab === 'ignoradas' && (
+      </div>
+      <div style={{ display: tab === 'ignoradas' ? undefined : 'none' }}>
         <IgnoradasTab scanData={scanData} onScanDataChange={setScanData} />
-      )}
+      </div>
     </div>
   )
 }
