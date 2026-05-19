@@ -308,11 +308,14 @@ def process_dispatch_queue(session):
         origin_id  = str(item["originCityId"])
         num_agents = int(item.get("numAgents", 1))
 
-        # Pre-check: usar campo "available" (espiões prontos para despacho)
-        city_counts = spy_data.get(origin_id, {})
-        available   = city_counts.get("available")
-        if available is not None and available < num_agents:
-            error = f"Espiões insuficientes: {available} disponíveis, {num_agents} pedidos"
+        # Pre-check: inDefense = espiões na cidade, disponíveis para dispatch.
+        # available pode ser None se o parser não o calculou — usar inDefense como fallback.
+        city_counts  = spy_data.get(origin_id, {})
+        in_defense   = city_counts.get("inDefense")
+        available    = city_counts.get("available")
+        dispatchable = in_defense if in_defense is not None else available
+        if dispatchable is not None and dispatchable < num_agents:
+            error = f"Espiões insuficientes: {dispatchable} na cidade, {num_agents} pedidos"
             logger.warning("[espionage] pre-check falhou para %s: %s",
                            item["targetPlayerName"], error)
             _append_failed_mission(item, error)
@@ -334,6 +337,14 @@ def process_dispatch_queue(session):
             _append_failed_mission(item, result)
             logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
                            item["targetPlayerName"], result)
+            # type=11 = sem espiões; invalidar cache para forçar re-fetch no próximo ciclo
+            if "type=10" not in result and "11" in result:
+                counts_data = _load_spy_counts()
+                if origin_id in counts_data.get("byCityId", {}):
+                    counts_data["byCityId"][origin_id]["inDefense"] = 0
+                    counts_data["byCityId"][origin_id]["available"] = 0
+                    _save_spy_counts(counts_data)
+                    logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
 
     q["pending"] = []
     _save_dispatch_queue(q)
