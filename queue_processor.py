@@ -253,10 +253,13 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 logger.error("import_existing_reports falhou", exc_info=True)
             continue
 
-        # Pending spy dispatch queued by the Flask UI — process immediately
+        # Pending spy dispatch or recalls queued by the Flask UI — process immediately
         if session:
             try:
-                from espionage_manager import has_pending_dispatch, process_dispatch_queue
+                from espionage_manager import has_pending_dispatch, process_dispatch_queue, _load_recall_queue, _process_recall_queue
+                if _load_recall_queue().get("pending"):
+                    _process_recall_queue(session)
+                    continue
                 if has_pending_dispatch():
                     process_dispatch_queue(session)
                     continue

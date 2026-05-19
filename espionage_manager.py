@@ -1587,25 +1587,86 @@ def force_warehouse_mission(target_city_id):
         logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
+RECALL_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_recall_queue.json")
+
+
+def _load_recall_queue():
+    try:
+        with open(RECALL_QUEUE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"pending": []}
+
+
+def _save_recall_queue(data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(RECALL_QUEUE_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 def recall_spy_mission(target_city_id):
-    """Mark TRAVELING/WAITING_AT_CITY mission as RECALLED so the bot stops acting on it."""
+    """Queue a recall for a spy stationed at target_city_id.
+    Looks up origin city and safehouse position from the active mission.
+    The actual game API call is made by _process_recall_queue on the next bot wake-up."""
     data     = _load_missions()
     missions = data.get("missions", [])
-    changed  = False
+    queued   = False
     for i, m in enumerate(missions):
         if m.get("state") in ("TRAVELING", "WAITING_AT_CITY") and str(m.get("targetCityId", "")) == str(target_city_id):
-            missions[i]["state"] = "RECALLED"
+            missions[i]["state"]     = "RECALLED"
             missions[i]["recalledAt"] = int(time.time())
-            changed = True
-            logger.info("[espionage] recall %s — missão marcada como RECALLED", m.get("targetCityName"))
-    if changed:
-        data["missions"] = missions
-        _save_missions(data)
+            # Queue the actual game server call
+            origin_id = str(m.get("originCityId", ""))
+            position  = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
+            if origin_id and position:
+                q = _load_recall_queue()
+                q.setdefault("pending", []).append({
+                    "targetCityId": str(target_city_id),
+                    "originCityId": origin_id,
+                    "position":     position,
+                    "cityName":     m.get("targetCityName", ""),
+                    "queuedAt":     int(time.time()),
+                })
+                _save_recall_queue(q)
+                queued = True
+            logger.info("[espionage] recall %s — RECALLED%s", m.get("targetCityName"),
+                        ", recall game request queued" if queued else " (sem origin/position)")
+    data["missions"] = missions
+    _save_missions(data)
+
+
+def _process_recall_queue(session):
+    """Send retreat requests to the game server for all pending recalls."""
+    import ikabot.config as ikabot_config
+    q = _load_recall_queue()
+    pending = q.get("pending", [])
+    if not pending:
+        return
+    remaining = []
+    for item in pending:
+        time.sleep(random.randint(3, 8))
+        try:
+            url = (
+                "view=spyMissions&targetCityId={}&retreat=1&position={}"
+                "&currentCityId={}&activeTab=tabSafehouse&backgroundView=city"
+                "&templateView=safehouse&actionRequest={}&ajax=1".format(
+                    item["targetCityId"], item["position"],
+                    item["originCityId"], ikabot_config.actionRequest,
+                )
+            )
+            session.get(url)
+            logger.info("[espionage] recall enviado ao servidor: %s", item.get("cityName"))
+        except Exception:
+            logger.warning("[espionage] recall falhou para %s", item.get("cityName"), exc_info=True)
+            remaining.append(item)
+    q["pending"] = remaining
+    _save_recall_queue(q)
 
 
 def process_spy_cycle(session):
     """Progress all spy mission state machines. Called once per bot cycle."""
     for label, fn in [
+        ("process_recall_queue",      _process_recall_queue),
         ("check_spy_arrivals",        check_spy_arrivals),
         ("execute_waiting_missions",  execute_waiting_missions),
         ("collect_mission_results",   collect_mission_results),
