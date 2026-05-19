@@ -38,6 +38,53 @@ def _check_garrison_threshold(resources, settings):
     return total >= settings.get("garrisonThresholdTotal", _DEFAULT_GARRISON_THRESHOLD_TOTAL)
 
 
+PLAYER_MARKS_JSON_PATH = os.path.join(LOGS_DIR, "player_marks.json")
+WORLD_SCAN_JSON_PATH   = os.path.join(LOGS_DIR, "world_scan.json")
+
+
+def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
+    """Mark a city as 'ignorar' in player_marks.json (and db if available).
+    Looks up playerId from world_scan.json using city_id."""
+    try:
+        player_id = None
+        try:
+            with open(WORLD_SCAN_JSON_PATH) as f:
+                scan = json.load(f)
+            for p in scan.get("players", []):
+                if str(p.get("cityId")) == str(city_id):
+                    player_id = str(p["playerId"])
+                    break
+        except Exception:
+            pass
+        if not player_id:
+            return
+
+        mark_key = f"{player_id}_{island_x}_{island_y}"
+        now = int(time.time())
+        try:
+            from db_manager import DbManager
+            db = DbManager()
+            db.save_mark(mark_key, player_id, str(island_x), str(island_y), "ignorar", note)
+            return
+        except Exception:
+            pass
+        marks = {}
+        if os.path.exists(PLAYER_MARKS_JSON_PATH):
+            with open(PLAYER_MARKS_JSON_PATH) as f:
+                marks = json.load(f)
+        existing = marks.get(mark_key, {})
+        marks[mark_key] = {
+            "status": "ignorar", "note": note,
+            "updatedAt": now, "actions": existing.get("actions", []),
+        }
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(PLAYER_MARKS_JSON_PATH, "w") as f:
+            json.dump(marks, f, indent=2)
+        logger.info("[espionage] auto-ignorar %s (%s) — %s", player_name, city_id, note)
+    except Exception:
+        logger.warning("[espionage] _auto_mark_ignored falhou", exc_info=True)
+
+
 # ── Persistence helpers ───────────────────────────────────────────────────────
 
 def _load_missions():
@@ -1255,6 +1302,12 @@ def collect_mission_results(session):
                     missions[i]["state"] = "DONE"
                     logger.info("[espionage] armazém %s → recursos=%s — threshold não atingido, DONE",
                                 m["targetCityName"], resources)
+                    total = sum(resources.values())
+                    note = "Abaixo do threshold de saque (recursos: {:,})".format(total)
+                    _auto_mark_ignored(
+                        m.get("targetCityId"), m.get("targetPlayerName", ""),
+                        m.get("islandX"), m.get("islandY"), note,
+                    )
             else:
                 missions[i]["state"] = "FAILED"
                 missions[i]["error"] = "Missão de espionagem falhou"

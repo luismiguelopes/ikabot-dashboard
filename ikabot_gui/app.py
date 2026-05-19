@@ -361,6 +361,7 @@ def api_world_scan():
         player["mark"] = entry.get("status", "novo")
         player["markNote"] = entry.get("note", "")
         player["markActions"] = entry.get("actions", [])
+        player["markUpdatedAt"] = entry.get("updatedAt")
         player["isNew"] = pid not in prev_inactive_ids
     return jsonify(scan)
 

@@ -123,6 +123,7 @@ export interface WorldScanPlayer {
   scores?: { building?: string; research?: string; army?: string; trader?: string; rank?: string }
   mark: string
   markNote?: string
+  markUpdatedAt?: number
   markActions?: Array<{ ts: number; text: string }>
   isNew: boolean
 }
