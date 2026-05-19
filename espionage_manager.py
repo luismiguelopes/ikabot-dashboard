@@ -1768,6 +1768,22 @@ def import_existing_reports(session):
         scan_lookup.setdefault(key, []).append(p)
 
     missions_data = _load_missions()
+
+    # Remove previously imported synthetic missions that have no useful intel (arrival-only)
+    before = len(missions_data.get("missions", []))
+    missions_data["missions"] = [
+        m for m in missions_data.get("missions", [])
+        if not (
+            m.get("importedFromReport")
+            and m.get("state") == "DONE"
+            and not (m.get("result") or {}).get("resources")
+            and not (m.get("result") or {}).get("troops")
+        )
+    ]
+    removed = before - len(missions_data["missions"])
+    if removed:
+        logger.info("[espionage] import: %d missão(ões) sintética(s) sem intel removida(s)", removed)
+
     existing_missions = missions_data.get("missions", [])
 
     # Latest DONE reportedAt per targetCityId
@@ -1794,6 +1810,12 @@ def import_existing_reports(session):
         if not report.get("success"):
             n_failed += 1
             logger.debug("[espionage] import: relatório %s ignorado — missão falhou",
+                         report.get("reportId"))
+            continue
+        if not report.get("resources") and not report.get("troops"):
+            # Notificação de chegada ("o teu espião chegou") — sem dados de intel
+            n_failed += 1
+            logger.debug("[espionage] import: relatório %s ignorado — sem recursos nem tropas (chegada)",
                          report.get("reportId"))
             continue
         target_owner = report.get("targetOwner")
