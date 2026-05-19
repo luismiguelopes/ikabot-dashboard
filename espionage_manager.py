@@ -662,28 +662,35 @@ def _parse_reports_from_html(html):
                             chunk, re.DOTALL | re.IGNORECASE)
         target_owner = re.sub(r'<[^>]+>', '', owner_m.group(1)).strip() if owner_m else None
 
-        # City cell: <a href="...">CityName<br>[x:y]</a>
-        city_m = re.search(r'class=["\']targetCity[^"\']*["\'][^>]*>.*?<a[^>]*>(.*?)</a>',
+        # City cell — extract from href (most reliable) then fall back to link text
+        city_m = re.search(r'class=["\']targetCity[^"\']*["\'][^>]*>.*?<a\s([^>]*)>(.*?)</a>',
                            chunk, re.DOTALL | re.IGNORECASE)
         target_city = island_x = island_y = None
+        target_city_id_from_report = None
         if city_m:
-            city_inner = re.sub(r'<br\s*/?>', ' ', city_m.group(1), flags=re.IGNORECASE)
-            city_text = re.sub(r'<[^>]+>', '', city_inner)
-            city_text = re.sub(r'\s+', ' ', city_text).strip()
-            coord_m = re.search(r'\[(\d+):(\d+)\]', city_text)
-            if coord_m:
-                island_x = int(coord_m.group(1))
-                island_y = int(coord_m.group(2))
-                target_city = city_text[:city_text.rfind('[')].strip()
-            else:
-                target_city = city_text
-                logger.warning("[espionage] report %s: sem coordenadas em city_text=%r — raw_html=%r",
-                               report_id, city_text, city_m.group(0)[:300])
-        else:
-            # Log the chunk around targetCity so we can see the actual HTML structure
-            tc_m = re.search(r'.{0,200}targetCity.{0,200}', chunk, re.IGNORECASE | re.DOTALL)
-            logger.warning("[espionage] report %s: targetCity não encontrado — contexto: %r",
-                           report_id, tc_m.group(0)[:400] if tc_m else "(nenhum)")
+            attrs = city_m.group(1)
+            # xcoord/ycoord from href
+            xm = re.search(r'xcoord=(\d+)', attrs, re.IGNORECASE)
+            ym = re.search(r'ycoord=(\d+)', attrs, re.IGNORECASE)
+            cm = re.search(r'selectCity=(\d+)', attrs, re.IGNORECASE)
+            if xm and ym:
+                island_x = int(xm.group(1))
+                island_y = int(ym.group(1))
+            if cm:
+                target_city_id_from_report = cm.group(1)
+            # City name from link text
+            city_inner = re.sub(r'<br\s*/?>', ' ', city_m.group(2), flags=re.IGNORECASE)
+            city_text  = re.sub(r'<[^>]+>', '', city_inner)
+            city_text  = re.sub(r'\s+', ' ', city_text).strip()
+            # Strip trailing coord bracket from display name
+            bracket = re.search(r'\[\s*\d+\s*:\s*\d+\s*\]', city_text)
+            target_city = city_text[:bracket.start()].strip() if bracket else city_text
+            # Fallback: parse coords from text if href didn't have them
+            if island_x is None:
+                coord_m = re.search(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]', city_text)
+                if coord_m:
+                    island_x = int(coord_m.group(1))
+                    island_y = int(coord_m.group(2))
 
         success = bool(re.search(r'completada com sucesso|completed successfully',
                                  chunk, re.IGNORECASE))
@@ -715,6 +722,7 @@ def _parse_reports_from_html(html):
             "isUnread":       is_unread,
             "targetOwner":    target_owner,
             "targetCityName": target_city,
+            "targetCityId":   target_city_id_from_report,
             "islandX":        island_x,
             "islandY":        island_y,
             "success":        success,
@@ -1797,28 +1805,38 @@ def import_existing_reports(session):
                          report.get("reportId"), target_owner, island_x, island_y)
             continue
 
-        key = (target_owner.lower(), island_x, island_y)
-        candidates = scan_lookup.get(key, [])
-        if not candidates:
-            n_no_scan += 1
-            logger.debug("[espionage] import: %s [%s:%s] não está no world scan",
-                         target_owner, island_x, island_y)
-            continue
-
+        # Use cityId from report href directly (most reliable); fall back to world_scan lookup
+        target_city_id   = report.get("targetCityId") or ""
         city_name_report = report.get("targetCityName", "")
-        if len(candidates) == 1:
-            matched = candidates[0]
-        else:
-            matched = next(
-                (c for c in candidates if c.get("cityName", "").lower() == (city_name_report or "").lower()),
-                candidates[0]
-            )
+        island_id_str    = ""
 
-        target_city_id = str(matched.get("cityId", ""))
         if not target_city_id:
-            n_no_cid += 1
-            logger.debug("[espionage] import: %s — cityId em branco no world scan", target_owner)
-            continue
+            key = (target_owner.lower(), island_x, island_y)
+            candidates = scan_lookup.get(key, [])
+            if not candidates:
+                n_no_scan += 1
+                logger.debug("[espionage] import: %s [%s:%s] não está no world scan",
+                             target_owner, island_x, island_y)
+                continue
+            if len(candidates) == 1:
+                matched = candidates[0]
+            else:
+                matched = next(
+                    (c for c in candidates if c.get("cityName", "").lower() == (city_name_report or "").lower()),
+                    candidates[0]
+                )
+            target_city_id = str(matched.get("cityId", ""))
+            island_id_str  = str(matched.get("islandId", ""))
+            if not target_city_id:
+                n_no_cid += 1
+                logger.debug("[espionage] import: %s — cityId em branco no world scan", target_owner)
+                continue
+        else:
+            # Look up islandId from world_scan if available
+            key = (target_owner.lower(), island_x, island_y)
+            candidates = scan_lookup.get(key, [])
+            if candidates:
+                island_id_str = str(candidates[0].get("islandId", ""))
 
         reported_at = report.get("reportedAt", int(time.time()))
         if reported_at <= latest_done_ts.get(target_city_id, 0):
@@ -1839,9 +1857,9 @@ def import_existing_reports(session):
         synthetic = {
             "originCityId":       None,
             "targetCityId":       target_city_id,
-            "targetIslandId":     str(matched.get("islandId", "")),
-            "targetPlayerName":   matched.get("playerName", target_owner),
-            "targetCityName":     matched.get("cityName", city_name_report or ""),
+            "targetIslandId":     island_id_str,
+            "targetPlayerName":   target_owner,
+            "targetCityName":     city_name_report or "",
             "islandX":            island_x,
             "islandY":            island_y,
             "numAgents":          0,
@@ -1852,7 +1870,7 @@ def import_existing_reports(session):
             "missionType":        mtype,
             "result": {
                 "success":        True,
-                "targetCityName": matched.get("cityName", city_name_report or ""),
+                "targetCityName": city_name_report or "",
                 "warehouse":      res or {},
                 "resources":      res or {},
                 "troops":         troops,
