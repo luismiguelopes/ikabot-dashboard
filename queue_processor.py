@@ -172,14 +172,15 @@ def _secs_until_active():
 
 
 def _get_next_spy_eta():
-    """Return the earliest executeAfter among WAITING_AT_CITY spy missions, or None."""
+    """Return the earliest upcoming spy execution ETA across waiting missions."""
     try:
         from espionage_manager import _load_missions
-        etas = [
-            m["executeAfter"]
-            for m in _load_missions().get("missions", [])
-            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter")
-        ]
+        etas = []
+        for m in _load_missions().get("missions", []):
+            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter"):
+                etas.append(m["executeAfter"])
+            elif m.get("state") == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter"):
+                etas.append(m["garrisonExecuteAfter"])
         return min(etas) if etas else None
     except Exception:
         return None
