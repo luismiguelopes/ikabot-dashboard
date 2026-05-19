@@ -2196,9 +2196,9 @@ def process_auto_attack_waves(session, in_active_hours=True):
 
 def import_existing_reports(session):
     """
-    Fetch all existing espionage reports from the safehouse (shared across all cities)
-    and import successful ones as synthetic DONE missions into spy_missions.json.
-    Only one city with a safehouse is needed — the reports page is global.
+    Fetch all existing espionage reports from the safehouse and import them as
+    synthetic DONE missions. Warehouse and garrison reports for the same city are
+    merged into a single mission with garrisonResult populated.
     """
     try:
         with open(OWN_CITIES_PATH) as f:
@@ -2207,7 +2207,6 @@ def import_existing_reports(session):
         logger.warning("[espionage] import_existing_reports: own_cities.json não encontrado")
         return
 
-    # Find any city with a safehouse — reports page is shared, one request is enough
     origin = next(
         (c for c in own_cities if c.get("safehousePosition") is not None),
         None,
@@ -2224,6 +2223,10 @@ def import_existing_reports(session):
     all_reports = _fetch_all_reports(session, city_id, position)
     logger.info("[espionage] %d relatório(s) encontrado(s)", len(all_reports))
 
+    if not all_reports:
+        logger.info("[espionage] import_existing_reports: nenhum relatório encontrado")
+        return
+
     world_scan_path = os.path.join(LOGS_DIR, "world_scan.json")
     try:
         with open(world_scan_path) as f:
@@ -2232,7 +2235,6 @@ def import_existing_reports(session):
     except (FileNotFoundError, json.JSONDecodeError):
         scan_players = []
 
-    # Build lookup: (playerName.lower(), islandX, islandY) → [player dicts]
     scan_lookup: dict = {}
     for p in scan_players:
         key = (p.get("playerName", "").lower(), p.get("islandX"), p.get("islandY"))
@@ -2240,7 +2242,7 @@ def import_existing_reports(session):
 
     missions_data = _load_missions()
 
-    # Remove previously imported synthetic missions that have no useful intel (arrival-only)
+    # Remove previously imported synthetic missions that have no useful intel
     before = len(missions_data.get("missions", []))
     missions_data["missions"] = [
         m for m in missions_data.get("missions", [])
@@ -2249,56 +2251,44 @@ def import_existing_reports(session):
             and m.get("state") == "DONE"
             and not (m.get("result") or {}).get("resources")
             and not (m.get("result") or {}).get("troops")
+            and not m.get("garrisonResult")
         )
     ]
     removed = before - len(missions_data["missions"])
     if removed:
         logger.info("[espionage] import: %d missão(ões) sintética(s) sem intel removida(s)", removed)
 
-    existing_missions = missions_data.get("missions", [])
-
     # Latest DONE reportedAt per targetCityId
     latest_done_ts: dict = {}
-    for m in existing_missions:
+    for m in missions_data.get("missions", []):
         if m.get("state") == "DONE" and m.get("targetCityId"):
             cid = m["targetCityId"]
             ts = (m.get("result") or {}).get("reportedAt", m.get("dispatchedAt", 0))
             if ts > latest_done_ts.get(cid, 0):
                 latest_done_ts[cid] = ts
 
-    if not all_reports:
-        logger.info("[espionage] import_existing_reports: nenhum relatório encontrado")
-        return
-
-    imported  = 0
-    skipped   = 0
     n_failed  = 0
     n_no_data = 0
     n_no_scan = 0
     n_no_cid  = 0
 
+    # ── Pass 1: resolve city ID for every valid report ──────────────────────────
+    # resolved: list of (target_city_id, island_id_str, report)
+    resolved = []
     for report in all_reports.values():
         if not report.get("success"):
             n_failed += 1
-            logger.debug("[espionage] import: relatório %s ignorado — missão falhou",
-                         report.get("reportId"))
             continue
         if report.get("isArrival"):
-            # Notificação de chegada ("o teu espião chegou") — sem dados de intel
             n_failed += 1
-            logger.debug("[espionage] import: relatório %s ignorado — notificação de chegada",
-                         report.get("reportId"))
             continue
         target_owner = report.get("targetOwner")
         island_x     = report.get("islandX")
         island_y     = report.get("islandY")
         if not target_owner or island_x is None or island_y is None:
             n_no_data += 1
-            logger.debug("[espionage] import: relatório %s ignorado — owner/coords em falta (owner=%s x=%s y=%s)",
-                         report.get("reportId"), target_owner, island_x, island_y)
             continue
 
-        # Use cityId from report href directly (most reliable); fall back to world_scan lookup
         target_city_id   = report.get("targetCityId") or ""
         city_name_report = report.get("targetCityName", "")
         island_id_str    = ""
@@ -2308,53 +2298,94 @@ def import_existing_reports(session):
             candidates = scan_lookup.get(key, [])
             if not candidates:
                 n_no_scan += 1
-                logger.debug("[espionage] import: %s [%s:%s] não está no world scan",
-                             target_owner, island_x, island_y)
                 continue
-            if len(candidates) == 1:
-                matched = candidates[0]
-            else:
-                matched = next(
-                    (c for c in candidates if c.get("cityName", "").lower() == (city_name_report or "").lower()),
-                    candidates[0]
-                )
+            matched = next(
+                (c for c in candidates if c.get("cityName", "").lower() == (city_name_report or "").lower()),
+                candidates[0]
+            )
             target_city_id = str(matched.get("cityId", ""))
             island_id_str  = str(matched.get("islandId", ""))
             if not target_city_id:
                 n_no_cid += 1
-                logger.debug("[espionage] import: %s — cityId em branco no world scan", target_owner)
                 continue
         else:
-            # Look up islandId from world_scan if available
             key = (target_owner.lower(), island_x, island_y)
             candidates = scan_lookup.get(key, [])
             if candidates:
                 island_id_str = str(candidates[0].get("islandId", ""))
 
-        reported_at = report.get("reportedAt", int(time.time()))
+        resolved.append((target_city_id, island_id_str, report))
+
+    # ── Pass 2: group by city — keep latest warehouse + latest garrison ─────────
+    # warehouse: reports with resources; garrison: reports where troops is not None
+    warehouse_by_city: dict = {}  # city_id → (island_id_str, report)
+    garrison_by_city:  dict = {}  # city_id → report
+
+    for target_city_id, island_id_str, report in resolved:
+        reported_at = report.get("reportedAt", 0)
+        if report.get("troops") is not None:
+            # garrison report (troops={} means empty garrison, still a valid report)
+            existing = garrison_by_city.get(target_city_id)
+            if existing is None or reported_at > existing.get("reportedAt", 0):
+                garrison_by_city[target_city_id] = report
+        else:
+            # warehouse report
+            existing = warehouse_by_city.get(target_city_id)
+            if existing is None or reported_at > existing[1].get("reportedAt", 0):
+                warehouse_by_city[target_city_id] = (island_id_str, report)
+
+    # ── Pass 3: build one synthetic mission per city ────────────────────────────
+    all_city_ids = set(warehouse_by_city) | set(garrison_by_city)
+    imported = 0
+    skipped  = 0
+
+    for target_city_id in all_city_ids:
+        w_entry  = warehouse_by_city.get(target_city_id)
+        g_report = garrison_by_city.get(target_city_id)
+
+        if w_entry:
+            island_id_str, w_report = w_entry
+            base_report = w_report
+        else:
+            # garrison-only city — use garrison report as base
+            island_id_str = ""
+            base_report   = g_report
+
+        reported_at = max(
+            w_entry[1].get("reportedAt", 0) if w_entry else 0,
+            g_report.get("reportedAt", 0)   if g_report else 0,
+        ) or int(time.time())
+
         if reported_at <= latest_done_ts.get(target_city_id, 0):
             skipped += 1
             continue
 
-        res    = report.get("resources")
-        troops = report.get("troops")
-        if res and troops:
-            mtype = "warehouse+troops"
+        res    = (w_entry[1].get("resources") if w_entry else None)
+        troops = g_report.get("troops") if g_report else None  # None or {} or {unit: count}
+
+        if res and troops is not None:
+            mtype = "warehouse+garrison"
         elif res:
             mtype = "warehouse"
-        elif troops:
-            mtype = "troops"
         else:
-            mtype = "warehouse"
+            mtype = "garrison"
+
+        garrison_result = None
+        if g_report is not None:
+            garrison_result = {
+                "troops":         troops,
+                "targetCityName": g_report.get("targetCityName", base_report.get("targetCityName", "")),
+                "reportedAt":     g_report.get("reportedAt", reported_at),
+            }
 
         synthetic = {
             "originCityId":       None,
             "targetCityId":       target_city_id,
             "targetIslandId":     island_id_str,
-            "targetPlayerName":   target_owner,
-            "targetCityName":     city_name_report or "",
-            "islandX":            island_x,
-            "islandY":            island_y,
+            "targetPlayerName":   base_report.get("targetOwner", ""),
+            "targetCityName":     base_report.get("targetCityName", ""),
+            "islandX":            base_report.get("islandX"),
+            "islandY":            base_report.get("islandY"),
             "numAgents":          0,
             "state":              "DONE",
             "dispatchedAt":       reported_at,
@@ -2363,17 +2394,15 @@ def import_existing_reports(session):
             "missionType":        mtype,
             "result": {
                 "success":        True,
-                "targetCityName": city_name_report or "",
-                "warehouse":      res or {},
+                "targetCityName": base_report.get("targetCityName", ""),
                 "resources":      res or {},
-                "troops":         troops,
                 "reportedAt":     reported_at,
             },
-            "garrisonResult": None,
+            "garrisonResult":     garrison_result,
             "importedFromReport": True,
         }
 
-        # Remove any older synthetic DONE for this city
+        # Replace any older synthetic DONE for this city
         missions_data["missions"] = [
             m for m in missions_data["missions"]
             if not (m.get("targetCityId") == target_city_id
