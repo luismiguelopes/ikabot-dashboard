@@ -136,12 +136,8 @@ def _parse_safehouse_page(html, city_name):
     # derive available from known values when not shown directly:
     # available = total_trained - inDefense - deployed - inTraining
     # total_trained is not directly available; compute when all three are known
-    if counts["available"] is None and None not in (
-        counts["deployed"], counts["inDefense"], counts["inTraining"]
-    ):
-        # log relevant text to find total_trained pattern if needed later
-        logger.debug("[espionage] %s: deployed=%s defense=%s training=%s — available desconhecido",
-                     city_name, counts["deployed"], counts["inDefense"], counts["inTraining"])
+    # O HTML do jogo não tem linha explícita de "disponíveis" — inDefense é o campo correcto
+    # para espiões livres ("a trabalhar na defesa" = na cidade, disponíveis para dispatch)
 
     # log relevant text snippet when inDefense or deployed are still missing
     if counts["inDefense"] is None or counts["deployed"] is None:
