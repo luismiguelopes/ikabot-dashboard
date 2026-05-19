@@ -666,6 +666,13 @@ def _parse_reports_from_html(html):
                 target_city = city_text[:city_text.rfind('[')].strip()
             else:
                 target_city = city_text
+                logger.warning("[espionage] report %s: sem coordenadas em city_text=%r — raw_html=%r",
+                               report_id, city_text, city_m.group(0)[:300])
+        else:
+            # Log the chunk around targetCity so we can see the actual HTML structure
+            tc_m = re.search(r'.{0,200}targetCity.{0,200}', chunk, re.IGNORECASE | re.DOTALL)
+            logger.warning("[espionage] report %s: targetCity não encontrado — contexto: %r",
+                           report_id, tc_m.group(0)[:400] if tc_m else "(nenhum)")
 
         success = bool(re.search(r'completada com sucesso|completed successfully',
                                  chunk, re.IGNORECASE))
