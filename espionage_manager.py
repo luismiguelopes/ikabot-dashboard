@@ -529,7 +529,14 @@ def process_dispatch_queue(session):
             num_agents=num_agents,
             num_decoys=item.get("numDecoys", 0),
         )
-        if not ok:
+        if ok:
+            # Decrementar em memória para que o pre-check funcione correctamente
+            # nos dispatches seguintes da mesma batch (spy_data carregado uma vez)
+            entry = spy_data.setdefault(origin_id, {})
+            for key in ("inDefense", "available"):
+                if entry.get(key) is not None:
+                    entry[key] = max(0, entry[key] - num_agents)
+        else:
             _append_failed_mission(item, result)
             logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
                            item["targetPlayerName"], result)
