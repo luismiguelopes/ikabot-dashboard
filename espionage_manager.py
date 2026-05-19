@@ -695,6 +695,11 @@ def _parse_reports_from_html(html):
         success = bool(re.search(r'completada com sucesso|completed successfully',
                                  chunk, re.IGNORECASE))
 
+        # Detect arrival-only notification ("O teu espião chegou a X")
+        is_arrival = bool(re.search(
+            r'o teu espi[aã]o chegou\b|your spy (?:has )?arrived',
+            chunk, re.IGNORECASE))
+
         resources = {}
         res_table_m = re.search(
             r'<table[^>]+class=["\'][^"\']*resourcesTable[^"\']*["\'][^>]*>(.*?)</table>',
@@ -720,6 +725,7 @@ def _parse_reports_from_html(html):
         results[report_id] = {
             "reportId":       report_id,
             "isUnread":       is_unread,
+            "isArrival":      is_arrival,
             "targetOwner":    target_owner,
             "targetCityName": target_city,
             "targetCityId":   target_city_id_from_report,
@@ -1812,10 +1818,10 @@ def import_existing_reports(session):
             logger.debug("[espionage] import: relatório %s ignorado — missão falhou",
                          report.get("reportId"))
             continue
-        if not report.get("resources") and not report.get("troops"):
+        if report.get("isArrival"):
             # Notificação de chegada ("o teu espião chegou") — sem dados de intel
             n_failed += 1
-            logger.debug("[espionage] import: relatório %s ignorado — sem recursos nem tropas (chegada)",
+            logger.debug("[espionage] import: relatório %s ignorado — notificação de chegada",
                          report.get("reportId"))
             continue
         target_owner = report.get("targetOwner")
