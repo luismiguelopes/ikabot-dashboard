@@ -1209,14 +1209,20 @@ def collect_mission_results(session):
             continue
 
         matched = False
-        target = (m.get("targetCityName") or "").lower()
-        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:5]:
+        target     = (m.get("targetCityName") or "").lower()
+        target_cid = str(m.get("targetCityId", ""))
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
             report = reports[rid]
             if not report.get("resources"):
                 continue
-            found = (report.get("targetCityName") or "").lower()
-            if target and found and target[:6] not in found and found[:6] not in target:
-                continue
+            report_cid = report.get("targetCityId")
+            if report_cid and target_cid:
+                if str(report_cid) != target_cid:
+                    continue
+            else:
+                found = (report.get("targetCityName") or "").lower()
+                if target and found and target[:6] not in found and found[:6] not in target:
+                    continue
 
             missions[i]["result"] = report
 
@@ -1333,14 +1339,20 @@ def collect_garrison_results(session):
             continue
 
         matched = False
-        target = (m.get("targetCityName") or "").lower()
-        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:5]:
+        target     = (m.get("targetCityName") or "").lower()
+        target_cid = str(m.get("targetCityId", ""))
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
             report = reports[rid]
             if not report.get("troops"):
                 continue
-            found = (report.get("targetCityName") or "").lower()
-            if target and found and target[:6] not in found and found[:6] not in target:
-                continue
+            report_cid = report.get("targetCityId")
+            if report_cid and target_cid:
+                if str(report_cid) != target_cid:
+                    continue
+            else:
+                found = (report.get("targetCityName") or "").lower()
+                if target and found and target[:6] not in found and found[:6] not in target:
+                    continue
             missions[i]["state"] = "DONE"
             missions[i]["garrisonResult"] = report
             logger.info("[espionage] garrison %s → tropas=%s",
