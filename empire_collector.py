@@ -126,7 +126,7 @@ def collect_city_data(session, ids, cities):
     own_cities_list = []
 
     for id in random.sample(ids, len(ids)):
-        time.sleep(random.randint(5, 15))
+        time.sleep(random.randint(2, 7))
 
         try:
             html      = with_retry(lambda: session.get("view=city&cityId={}".format(id)),
