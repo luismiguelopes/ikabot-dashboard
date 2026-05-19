@@ -987,8 +987,10 @@ def api_espionage_force_warehouse():
             data["missions"] = missions
             _save_json(SPY_MISSIONS_PATH, data)
             return jsonify({"ok": True})
+        if m.get("state") in ("EXECUTING_WAREHOUSE", "EXECUTING_GARRISON"):
+            return jsonify({"ok": True, "message": "Missão já em execução"})
 
-    return jsonify({"error": "Nenhum espião à espera nessa cidade"}), 404
+    return jsonify({"error": "Nenhum espião estacionado nessa cidade"}), 404
 
 
 @app.route("/api/espionage/recall-spy", methods=["POST"])
