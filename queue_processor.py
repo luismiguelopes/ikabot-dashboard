@@ -171,18 +171,35 @@ def _secs_until_active():
     return (24 - h + start) * 3600 - m * 60 - s
 
 
+def _get_next_spy_eta():
+    """Return the earliest executeAfter among WAITING_AT_CITY spy missions, or None."""
+    try:
+        from espionage_manager import _load_missions
+        etas = [
+            m["executeAfter"]
+            for m in _load_missions().get("missions", [])
+            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter")
+        ]
+        return min(etas) if etas else None
+    except Exception:
+        return None
+
+
 def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
     """Sleep until the next full empire cycle, next construction ETA, or next transport arrival, whichever is soonest."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
     q = _load_queue()  # single load — reused by all helpers below
     construction_eta = _get_next_construction_eta(q)
     transport_eta = _get_next_transport_eta(q)
+    spy_eta = _get_next_spy_eta()
 
     eta = None
     if construction_eta:
         eta = construction_eta
     if transport_eta:
         eta = min(eta, transport_eta) if eta else transport_eta
+    if spy_eta:
+        eta = min(eta, spy_eta) if eta else spy_eta
 
     if eta and _in_active_hours():
         wake_for_queue = eta + random.randint(3, 8) * 60
