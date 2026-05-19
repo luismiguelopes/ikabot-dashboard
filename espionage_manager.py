@@ -1256,7 +1256,7 @@ def collect_mission_results(session):
     for i, m in enumerate(missions):
         if m.get("state") not in ("EXECUTING", "EXECUTING_WAREHOUSE"):
             continue
-        if now - m.get("executedAt", 0) < 600:
+        if now - m.get("executedAt", 0) < random.randint(60, 300):
             continue
 
         origin_id = str(m["originCityId"])
@@ -1292,7 +1292,7 @@ def collect_mission_results(session):
                 settings  = _load_espionage_settings()
                 resources = report.get("resources") or {}
                 if _check_garrison_threshold(resources, settings):
-                    delay_min = random.randint(5, 15)
+                    delay_min = random.randint(1, 5)
                     missions[i]["state"] = "WAITING_FOR_GARRISON"
                     missions[i]["garrisonExecuteAfter"] = now + delay_min * 60
                     missions[i]["garrisonExecutedAt"]   = None
@@ -1392,7 +1392,7 @@ def collect_garrison_results(session):
     for i, m in enumerate(missions):
         if m.get("state") != "EXECUTING_GARRISON":
             continue
-        if now - m.get("garrisonExecutedAt", 0) < 600:
+        if now - m.get("garrisonExecutedAt", 0) < random.randint(60, 300):
             continue
 
         origin_id = str(m["originCityId"])
