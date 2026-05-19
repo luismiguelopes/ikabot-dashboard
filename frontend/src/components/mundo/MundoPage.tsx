@@ -452,6 +452,8 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
   const [attackWaves,    setAttackWaves]    = useState<AttackWaveEntry[]>([])
   const [minLootTotal,   setMinLootTotal]   = useState(50000)
   const [ignoredKeys,    setIgnoredKeys]    = useState<Set<string>>(new Set())
+  const [confirmModal,   setConfirmModal]   = useState<{ action: 'force-warehouse' | 'recall', player: EnrichedPlayer } | null>(null)
+  const [toast,          setToast]          = useState<{ msg: string; ok: boolean } | null>(null)
 
   useEffect(() => {
     if (!scanData?.players) return
@@ -503,21 +505,36 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     return map
   }, [attackWaves])
 
+  const showToast = useCallback((msg: string, ok: boolean) => {
+    setToast({ msg, ok })
+    setTimeout(() => setToast(null), 4000)
+  }, [])
+
   const handleForceWarehouse = useCallback((p: EnrichedPlayer) => {
-    fetch('/api/espionage/force-warehouse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cityId: p.cityId }),
-    }).catch(() => {})
+    setConfirmModal({ action: 'force-warehouse', player: p })
   }, [])
 
   const handleRecallSpy = useCallback((p: EnrichedPlayer) => {
-    fetch('/api/espionage/recall-spy', {
+    setConfirmModal({ action: 'recall', player: p })
+  }, [])
+
+  const handleConfirmAction = useCallback(() => {
+    if (!confirmModal) return
+    const { action, player } = confirmModal
+    setConfirmModal(null)
+    const url = action === 'force-warehouse' ? '/api/espionage/force-warehouse' : '/api/espionage/recall-spy'
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cityId: p.cityId }),
-    }).catch(() => {})
-  }, [])
+      body: JSON.stringify({ cityId: player.cityId }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) showToast(action === 'force-warehouse' ? `Inspecção agendada — ${player.cityName}` : `Espião chamado de volta — ${player.cityName}`, true)
+        else showToast(d.error || 'Erro', false)
+      })
+      .catch(() => showToast('Erro de rede', false))
+  }, [confirmModal, showToast])
 
   const handleIgnore = useCallback((p: EnrichedPlayer) => {
     setIgnoredKeys(prev => new Set([...prev, p.pKey]))
@@ -933,6 +950,48 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
           {t('attack_queued', { player: attackOk })}
         </div>
       )}
+
+      {/* Confirmation modal for force-warehouse and recall */}
+      {confirmModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
+            <p className="text-sm font-semibold text-slate-800 mb-1">
+              {confirmModal.action === 'force-warehouse' ? t('btn_force_warehouse') : t('btn_recall_spy')}
+            </p>
+            <p className="text-sm text-slate-500 mb-5">
+              {confirmModal.player.cityName}
+              {ambiguousCityKeys.has(`${confirmModal.player.playerName}|${confirmModal.player.cityName}`) && (
+                <span className="text-slate-400 text-xs ml-1">({confirmModal.player.cityId})</span>
+              )}
+              {' '}— {confirmModal.player.playerName}
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={handleConfirmAction}
+                className={`px-4 py-2 text-sm text-white rounded-lg transition-colors ${
+                  confirmModal.action === 'recall' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-amber-500 hover:bg-amber-600'
+                }`}
+              >
+                {t('confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm text-white ${toast.ok ? 'bg-emerald-500' : 'bg-red-500'}`}>
+          <i className={`fa-solid ${toast.ok ? 'fa-check' : 'fa-xmark'}`} />
+          {toast.msg}
+        </div>
+      )}
     </div>
   )
 }
@@ -1320,6 +1379,12 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   }, [])
 
   useEffect(() => { fetchScan(); fetchStatus() }, [fetchScan, fetchStatus])
+
+  // Re-fetch scan data every 60s so auto-marks and new scan results appear without page reload
+  useEffect(() => {
+    const id = setInterval(fetchScan, 60000)
+    return () => clearInterval(id)
+  }, [fetchScan])
 
   useEffect(() => {
     if (scanStatus?.status !== 'running') return
