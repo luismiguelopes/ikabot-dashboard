@@ -463,6 +463,25 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "result":            None,
     }
 
+    # Fetch missions view immediately to read the arrival countdown
+    if safehouse_pos is not None:
+        try:
+            time.sleep(random.randint(3, 7))
+            _, missions_html = _fetch_spy_missions_view(
+                session, origin_city_id, target_city_id, safehouse_pos)
+            countdown_secs = _parse_arrival_countdown(missions_html)
+            if countdown_secs is not None:
+                arrival_ts = int(time.time()) + countdown_secs
+                jitter = random.randint(5, 15) * 60
+                mission["executeAfter"] = arrival_ts + jitter
+                logger.info("[espionage] chegada de %s em ~%dm → executar em %dm total",
+                            target_city_name, countdown_secs // 60,
+                            (countdown_secs + jitter) // 60)
+            else:
+                logger.debug("[espionage] countdown não encontrado na HTML — usará polling normal")
+        except Exception as e:
+            logger.debug("[espionage] fetch pós-dispatch falhou: %s", e)
+
     data = _load_missions()
     data["missions"].append(mission)
     _save_missions(data)
@@ -534,6 +553,31 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
             break
 
     return spy_count, html
+
+
+def _parse_arrival_countdown(html):
+    """
+    Parse 'Chegada Xh Ym Zs' countdown from spyMissions HTML.
+    Returns seconds as int, or None if not found.
+    Formats seen: '02m 56s', '1h 23m', '45s', '1h 23m 10s'
+    """
+    import re
+    if not html:
+        return None
+    m = re.search(
+        r'Chegada\s*'
+        r'(?:(\d+)\s*h\s*)?'
+        r'(?:(\d+)\s*m\s*)?'
+        r'(?:(\d+)\s*s)?',
+        html, re.IGNORECASE
+    )
+    if not m or not any(m.groups()):
+        return None
+    h = int(m.group(1) or 0)
+    mins = int(m.group(2) or 0)
+    secs = int(m.group(3) or 0)
+    total = h * 3600 + mins * 60 + secs
+    return total if total > 0 else None
 
 
 def _parse_spy_session_id(html):
@@ -827,12 +871,23 @@ def check_spy_arrivals(session):
     data = _load_missions()
     missions = data.get("missions", [])
     changed = False
+    now = time.time()
 
     for i, m in enumerate(missions):
         if m.get("state") != "TRAVELING":
             continue
-        if time.time() - m.get("dispatchedAt", 0) < 1200:  # min 20 min
-            continue
+
+        execute_after = m.get("executeAfter")
+
+        if execute_after:
+            # Arrival time known from post-dispatch fetch — skip polling until close to execute time.
+            # Check 2 min before execution to confirm spy is there and get session ID.
+            if now < execute_after - 120:
+                continue
+        else:
+            # No arrival time known — fall back to polling after minimum 20 min
+            if now - m.get("dispatchedAt", 0) < 1200:
+                continue
 
         origin_id = str(m["originCityId"])
         position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
@@ -848,19 +903,32 @@ def check_spy_arrivals(session):
         if spy_count > 0:
             spy_id = _parse_spy_session_id(html)
             missions[i]["state"] = "WAITING_AT_CITY"
-            missions[i]["arrivedAt"] = int(time.time())
+            missions[i]["arrivedAt"] = int(now)
             missions[i]["safehousePosition"] = position
             missions[i]["spySessionId"] = spy_id
-            missions[i]["executeAfter"] = int(time.time()) + random.randint(5, 15) * 60
+            # Keep existing executeAfter if already set (from post-dispatch fetch);
+            # otherwise assign a fresh random delay now
+            if not execute_after:
+                missions[i]["executeAfter"] = int(now) + random.randint(5, 15) * 60
             logger.info("[espionage] espiões chegaram a %s (spy_id=%s) — executar em %dmin",
                         m["targetCityName"], spy_id,
-                        (missions[i]["executeAfter"] - int(time.time())) // 60)
+                        max(0, (missions[i]["executeAfter"] - int(now)) // 60))
             changed = True
-        elif time.time() - m.get("dispatchedAt", 0) > 43200:  # 12h no arrival → failed
+        elif now - m.get("dispatchedAt", 0) > 43200:  # 12h no arrival → failed
             missions[i]["state"] = "FAILED"
             missions[i]["error"] = "Sem chegada detectada após 12h — possivelmente capturado"
             logger.warning("[espionage] %s: sem chegada após 12h → FAILED", m["targetCityName"])
             changed = True
+        elif execute_after and now >= execute_after - 120:
+            # Expected arrival time passed but spy not found — refresh countdown
+            countdown = _parse_arrival_countdown(html or "")
+            if countdown:
+                new_eta = int(now) + countdown
+                jitter = random.randint(5, 15) * 60
+                missions[i]["executeAfter"] = new_eta + jitter
+                logger.info("[espionage] %s ainda em viagem — chegada actualizada: +%dm",
+                            m["targetCityName"], (new_eta + jitter - int(now)) // 60)
+                changed = True
 
     if changed:
         data["missions"] = missions
