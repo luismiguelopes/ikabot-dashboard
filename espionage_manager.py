@@ -1022,7 +1022,8 @@ def _parse_reports_from_html(html):
 
         troops = None
         if re.search(r'Tropas\s+em\b|Frotas\s+em\b', chunk, re.IGNORECASE):
-            troops = _parse_garrison_troops(chunk) or None
+            # Keep {} for empty garrison — distinguishes "garrison checked, no troops" from "not a garrison report"
+            troops = _parse_garrison_troops(chunk)
 
         results[report_id] = {
             "reportId":       report_id,
@@ -1410,8 +1411,8 @@ def collect_garrison_results(session):
         target_cid = str(m.get("targetCityId", ""))
         for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
             report = reports[rid]
-            if not report.get("troops"):
-                continue
+            if report.get("troops") is None:
+                continue  # None = not a garrison report (warehouse report); {} = garrison with no troops
             report_cid = report.get("targetCityId")
             if report_cid and target_cid:
                 if str(report_cid) != target_cid:

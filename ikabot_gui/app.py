@@ -6,7 +6,6 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     import db_manager as _db
 except Exception:
@@ -358,7 +357,7 @@ def api_world_scan():
     for player in scan.get("players", []):
         pid = player["playerId"]
         mk = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
-        entry = marks.get(mk, {})
+        entry = marks.get(mk) or marks.get(str(pid), {})
         player["mark"] = entry.get("status", "novo")
         player["markNote"] = entry.get("note", "")
         player["markActions"] = entry.get("actions", [])
@@ -946,18 +945,65 @@ def api_espionage_import_reports():
     return jsonify({"status": "queued"})
 
 
+SPY_MISSIONS_PATH      = os.path.join(LOGS_DIR, "spy_missions.json")
+SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
+SPY_RECALL_QUEUE_PATH   = os.path.join(LOGS_DIR, "spy_recall_queue.json")
+
+
+def _load_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+
+def _save_json(path, data):
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 @app.route("/api/espionage/force-warehouse", methods=["POST"])
 def api_espionage_force_warehouse():
-    body   = request.get_json(force=True)
+    body    = request.get_json(force=True)
     city_id = str(body.get("cityId", ""))
     if not city_id:
         return jsonify({"error": "cityId required"}), 400
-    try:
-        from espionage_manager import force_warehouse_mission
-        force_warehouse_mission(city_id)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+    data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
+    missions = data.get("missions", [])
+    for i, m in enumerate(missions):
+        if m.get("state") == "WAITING_AT_CITY" and str(m.get("targetCityId", "")) == city_id:
+            missions[i]["executeAfter"] = int(time.time()) - 1
+            data["missions"] = missions
+            _save_json(SPY_MISSIONS_PATH, data)
+            return jsonify({"ok": True})
+
+    # Spy not waiting — queue a new dispatch (re-inspect after DONE)
+    scan = _load_json(WORLD_SCAN_JSON_PATH, {})
+    city = next((p for p in scan.get("players", []) if str(p.get("cityId")) == city_id), None)
+    if not city:
+        return jsonify({"error": "Cidade não encontrada no world scan"}), 404
+    spy_data = _load_json(SPY_COUNTS_PATH, {}).get("byCityId", {})
+    best_origin = max(spy_data.items(), key=lambda kv: kv[1].get("inDefense") or 0, default=(None, {}))[0]
+    if not best_origin:
+        return jsonify({"error": "Nenhuma cidade de origem com espiões disponíveis"}), 400
+    queue = _load_json(SPY_DISPATCH_QUEUE_PATH, {"pending": []})
+    queue.setdefault("pending", []).append({
+        "targetCityId":     city_id,
+        "targetPlayerName": city.get("playerName", ""),
+        "targetCityName":   city.get("cityName", ""),
+        "islandId":         str(city.get("islandId", "")),
+        "islandX":          city.get("islandX"),
+        "islandY":          city.get("islandY"),
+        "originCityId":     best_origin,
+        "numAgents":        1,
+        "numDecoys":        0,
+        "queuedAt":         int(time.time()),
+    })
+    _save_json(SPY_DISPATCH_QUEUE_PATH, queue)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/espionage/recall-spy", methods=["POST"])
@@ -966,12 +1012,32 @@ def api_espionage_recall_spy():
     city_id = str(body.get("cityId", ""))
     if not city_id:
         return jsonify({"error": "cityId required"}), 400
-    try:
-        from espionage_manager import recall_spy_mission
-        recall_spy_mission(city_id)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+    data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
+    missions = data.get("missions", [])
+    now      = int(time.time())
+    changed  = False
+    for i, m in enumerate(missions):
+        if m.get("state") in ("TRAVELING", "WAITING_AT_CITY") and str(m.get("targetCityId", "")) == city_id:
+            missions[i]["state"]      = "RECALLED"
+            missions[i]["recalledAt"] = now
+            origin_id = str(m.get("originCityId", ""))
+            position  = m.get("safehousePosition")
+            if origin_id and position:
+                q = _load_json(SPY_RECALL_QUEUE_PATH, {"pending": []})
+                q.setdefault("pending", []).append({
+                    "targetCityId": city_id,
+                    "originCityId": origin_id,
+                    "position":     position,
+                    "cityName":     m.get("targetCityName", ""),
+                    "queuedAt":     now,
+                })
+                _save_json(SPY_RECALL_QUEUE_PATH, q)
+            changed = True
+    if changed:
+        data["missions"] = missions
+        _save_json(SPY_MISSIONS_PATH, data)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/health")

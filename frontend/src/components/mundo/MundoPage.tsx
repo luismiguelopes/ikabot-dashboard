@@ -739,13 +739,15 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                               <i className="fa-solid fa-file-lines" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
-                          <button
-                            onClick={() => handleForceWarehouse(p)}
-                            title={t('btn_force_warehouse')}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                          >
-                            <i className="fa-solid fa-magnifying-glass" />
-                          </button>
+                          {(p.mission?.state === 'WAITING_AT_CITY' || p.priority === 3) ? (
+                            <button
+                              onClick={() => handleForceWarehouse(p)}
+                              title={t('btn_force_warehouse')}
+                              className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-amber-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                            >
+                              <i className="fa-solid fa-magnifying-glass" />
+                            </button>
+                          ) : <span className="block w-7 h-7" />}
                           <button
                             onClick={() => handleRecallSpy(p)}
                             title={t('btn_recall_spy')}
