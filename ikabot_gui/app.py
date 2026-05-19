@@ -338,16 +338,22 @@ def api_world_scan():
         return jsonify({"error": "world_scan.json não encontrado. Aguarda o primeiro scan semanal ou força um."}), 404
     with open(WORLD_SCAN_JSON_PATH) as f:
         scan = json.load(f)
-    # Load marks from SQLite with JSON fallback
+    # Merge marks from DB and JSON — JSON wins on conflict (bot writes there)
     marks = {}
     if _db:
         try:
             marks = _db.get_all_marks()
         except Exception:
             pass
-    if not marks and os.path.exists(PLAYER_MARKS_JSON_PATH):
-        with open(PLAYER_MARKS_JSON_PATH) as f:
-            marks = json.load(f)
+    if os.path.exists(PLAYER_MARKS_JSON_PATH):
+        try:
+            with open(PLAYER_MARKS_JSON_PATH) as f:
+                json_marks = json.load(f)
+            for k, v in json_marks.items():
+                if k not in marks or v.get("updatedAt", 0) > marks[k].get("updatedAt", 0):
+                    marks[k] = v
+        except Exception:
+            pass
     # Build set of player IDs that were already inactive in the previous scan
     prev_inactive_ids = set()
     if os.path.exists(WORLD_SCAN_PREV_PATH):
