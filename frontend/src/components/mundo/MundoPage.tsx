@@ -739,7 +739,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                               <i className="fa-solid fa-file-lines" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
-                          {(p.mission?.state === 'WAITING_AT_CITY' || p.priority === 3) ? (
+                          {(p.mission?.state === 'WAITING_AT_CITY' || p.mission?.state === 'WAITING_FOR_GARRISON') ? (
                             <button
                               onClick={() => handleForceWarehouse(p)}
                               title={t('btn_force_warehouse')}

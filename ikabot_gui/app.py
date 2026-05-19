@@ -973,37 +973,22 @@ def api_espionage_force_warehouse():
 
     data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
     missions = data.get("missions", [])
+    now      = int(time.time())
     for i, m in enumerate(missions):
-        if m.get("state") == "WAITING_AT_CITY" and str(m.get("targetCityId", "")) == city_id:
-            missions[i]["executeAfter"] = int(time.time()) - 1
+        if str(m.get("targetCityId", "")) != city_id:
+            continue
+        if m.get("state") == "WAITING_AT_CITY":
+            missions[i]["executeAfter"] = now - 1
+            data["missions"] = missions
+            _save_json(SPY_MISSIONS_PATH, data)
+            return jsonify({"ok": True})
+        if m.get("state") == "WAITING_FOR_GARRISON":
+            missions[i]["garrisonExecuteAfter"] = now - 1
             data["missions"] = missions
             _save_json(SPY_MISSIONS_PATH, data)
             return jsonify({"ok": True})
 
-    # Spy not waiting — queue a new dispatch (re-inspect after DONE)
-    scan = _load_json(WORLD_SCAN_JSON_PATH, {})
-    city = next((p for p in scan.get("players", []) if str(p.get("cityId")) == city_id), None)
-    if not city:
-        return jsonify({"error": "Cidade não encontrada no world scan"}), 404
-    spy_data = _load_json(SPY_COUNTS_PATH, {}).get("byCityId", {})
-    best_origin = max(spy_data.items(), key=lambda kv: kv[1].get("inDefense") or 0, default=(None, {}))[0]
-    if not best_origin:
-        return jsonify({"error": "Nenhuma cidade de origem com espiões disponíveis"}), 400
-    queue = _load_json(SPY_DISPATCH_QUEUE_PATH, {"pending": []})
-    queue.setdefault("pending", []).append({
-        "targetCityId":     city_id,
-        "targetPlayerName": city.get("playerName", ""),
-        "targetCityName":   city.get("cityName", ""),
-        "islandId":         str(city.get("islandId", "")),
-        "islandX":          city.get("islandX"),
-        "islandY":          city.get("islandY"),
-        "originCityId":     best_origin,
-        "numAgents":        1,
-        "numDecoys":        0,
-        "queuedAt":         int(time.time()),
-    })
-    _save_json(SPY_DISPATCH_QUEUE_PATH, queue)
-    return jsonify({"ok": True})
+    return jsonify({"error": "Nenhum espião à espera nessa cidade"}), 404
 
 
 @app.route("/api/espionage/recall-spy", methods=["POST"])
