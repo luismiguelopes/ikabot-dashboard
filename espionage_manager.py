@@ -582,6 +582,22 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
     """
     import ikabot.config as ikabot_config
 
+    # Mudar para a cidade de origem antes do dispatch (estabelece contexto de sessão)
+    try:
+        session.post(params={
+            "action":          "header",
+            "function":        "changeCurrentCity",
+            "actionRequest":   ikabot_config.actionRequest,
+            "oldView":         "city",
+            "cityId":          str(origin_city_id),
+            "backgroundView":  "city",
+            "currentCityId":   str(origin_city_id),
+            "ajax":            "1",
+        })
+        time.sleep(random.randint(2, 5))
+    except Exception:
+        pass
+
     params = {
         "action": "Espionage",
         "function": "sendSpy",
