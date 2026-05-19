@@ -156,11 +156,183 @@ def _parse_safehouse_page(html, city_name):
     return counts
 
 
+def _parse_active_spy_missions(html):
+    """
+    Parse active spy deployments from safehouse overview HTML.
+    Returns list of {cityId, x, y, cityName, state, countdown_secs}.
+    state: 'WAITING_AT_CITY' | 'TRAVELING'
+    """
+    import re
+    if not html:
+        return []
+
+    STATIONED = re.compile(r'esperam\s+novas\s+ordens', re.IGNORECASE)
+    TRAVELING = re.compile(r'est[aá]\s+a\s+caminho', re.IGNORECASE)
+    COUNTDOWN = re.compile(
+        r'Chegada\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s)?',
+        re.IGNORECASE
+    )
+
+    # Split into TR-level chunks; fall back to DIV if no TR boundaries
+    chunks = re.split(r'(?=<tr[\s>])', html, flags=re.IGNORECASE)
+    if len(chunks) <= 2:
+        chunks = re.split(r'(?=<div[\s>])', html, flags=re.IGNORECASE)
+
+    results = []
+    for chunk in chunks:
+        is_stationed = bool(STATIONED.search(chunk))
+        is_traveling = bool(TRAVELING.search(chunk))
+        if not is_stationed and not is_traveling:
+            continue
+
+        state = 'WAITING_AT_CITY' if is_stationed else 'TRAVELING'
+
+        x = y = city_id = city_name = None
+        xm = re.search(r'xcoord=(\d+)', chunk, re.IGNORECASE)
+        ym = re.search(r'ycoord=(\d+)', chunk, re.IGNORECASE)
+        cm = re.search(r'selectCity=(\d+)', chunk, re.IGNORECASE)
+        if xm:
+            x = int(xm.group(1))
+        if ym:
+            y = int(ym.group(1))
+        if cm:
+            city_id = cm.group(1)
+
+        if x is None and city_id is None:
+            logger.debug("[espionage] activa: chunk sem coords — a saltar")
+            continue
+
+        link_m = re.search(
+            r'<a\s[^>]*(?:xcoord|selectCity)[^>]*>(.*?)</a>',
+            chunk, re.DOTALL | re.IGNORECASE
+        )
+        if link_m:
+            inner = re.sub(r'<br\s*/?>', ' ', link_m.group(1), flags=re.IGNORECASE)
+            inner = re.sub(r'<[^>]+>', '', inner)
+            inner = re.sub(r'\s+', ' ', inner.replace('&nbsp;', ' ')).strip()
+            bracket = re.search(r'\[\s*\d+\s*:\s*\d+\s*\]', inner)
+            city_name = inner[:bracket.start()].strip() if bracket else inner or None
+
+        countdown_secs = None
+        if is_traveling:
+            cm2 = COUNTDOWN.search(chunk)
+            if cm2 and any(cm2.groups()):
+                h    = int(cm2.group(1) or 0)
+                mins = int(cm2.group(2) or 0)
+                secs = int(cm2.group(3) or 0)
+                total = h * 3600 + mins * 60 + secs
+                countdown_secs = total if total > 0 else None
+
+        results.append({
+            "cityId":         city_id,
+            "x":              x,
+            "y":              y,
+            "cityName":       city_name,
+            "state":          state,
+            "countdown_secs": countdown_secs,
+        })
+        logger.debug("[espionage] activa: %s x=%s y=%s cityId=%s countdown=%s",
+                     state, x, y, city_id, countdown_secs)
+
+    if results:
+        logger.info("[espionage] %d espião(ões) activo(s) detectado(s) no safehouse", len(results))
+    return results
+
+
+def _sync_active_spy_missions(active_entries, origin_city_id):
+    """
+    Reconcile active spy deployments (from safehouse HTML) with spy_missions.json.
+    - TRAVELING missions that appear as WAITING_AT_CITY → transition state.
+    - Deployed spies unknown to the bot → create synthetic mission.
+    """
+    if not active_entries:
+        return
+
+    data     = _load_missions()
+    missions = data.get("missions", [])
+    changed  = False
+    now      = int(time.time())
+
+    for entry in active_entries:
+        ex     = entry.get("x")
+        ey     = entry.get("y")
+        ecid   = entry.get("cityId")
+        estate = entry.get("state")
+
+        match_idx = None
+        for idx, m in enumerate(missions):
+            if m.get("state") not in ("TRAVELING", "WAITING_AT_CITY"):
+                continue
+            if str(m.get("originCityId", "")) != str(origin_city_id):
+                continue
+            if ecid and str(m.get("targetCityId", "")) == str(ecid):
+                match_idx = idx
+                break
+            if ex is not None and ey is not None:
+                if m.get("islandX") == ex and m.get("islandY") == ey:
+                    match_idx = idx
+                    break
+
+        if match_idx is not None:
+            m = missions[match_idx]
+            if estate == "WAITING_AT_CITY" and m.get("state") == "TRAVELING":
+                missions[match_idx]["state"]     = "WAITING_AT_CITY"
+                missions[match_idx]["arrivedAt"] = now
+                if not missions[match_idx].get("executeAfter"):
+                    missions[match_idx]["executeAfter"] = now + random.randint(5, 15) * 60
+                logger.info("[espionage] sync: %s→WAITING_AT_CITY (%s)",
+                            m.get("targetCityName", "?"), m.get("targetPlayerName", "?"))
+                changed = True
+            elif estate == "TRAVELING" and m.get("state") == "TRAVELING":
+                countdown = entry.get("countdown_secs")
+                if countdown and not missions[match_idx].get("executeAfter"):
+                    arrival_ts = now + countdown
+                    missions[match_idx]["executeAfter"] = arrival_ts + random.randint(5, 15) * 60
+                    logger.info("[espionage] sync: countdown para %s: +%dm",
+                                m.get("targetCityName", "?"), countdown // 60)
+                    changed = True
+        else:
+            # Espião manualmente despachado — criar missão sintética
+            if estate == "WAITING_AT_CITY":
+                execute_after = now + random.randint(5, 15) * 60
+            else:
+                countdown = entry.get("countdown_secs")
+                execute_after = (now + countdown + random.randint(5, 15) * 60) if countdown else None
+
+            missions.append({
+                "originCityId":           str(origin_city_id),
+                "targetCityId":           ecid or "",
+                "targetIslandId":         "",
+                "targetPlayerName":       "",
+                "targetCityName":         entry.get("cityName") or "",
+                "islandX":                ex,
+                "islandY":                ey,
+                "numAgents":              0,
+                "state":                  estate,
+                "safehousePosition":      None,
+                "spySessionId":           None,
+                "dispatchedAt":           now,
+                "arrivedAt":              now if estate == "WAITING_AT_CITY" else None,
+                "executeAfter":           execute_after,
+                "executedAt":             None,
+                "missionType":            None,
+                "result":                 None,
+                "syntheticFromSafehouse": True,
+            })
+            logger.info("[espionage] sync: espião manual detectado → %s [%s:%s] estado=%s",
+                        entry.get("cityName") or "?", ex, ey, estate)
+            changed = True
+
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+
+
 def _fetch_city_spy_counts(session, city_id, city_name, position):
     """
     GET the safehouse AJAX view and parse spy counts from the changeView HTML.
     The response changeView[1][1] contains the full safehouse HTML with all counters.
-    Returns parsed counts dict, or None on error.
+    Returns (counts_dict, html_str), or (None, "") on error.
     """
     import ikabot.config as ikabot_config
 
@@ -174,7 +346,7 @@ def _fetch_city_spy_counts(session, city_id, city_name, position):
         resp_data = json.loads(resp, strict=False)
     except Exception as e:
         logger.error("[espionage] GET safehouse %s falhou: %s", city_name, e)
-        return None
+        return None, ""
 
     # Refresh CSRF token
     for entry in resp_data:
@@ -196,11 +368,11 @@ def _fetch_city_spy_counts(session, city_id, city_name, position):
     if not html_content:
         logger.warning("[espionage] safehouse %s: sem HTML no changeView (tipos: %s)",
                        city_name, [e[0] if isinstance(e, list) else e for e in resp_data[:6]])
-        return None
+        return None, ""
 
     counts = _parse_safehouse_page(html_content, city_name)
     counts["cityName"] = city_name
-    return counts
+    return counts, html_content
 
 
 # ── Public: fetch spy counts for all cities ───────────────────────────────────
@@ -237,10 +409,14 @@ def fetch_spy_counts(session):
             time.sleep(random.randint(3, 8))
         first = False
 
-        counts = _fetch_city_spy_counts(session, city_id, city_name, position)
+        counts, html_content = _fetch_city_spy_counts(session, city_id, city_name, position)
         if counts is None:
             counts = {"cityName": city_name, "available": None, "inDefense": None,
                       "inTraining": None, "deployed": None, "trainable": None}
+        else:
+            active = _parse_active_spy_missions(html_content)
+            if active:
+                _sync_active_spy_missions(active, city_id)
         logger.info("[espionage] safehouse %s: %s", city_name,
                     {k: v for k, v in counts.items() if k != "cityName"})
         results[city_id] = counts
@@ -308,6 +484,26 @@ def process_dispatch_queue(session):
         origin_id  = str(item["originCityId"])
         num_agents = int(item.get("numAgents", 1))
 
+        # Verificar se já há espião em trânsito ou à espera nesta cidade-alvo
+        target_cid = str(item["targetCityId"])
+        target_x   = item.get("islandX")
+        target_y   = item.get("islandY")
+        active_missions = _load_missions().get("missions", [])
+        already_active = any(
+            m.get("state") in ("TRAVELING", "WAITING_AT_CITY")
+            and (
+                str(m.get("targetCityId", "")) == target_cid
+                or (target_x is not None
+                    and m.get("islandX") == target_x
+                    and m.get("islandY") == target_y)
+            )
+            for m in active_missions
+        )
+        if already_active:
+            logger.info("[espionage] espião já activo para %s (%s) — dispatch ignorado",
+                        item["targetPlayerName"], item["targetCityName"])
+            continue
+
         # Pre-check: inDefense = espiões na cidade, disponíveis para dispatch.
         # available pode ser None se o parser não o calculou — usar inDefense como fallback.
         city_counts  = spy_data.get(origin_id, {})
@@ -337,14 +533,15 @@ def process_dispatch_queue(session):
             _append_failed_mission(item, result)
             logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
                            item["targetPlayerName"], result)
-            # type=11 = sem espiões; invalidar cache para forçar re-fetch no próximo ciclo
+            # type=11 = sem espiões; actualizar cache em disco e em memória
             if "type=10" not in result and "11" in result:
                 counts_data = _load_spy_counts()
-                if origin_id in counts_data.get("byCityId", {}):
-                    counts_data["byCityId"][origin_id]["inDefense"] = 0
-                    counts_data["byCityId"][origin_id]["available"] = 0
-                    _save_spy_counts(counts_data)
-                    logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
+                entry = counts_data.setdefault("byCityId", {}).setdefault(origin_id, {})
+                entry["inDefense"] = 0
+                entry["available"] = 0
+                _save_spy_counts(counts_data)
+                spy_data = counts_data["byCityId"]
+                logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
 
     q["pending"] = []
     _save_dispatch_queue(q)
