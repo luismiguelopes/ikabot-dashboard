@@ -487,12 +487,7 @@ def process_dispatch_queue(session):
         active_missions = _load_missions().get("missions", [])
         already_active = any(
             m.get("state") in ("TRAVELING", "WAITING_AT_CITY")
-            and (
-                str(m.get("targetCityId", "")) == target_cid
-                or (target_x is not None
-                    and m.get("islandX") == target_x
-                    and m.get("islandY") == target_y)
-            )
+            and str(m.get("targetCityId", "")) == target_cid
             for m in active_missions
         )
         if already_active:
