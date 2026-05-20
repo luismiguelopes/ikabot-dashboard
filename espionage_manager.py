@@ -1097,8 +1097,16 @@ def _parse_garrison_troops(html):
     current_headers = []
     for row in rows:
         cells_raw = re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL | re.IGNORECASE)
-        cells = [re.sub(r'<[^>]+>', '', c).replace('\xa0', ' ').strip() for c in cells_raw]
-        cells = [re.sub(r'\s+', ' ', c).strip() for c in cells]
+        cells = []
+        for c in cells_raw:
+            text = re.sub(r'<[^>]+>', '', c).replace('\xa0', ' ').strip()
+            text = re.sub(r'\s+', ' ', text).strip()
+            if not text:
+                # Unit icons render name in title="" — e.g. <div class="army hoplite" title="Hoplita">
+                title_m = re.search(r'\btitle=["\']([^"\']+)["\']', c, re.IGNORECASE)
+                if title_m:
+                    text = title_m.group(1).strip()
+            cells.append(text)
         if not cells:
             continue
         first = cells[0]
@@ -1305,6 +1313,20 @@ def collect_mission_results(session):
                                 m["targetCityName"], resources)
                     total = sum(resources.values())
                     note = "Abaixo do threshold de saque (recursos: {:,})".format(total)
+                    # Recall spy before auto-ignoring
+                    _origin_id = str(m.get("originCityId", ""))
+                    _position  = m.get("safehousePosition") or _get_city_safehouse_position(_origin_id)
+                    if _origin_id and _position:
+                        _rq = _load_recall_queue()
+                        _rq.setdefault("pending", []).append({
+                            "targetCityId": str(m.get("targetCityId", "")),
+                            "originCityId": _origin_id,
+                            "position":     _position,
+                            "cityName":     m.get("targetCityName", ""),
+                            "queuedAt":     int(time.time()),
+                        })
+                        _save_recall_queue(_rq)
+                        logger.info("[espionage] recall queued → %s (threshold não atingido)", m["targetCityName"])
                     _auto_mark_ignored(
                         m.get("targetCityId"), m.get("targetPlayerName", ""),
                         m.get("islandX"), m.get("islandY"), note,
