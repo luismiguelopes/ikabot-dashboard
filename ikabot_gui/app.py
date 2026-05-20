@@ -996,7 +996,9 @@ def api_espionage_force_warehouse():
         if m.get("state") in ("EXECUTING_WAREHOUSE", "EXECUTING_GARRISON"):
             return jsonify({"ok": True, "message": "Missão já em execução"})
         if m.get("state") == "DONE":
-            # Spy may still be stationed — reset to WAITING_AT_CITY to re-run warehouse
+            if not m.get("originCityId"):
+                # Synthetic imported mission — no real spy stationed, cannot re-execute
+                return jsonify({"error": "Missão importada sem espião activo — usa o dispatch normal"}), 400
             missions[i]["state"] = "WAITING_AT_CITY"
             missions[i]["executeAfter"] = now - 1
             missions[i]["garrisonResult"] = None

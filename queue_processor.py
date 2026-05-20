@@ -176,10 +176,11 @@ def _get_next_spy_eta():
     try:
         from espionage_manager import _load_missions
         etas = []
+        now = time.time()
         for m in _load_missions().get("missions", []):
-            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter"):
+            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter", 0) > now:
                 etas.append(m["executeAfter"])
-            elif m.get("state") == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter"):
+            elif m.get("state") == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter", 0) > now:
                 etas.append(m["garrisonExecuteAfter"])
         return min(etas) if etas else None
     except Exception:
