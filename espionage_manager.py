@@ -1319,11 +1319,12 @@ def collect_mission_results(session):
                     if _origin_id and _position:
                         _rq = _load_recall_queue()
                         _rq.setdefault("pending", []).append({
-                            "targetCityId": str(m.get("targetCityId", "")),
-                            "originCityId": _origin_id,
-                            "position":     _position,
-                            "cityName":     m.get("targetCityName", ""),
-                            "queuedAt":     int(time.time()),
+                            "targetCityId":  str(m.get("targetCityId", "")),
+                            "originCityId":  _origin_id,
+                            "position":      _position,
+                            "cityName":      m.get("targetCityName", ""),
+                            "spySessionId":  m.get("spySessionId"),
+                            "queuedAt":      int(time.time()),
                         })
                         _save_recall_queue(_rq)
                         logger.info("[espionage] recall queued → %s (threshold não atingido)", m["targetCityName"])
@@ -1644,11 +1645,12 @@ def recall_spy_mission(target_city_id):
             if origin_id and position:
                 q = _load_recall_queue()
                 q.setdefault("pending", []).append({
-                    "targetCityId": str(target_city_id),
-                    "originCityId": origin_id,
-                    "position":     position,
-                    "cityName":     m.get("targetCityName", ""),
-                    "queuedAt":     int(time.time()),
+                    "targetCityId":  str(target_city_id),
+                    "originCityId":  origin_id,
+                    "position":      position,
+                    "cityName":      m.get("targetCityName", ""),
+                    "spySessionId":  m.get("spySessionId"),
+                    "queuedAt":      int(time.time()),
                 })
                 _save_recall_queue(q)
                 queued = True
@@ -1668,33 +1670,72 @@ def _process_recall_queue(session):
     remaining = []
     for item in pending:
         time.sleep(random.randint(3, 8))
+        origin_id  = item.get("originCityId", "")
+        target_id  = item.get("targetCityId", "")
+        position   = item.get("position", "")
+        spy_id     = item.get("spySessionId")
+        city_name  = item.get("cityName", "")
+
+        # If we don't have the spy session ID stored, fetch spyMissions to get it
+        if not spy_id:
+            try:
+                _, html = _get_spy_data(target_id, position, origin_id)
+                if html:
+                    spy_id = _parse_spy_session_id(html)
+                    logger.debug("[espionage] recall %s — spy_id obtido do HTML: %s", city_name, spy_id)
+            except Exception:
+                pass
+
         try:
-            url = (
-                "view=spyMissions&targetCityId={}&retreat=1&position={}"
-                "&currentCityId={}&activeTab=tabSafehouse&backgroundView=city"
-                "&templateView=safehouse&actionRequest={}&ajax=1".format(
-                    item["targetCityId"], item["position"],
-                    item["originCityId"], ikabot_config.actionRequest,
-                )
-            )
-            resp = session.get(url)
+            params = {
+                "action":          "Espionage",
+                "function":        "retreat",
+                "spy":             spy_id or "",
+                "position":        position,
+                "targetCityId":    target_id,
+                "currentCityId":   origin_id,
+                "backgroundView":  "city",
+                "templateView":    "spyMissions",
+                "activeTab":       "tabSafehouse",
+                "actionRequest":   ikabot_config.actionRequest,
+                "ajax":            1,
+            }
+            resp = session.post(params=params)
             try:
                 parsed = json.loads(resp, strict=False)
-                # Game returns errors in the response body — check for known error keys
-                error_entry = next(
-                    (e for e in parsed if isinstance(e, list) and e[0] in ("error", "errorCode")),
-                    None
-                )
-                if error_entry:
-                    logger.warning("[espionage] recall recusado pelo servidor para %s: %s",
-                                   item.get("cityName"), error_entry)
-                    remaining.append(item)
+                for entry in parsed:
+                    if isinstance(entry, list) and entry[0] == "updateGlobalData":
+                        tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+                        if tok:
+                            ikabot_config.actionRequest = tok
+                        break
+                # provideFeedback type=10 → success; type!=10 → rejected
+                for entry in parsed:
+                    if isinstance(entry, list) and entry[0] == "provideFeedback":
+                        fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
+                        types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
+                        if 10 in types:
+                            logger.info("[espionage] recall aceite → %s (spy=%s)", city_name, spy_id)
+                        else:
+                            logger.warning("[espionage] recall recusado → %s types=%s raw=%.300s",
+                                           city_name, types, resp)
+                            remaining.append(item)
+                        break
                 else:
-                    logger.info("[espionage] recall aceite pelo servidor: %s", item.get("cityName"))
+                    # No provideFeedback — check for error entries
+                    error_entry = next(
+                        (e for e in parsed if isinstance(e, list) and e[0] in ("error", "errorCode")),
+                        None
+                    )
+                    if error_entry:
+                        logger.warning("[espionage] recall erro → %s: %s", city_name, error_entry)
+                        remaining.append(item)
+                    else:
+                        logger.info("[espionage] recall enviado → %s (sem provideFeedback)", city_name)
             except Exception:
-                logger.info("[espionage] recall enviado (resposta não parseável): %s", item.get("cityName"))
+                logger.info("[espionage] recall enviado (resposta não parseável) → %s", city_name)
         except Exception:
-            logger.warning("[espionage] recall falhou para %s", item.get("cityName"), exc_info=True)
+            logger.warning("[espionage] recall excepção → %s", city_name, exc_info=True)
             remaining.append(item)
     q["pending"] = remaining
     _save_recall_queue(q)
