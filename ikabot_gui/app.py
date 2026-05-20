@@ -1022,26 +1022,35 @@ def api_espionage_recall_spy():
     missions = data.get("missions", [])
     now      = int(time.time())
     changed  = False
+    recallable = {"TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
+                  "WAITING_FOR_GARRISON", "EXECUTING_GARRISON", "DONE"}
     for i, m in enumerate(missions):
-        if m.get("state") in ("TRAVELING", "WAITING_AT_CITY") and str(m.get("targetCityId", "")) == city_id:
-            missions[i]["state"]      = "RECALLED"
-            missions[i]["recalledAt"] = now
-            origin_id = str(m.get("originCityId", ""))
-            position  = m.get("safehousePosition")
-            if origin_id and position:
-                q = _load_json(SPY_RECALL_QUEUE_PATH, {"pending": []})
-                q.setdefault("pending", []).append({
-                    "targetCityId": city_id,
-                    "originCityId": origin_id,
-                    "position":     position,
-                    "cityName":     m.get("targetCityName", ""),
-                    "queuedAt":     now,
-                })
-                _save_json(SPY_RECALL_QUEUE_PATH, q)
-            changed = True
-    if changed:
-        data["missions"] = missions
-        _save_json(SPY_MISSIONS_PATH, data)
+        if str(m.get("targetCityId", "")) != city_id:
+            continue
+        if m.get("state") not in recallable:
+            continue
+        origin_id = str(m.get("originCityId") or "")
+        if not origin_id:
+            return jsonify({"error": "Missão importada — sem espião real para chamar de volta"}), 400
+        missions[i]["state"]      = "RECALLED"
+        missions[i]["recalledAt"] = now
+        position = m.get("safehousePosition")
+        if position:
+            q = _load_json(SPY_RECALL_QUEUE_PATH, {"pending": []})
+            q.setdefault("pending", []).append({
+                "targetCityId": city_id,
+                "originCityId": origin_id,
+                "position":     position,
+                "cityName":     m.get("targetCityName", ""),
+                "queuedAt":     now,
+            })
+            _save_json(SPY_RECALL_QUEUE_PATH, q)
+        changed = True
+        break  # recall only the first active mission found
+    if not changed:
+        return jsonify({"error": "Nenhum espião activo nessa cidade"}), 404
+    data["missions"] = missions
+    _save_json(SPY_MISSIONS_PATH, data)
     return jsonify({"ok": True})
 
 

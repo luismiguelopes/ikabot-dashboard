@@ -13,9 +13,9 @@ interface CitySpyCounts { available: number | null; inDefense: number | null; in
 interface SpyMissionResult { success: boolean; targetCityName: string | null; resources: Record<string, number> | null; troops?: Record<string, number> | null; reportedAt: number }
 interface SpyGarrisonResult { success?: boolean; targetCityName?: string | null; troops: Record<string, number> | null; reportedAt?: number; error?: string }
 interface SpyMission {
-  originCityId: string; targetCityId: string; targetPlayerName: string; targetCityName: string
+  originCityId: string | null; targetCityId: string; targetPlayerName: string; targetCityName: string
   islandX: number; islandY: number; numAgents: number
-  state: 'TRAVELING' | 'WAITING_AT_CITY' | 'EXECUTING' | 'EXECUTING_WAREHOUSE' | 'WAITING_FOR_GARRISON' | 'EXECUTING_GARRISON' | 'DONE' | 'FAILED'
+  state: 'TRAVELING' | 'WAITING_AT_CITY' | 'EXECUTING' | 'EXECUTING_WAREHOUSE' | 'WAITING_FOR_GARRISON' | 'EXECUTING_GARRISON' | 'DONE' | 'FAILED' | 'RECALLED'
   dispatchedAt: number; arrivedAt: number | null; executedAt: number | null
   garrisonExecuteAfter: number | null; garrisonExecutedAt: number | null
   missionType: string | null; result: SpyMissionResult | null; garrisonResult: SpyGarrisonResult | null; error?: string
@@ -748,13 +748,15 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                               <i className="fa-solid fa-magnifying-glass" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
-                          <button
-                            onClick={() => handleRecallSpy(p)}
-                            title={t('btn_recall_spy')}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                          >
-                            <i className="fa-solid fa-arrow-rotate-left" />
-                          </button>
+                          {(p.mission?.originCityId && !['FAILED','RECALLED'].includes(p.mission?.state ?? '')) ? (
+                            <button
+                              onClick={() => handleRecallSpy(p)}
+                              title={t('btn_recall_spy')}
+                              className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                            >
+                              <i className="fa-solid fa-arrow-rotate-left" />
+                            </button>
+                          ) : <span className="block w-7 h-7" />}
                           <button
                             onClick={() => handleIgnore(p)}
                             title={t('btn_ignore_city')}
