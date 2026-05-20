@@ -1677,8 +1677,22 @@ def _process_recall_queue(session):
                     item["originCityId"], ikabot_config.actionRequest,
                 )
             )
-            session.get(url)
-            logger.info("[espionage] recall enviado ao servidor: %s", item.get("cityName"))
+            resp = session.get(url)
+            try:
+                parsed = json.loads(resp, strict=False)
+                # Game returns errors in the response body — check for known error keys
+                error_entry = next(
+                    (e for e in parsed if isinstance(e, list) and e[0] in ("error", "errorCode")),
+                    None
+                )
+                if error_entry:
+                    logger.warning("[espionage] recall recusado pelo servidor para %s: %s",
+                                   item.get("cityName"), error_entry)
+                    remaining.append(item)
+                else:
+                    logger.info("[espionage] recall aceite pelo servidor: %s", item.get("cityName"))
+            except Exception:
+                logger.info("[espionage] recall enviado (resposta não parseável): %s", item.get("cityName"))
         except Exception:
             logger.warning("[espionage] recall falhou para %s", item.get("cityName"), exc_info=True)
             remaining.append(item)
