@@ -362,8 +362,10 @@ def api_world_scan():
         prev_inactive_ids = {p["playerId"] for p in prev.get("players", [])}
     for player in scan.get("players", []):
         pid = player["playerId"]
-        mk = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
-        entry = marks.get(mk) or marks.get(str(pid), {})
+        cid = str(player.get("cityId") or "")
+        mk_city   = f"{pid}_{cid}" if cid else None
+        mk_island = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
+        entry = (mk_city and marks.get(mk_city)) or marks.get(mk_island) or marks.get(str(pid), {})
         player["mark"] = entry.get("status", "novo")
         player["markNote"] = entry.get("note", "")
         player["markActions"] = entry.get("actions", [])
@@ -393,7 +395,8 @@ def api_world_scan_mark():
     player_id = str(body.get("playerId", ""))
     island_x  = str(body.get("islandX", ""))
     island_y  = str(body.get("islandY", ""))
-    mark_key  = f"{player_id}_{island_x}_{island_y}"
+    city_id   = str(body.get("cityId", ""))
+    mark_key  = f"{player_id}_{city_id}" if city_id else f"{player_id}_{island_x}_{island_y}"
     status = body.get("status", "novo")
     note = body.get("note", "")
     if status not in ("novo", "visto", "alvo", "ignorar"):

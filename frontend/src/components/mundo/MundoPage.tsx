@@ -537,11 +537,12 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
   }, [confirmModal, showToast])
 
   const handleIgnore = useCallback((p: EnrichedPlayer) => {
-    setIgnoredKeys(prev => new Set([...prev, p.pKey]))
+    const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : p.pKey
+    setIgnoredKeys(prev => new Set([...prev, ignoreKey]))
     fetch('/api/world-scan/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId: p.playerId, islandX: p.islandX, islandY: p.islandY, status: 'ignorar', note: 'Ignorado manualmente' }),
+      body: JSON.stringify({ playerId: p.playerId, cityId: p.cityId, islandX: p.islandX, islandY: p.islandY, status: 'ignorar', note: 'Ignorado manualmente' }),
     }).catch(() => {})
   }, [])
 
@@ -560,7 +561,8 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     for (const p of scanData.players) {
       if (p.state !== 'inactive') continue
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
-      if (ignoredKeys.has(pKey)) continue
+      const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
+      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) continue
 
       const cKey = p.cityId || `${p.playerName}_${p.cityName}_${p.islandX}_${p.islandY}`
       const wKey = `${p.cityId}_${p.islandX}_${p.islandY}`
