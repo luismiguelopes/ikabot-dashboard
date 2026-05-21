@@ -1319,12 +1319,14 @@ def collect_mission_results(session):
                     if _origin_id and _position:
                         _rq = _load_recall_queue()
                         _rq.setdefault("pending", []).append({
-                            "targetCityId":  str(m.get("targetCityId", "")),
-                            "originCityId":  _origin_id,
-                            "position":      _position,
-                            "cityName":      m.get("targetCityName", ""),
-                            "spySessionId":  m.get("spySessionId"),
-                            "queuedAt":      int(time.time()),
+                            "targetCityId":   str(m.get("targetCityId", "")),
+                            "targetIslandId": str(m.get("targetIslandId", "")),
+                            "originCityId":   _origin_id,
+                            "position":       _position,
+                            "cityName":       m.get("targetCityName", ""),
+                            "spySessionId":   m.get("spySessionId"),
+                            "numAgents":      m.get("numAgents", 1),
+                            "queuedAt":       int(time.time()),
                         })
                         _save_recall_queue(_rq)
                         logger.info("[espionage] recall queued → %s (threshold não atingido)", m["targetCityName"])
@@ -1645,12 +1647,14 @@ def recall_spy_mission(target_city_id):
             if origin_id and position:
                 q = _load_recall_queue()
                 q.setdefault("pending", []).append({
-                    "targetCityId":  str(target_city_id),
-                    "originCityId":  origin_id,
-                    "position":      position,
-                    "cityName":      m.get("targetCityName", ""),
-                    "spySessionId":  m.get("spySessionId"),
-                    "queuedAt":      int(time.time()),
+                    "targetCityId":   str(target_city_id),
+                    "targetIslandId": str(m.get("targetIslandId", "")),
+                    "originCityId":   origin_id,
+                    "position":       position,
+                    "cityName":       m.get("targetCityName", ""),
+                    "spySessionId":   m.get("spySessionId"),
+                    "numAgents":      m.get("numAgents", 1),
+                    "queuedAt":       int(time.time()),
                 })
                 _save_recall_queue(q)
                 queued = True
@@ -1676,30 +1680,41 @@ def _process_recall_queue(session):
         spy_id     = item.get("spySessionId")
         city_name  = item.get("cityName", "")
 
-        # If we don't have the spy session ID stored, fetch spyMissions to get it
+        # Fetch spyMissions HTML to extract spy_id if not already stored
         if not spy_id:
             try:
-                _, html = _get_spy_data(target_id, position, origin_id)
+                _, html = _fetch_spy_missions_view(session, origin_id, target_id, position)
                 if html:
                     spy_id = _parse_spy_session_id(html)
-                    logger.debug("[espionage] recall %s — spy_id obtido do HTML: %s", city_name, spy_id)
             except Exception:
-                pass
+                logger.warning("[espionage] recall: erro ao obter HTML de %s", city_name, exc_info=True)
 
         try:
+            # mission=8 is "Chamar o espião" (recall) — uses executeMission like warehouse/garrison
+            # islandId in the game form is always the origin cityId, not the target island id
+            num_agents = item.get("numAgents") or 1
             params = {
-                "action":          "Espionage",
-                "function":        "retreat",
-                "spy":             spy_id or "",
-                "position":        position,
-                "targetCityId":    target_id,
-                "currentCityId":   origin_id,
-                "backgroundView":  "city",
-                "templateView":    "spyMissions",
-                "activeTab":       "tabSafehouse",
-                "actionRequest":   ikabot_config.actionRequest,
-                "ajax":            1,
+                "action":                            "Espionage",
+                "function":                          "executeMission",
+                "tab":                               "tabSafehouse",
+                "targetCity":                        target_id,
+                "cityId":                            origin_id,
+                "islandId":                          origin_id,
+                "mission":                           8,
+                f"spies[{origin_id}][agents]":       num_agents,
+                f"spies[{origin_id}][decoys]":       0,
+                "payCityId":                         origin_id,
+                "position":                          position,
+                "targetCityId":                      target_id,
+                "activeTab":                         "tabSafehouse",
+                "backgroundView":                    "city",
+                "currentCityId":                     origin_id,
+                "templateView":                      "spyMissions",
+                "actionRequest":                     ikabot_config.actionRequest,
+                "ajax":                              1,
             }
+            if spy_id:
+                params["spy"] = spy_id
             resp = session.post(params=params)
             try:
                 parsed = json.loads(resp, strict=False)
@@ -1731,7 +1746,9 @@ def _process_recall_queue(session):
                         logger.warning("[espionage] recall erro → %s: %s", city_name, error_entry)
                         remaining.append(item)
                     else:
-                        logger.info("[espionage] recall enviado → %s (sem provideFeedback)", city_name)
+                        logger.warning("[espionage] recall sem provideFeedback → %s raw=%.400s",
+                                       city_name, resp)
+                        remaining.append(item)
             except Exception:
                 logger.info("[espionage] recall enviado (resposta não parseável) → %s", city_name)
         except Exception:

@@ -1041,12 +1041,14 @@ def api_espionage_recall_spy():
         if position:
             q = _load_json(SPY_RECALL_QUEUE_PATH, {"pending": []})
             q.setdefault("pending", []).append({
-                "targetCityId":  city_id,
-                "originCityId":  origin_id,
-                "position":      position,
-                "cityName":      m.get("targetCityName", ""),
-                "spySessionId":  m.get("spySessionId"),
-                "queuedAt":      now,
+                "targetCityId":   city_id,
+                "targetIslandId": str(m.get("targetIslandId", "")),
+                "originCityId":   origin_id,
+                "position":       position,
+                "cityName":       m.get("targetCityName", ""),
+                "spySessionId":   m.get("spySessionId"),
+                "numAgents":      m.get("numAgents", 1),
+                "queuedAt":       now,
             })
             _save_json(SPY_RECALL_QUEUE_PATH, q)
         changed = True
