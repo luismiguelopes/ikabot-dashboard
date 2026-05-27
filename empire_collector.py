@@ -149,7 +149,7 @@ def collect_city_data(session, ids, cities):
         typeGood = int(float(json_data["producedTradegood"]))
         total_production[0] += wood * 3600
         total_production[typeGood] += good * 3600
-        total_wine_consumption += float(json_data["wineSpendings"])
+        total_wine_consumption += float(json_data["wineSpendings"]) / 2
 
         housing_space = int(float(json_data["currentResources"]["population"]))
         citizens = int(float(json_data["currentResources"]["citizens"]))
@@ -182,7 +182,7 @@ def collect_city_data(session, ids, cities):
         _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 
         storage_capacity = int(float(city_data.get("storageCapacity") or 0))
-        wine_consumption_hr = int(float(city_data.get("wineConsumptionPerHour") or 0))
+        wine_consumption_hr = int(float(city_data.get("wineConsumptionPerHour") or 0) / 2)
         wine_production_hr = int(good * 3600) if typeGood == 1 else 0
 
         city_resources = {}
