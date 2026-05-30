@@ -74,6 +74,7 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
         <NavItem icon="fa-calculator"           label={t('nav_calculators')}  active={active === 'calc'}         onClick={() => setActive('calc')}         />
         <NavItem icon="fa-list-check"           label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
         <NavItem icon="fa-earth-europe"         label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
+        <NavItem icon="fa-crosshairs"           label={t('nav_dispatch')}     active={active === 'dispatch'}     onClick={() => setActive('dispatch')}     />
       </nav>
 
       {/* Settings — visually separated, above status footer */}

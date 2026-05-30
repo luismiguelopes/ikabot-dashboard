@@ -1491,24 +1491,35 @@ def has_pending_attacks():
 
 
 def _dispatch_attack(session, item):
-    """POST deployArmy to attack a player city."""
+    """POST deployArmy or deployFleet to attack a player city."""
     import ikabot.config as ikabot_config
+
+    mission_type = item.get("missionType", "army")
+    if mission_type == "fleet":
+        function      = "deployFleet"
+        deployment    = "fleet"
+        cargo_prefix  = "cargo_fleet"
+    else:
+        function      = "deployArmy"
+        deployment    = "army"
+        cargo_prefix  = "cargo_army"
 
     params = {
         "action":            "transportOperations",
-        "function":          "deployArmy",
+        "function":          function,
         "actionRequest":     ikabot_config.actionRequest,
         "islandId":          str(item["islandId"]),
         "destinationCityId": str(item["targetCityId"]),
-        "deploymentType":    "army",
+        "deploymentType":    deployment,
         "backgroundView":    "city",
         "currentCityId":     str(item["originCityId"]),
         "templateView":      "deployment",
-        "transporter":       int(item.get("transporters", 0)),
         "ajax":              1,
     }
+    if mission_type == "army":
+        params["transporter"] = int(item.get("transporters", 0))
     for unit_id, count in item.get("units", {}).items():
-        params[f"cargo_army_{unit_id}"] = int(count)
+        params[f"{cargo_prefix}_{unit_id}"] = int(count)
 
     try:
         resp      = session.post(params=params)
@@ -1528,7 +1539,7 @@ def _dispatch_attack(session, item):
                     for fb in feedback:
                         if isinstance(fb, dict) and fb.get("type") == 10:
                             return True
-        logger.warning("[attack] deployArmy sem type=10 — raw: %.300s", resp)
+        logger.warning("[attack] %s sem type=10 — raw: %.300s", function, resp)
         return False
     except Exception as e:
         logger.error("[attack] dispatch exception: %s", e)
