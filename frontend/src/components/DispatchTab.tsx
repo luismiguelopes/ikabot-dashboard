@@ -64,7 +64,7 @@ function btnClass(variant: 'primary' | 'danger' | 'ghost', extra = '') {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function DispatchPage() {
+export function DispatchTab() {
   const t    = useT()
   const lang = useLang()
   const now  = useLiveClock()

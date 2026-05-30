@@ -5,9 +5,10 @@ import { useLiveClock } from '../hooks/useLiveClock'
 import { RefreshButton } from './ui/RefreshButton'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
+import { DispatchTab } from './DispatchTab'
 import type { Movement } from '../types'
 
-export function MovementsPage() {
+function MovementsTab() {
   const [movements, setMovements] = useState<Movement[] | null>(null)
   const [error, setError]         = useState<string | null>(null)
   const t    = useT()
@@ -27,7 +28,7 @@ export function MovementsPage() {
 
   useEffect(() => { fetchMovements() }, [])
 
-  if (error)     return <p className="text-red-500 text-sm">{error}</p>
+  if (error)      return <p className="text-red-500 text-sm">{error}</p>
   if (!movements) return <p className="text-slate-400 text-sm">{t('loading')}</p>
 
   const own     = movements.filter(m => m.isOwn)
@@ -80,9 +81,9 @@ export function MovementsPage() {
 
   return (
     <div>
-      <PageHeader icon="fa-ship" title={t('movements_title')}>
+      <div className="flex justify-end mb-4">
         <RefreshButton onRefresh={handleRefresh} />
-      </PageHeader>
+      </div>
       {movements.length === 0 ? (
         <Card className="p-8 text-center text-slate-400">
           <i className="fa-solid fa-anchor text-3xl mb-2 block" />
@@ -96,6 +97,40 @@ export function MovementsPage() {
           <Section title={t('section_other')}   items={other}   color="text-slate-600"  icon="fa-circle-info"      />
         </>
       )}
+    </div>
+  )
+}
+
+export function MovementsPage() {
+  const t = useT()
+  const [tab, setTab] = useState('movements')
+
+  const tabs = [
+    { key: 'movements', label: t('tab_movements'), icon: 'fa-ship'       },
+    { key: 'dispatch',  label: t('tab_dispatch'),  icon: 'fa-crosshairs' },
+  ]
+
+  return (
+    <div>
+      <PageHeader icon="fa-ship" title={t('movements_title')} />
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {tabs.map(tb => (
+          <button
+            key={tb.key}
+            onClick={() => setTab(tb.key)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+              tab === tb.key
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <i className={`fa-solid ${tb.icon}`} />
+            {tb.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'movements' && <MovementsTab />}
+      {tab === 'dispatch'  && <DispatchTab />}
     </div>
   )
 }

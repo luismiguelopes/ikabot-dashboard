@@ -16,7 +16,6 @@ import { CalculadorasPage } from './components/calculadoras/CalculadorasPage'
 import { BuildingQueueTab } from './components/Construction'
 import { MundoPage } from './components/mundo/MundoPage'
 import { SettingsPage } from './components/SettingsPage'
-import { DispatchPage } from './components/DispatchPage'
 
 function LoadingScreen() {
   return (
@@ -170,7 +169,6 @@ export default function App() {
           {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
-          {page === 'dispatch'     && <DispatchPage />}
           {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
         </main>
       </div>
