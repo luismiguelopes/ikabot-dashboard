@@ -360,6 +360,8 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     dispatch_sending:'Scheduling…',
     dispatch_pending:'Scheduled dispatches',
     dispatch_dispatching:'Dispatching…',
+    dispatch_transporters:'transport ships',
+    dispatch_transporters_hint:'ships to carry loot (pillage only)',
   },
   pt: {
     nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
@@ -720,6 +722,8 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     dispatch_sending:'A agendar…',
     dispatch_pending:'Despachos agendados',
     dispatch_dispatching:'A despachar…',
+    dispatch_transporters:'navios de transporte',
+    dispatch_transporters_hint:'navios para trazer a pilhagem',
   },
 }
 

@@ -85,6 +85,7 @@ export function DispatchTab() {
   const [scheduleType,   setScheduleType]   = useState<'now' | 'delay' | 'at'>('now')
   const [delayMinutes,   setDelayMinutes]   = useState(30)
   const [atTime,         setAtTime]         = useState('')
+  const [transporters,   setTransporters]   = useState(0)
   const [submitting,     setSubmitting]     = useState(false)
   const [feedback,       setFeedback]       = useState<{ ok: boolean; msg: string } | null>(null)
 
@@ -119,8 +120,8 @@ export function DispatchTab() {
 
   const availableUnits = Object.entries(unitPool).filter(([, u]) => u.amount > 0)
 
-  // Reset unit quantities when city or mission type changes
-  useEffect(() => { setUnitQty({}) }, [originCityName, missionType])
+  // Reset unit quantities and transporters when city or mission type changes
+  useEffect(() => { setUnitQty({}); setTransporters(0) }, [originCityName, missionType])
 
   // ── Derived: origin city metadata ──────────────────────────────────────────
 
@@ -207,6 +208,7 @@ export function DispatchTab() {
           islandY:          target.islandY,
           missionType,
           units,
+          transporters:     missionType === 'army' ? transporters : 0,
           scheduleType,
           delayMinutes,
           dispatchAfter:    computeDispatchAfter(),
@@ -325,6 +327,25 @@ export function DispatchTab() {
                 </div>
               )}
             </div>
+
+            {/* Transport ships — only for pillage */}
+            {missionType === 'army' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                  {t('dispatch_transporters')}
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={0}
+                    value={transporters}
+                    onChange={e => setTransporters(Math.max(0, Number(e.target.value)))}
+                    className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <span className="text-sm text-slate-500">{t('dispatch_transporters_hint')}</span>
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -488,6 +509,12 @@ export function DispatchTab() {
                       </span>
                       <span>·</span>
                       <span>{Object.entries(item.units).map(([, v]) => fmt(v)).join(' + ')} unidades</span>
+                      {item.missionType !== 'fleet' && (item as any).transporters > 0 && (
+                        <>
+                          <span>·</span>
+                          <span><i className="fa-solid fa-ship mr-1" />{fmt((item as any).transporters)} {t('dispatch_transporters')}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="text-right flex-shrink-0">
