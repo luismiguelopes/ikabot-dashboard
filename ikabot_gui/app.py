@@ -889,6 +889,66 @@ def api_attack_queue_cancel():
     return jsonify({"status": "cancelled"})
 
 
+@app.route("/api/dispatch/combat", methods=["POST"])
+def api_dispatch_combat():
+    import uuid
+    data = request.get_json(silent=True) or {}
+    required = ["originCityId", "originCityName", "targetCityId", "targetCityName",
+                "targetPlayerName", "islandX", "islandY", "islandId", "missionType"]
+    missing = [k for k in required if str(data.get(k, "")).strip() == ""]
+    if missing:
+        return jsonify({"error": f"Campo obrigatório: {missing}"}), 400
+
+    units = {str(k): int(v) for k, v in (data.get("units") or {}).items() if int(v) > 0}
+    if not units:
+        return jsonify({"error": "units não pode estar vazio"}), 400
+
+    mission_type = data["missionType"]
+    if mission_type not in ("army", "fleet"):
+        return jsonify({"error": "missionType deve ser 'army' ou 'fleet'"}), 400
+
+    now = int(time.time())
+    schedule_type = data.get("scheduleType", "now")
+    if schedule_type == "delay":
+        delay_minutes = max(1, int(data.get("delayMinutes", 1)))
+        dispatch_after = now + delay_minutes * 60
+    elif schedule_type == "at":
+        dispatch_after = int(data.get("dispatchAfter", now))
+        if dispatch_after <= now:
+            return jsonify({"error": "Hora de lançamento já passou"}), 400
+    else:
+        dispatch_after = now + 10
+
+    try:
+        with open(ATTACK_QUEUE_PATH) as f:
+            q = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        q = {"pending": []}
+
+    item = {
+        "id":               str(uuid.uuid4())[:8],
+        "originCityId":     str(data["originCityId"]),
+        "originCityName":   str(data["originCityName"]),
+        "targetCityId":     str(data["targetCityId"]),
+        "targetCityName":   str(data["targetCityName"]),
+        "targetPlayerName": str(data["targetPlayerName"]),
+        "islandX":          int(data["islandX"]),
+        "islandY":          int(data["islandY"]),
+        "islandId":         str(data["islandId"]),
+        "units":            units,
+        "transporters":     int(data.get("transporters", 0)),
+        "missionType":      mission_type,
+        "addedAt":          now,
+        "dispatchAfter":    dispatch_after,
+        "missionId":        None,
+    }
+    q["pending"].append(item)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ATTACK_QUEUE_PATH, "w") as f:
+        json.dump(q, f, indent=2)
+    return jsonify({"status": "queued", "item": item})
+
+
 @app.route("/api/espionage/attack-waves")
 def api_attack_waves_get():
     try:

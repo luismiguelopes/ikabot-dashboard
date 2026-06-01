@@ -1491,25 +1491,39 @@ def has_pending_attacks():
 
 
 def _dispatch_attack(session, item):
-    """POST deployArmy to attack a player city."""
+    """POST deployArmy or deployFleet to attack a player city."""
     import ikabot.config as ikabot_config
+
+    mission_type = item.get("missionType", "army")
+    if mission_type == "fleet":
+        function      = "deployFleet"
+        deployment    = "fleet"
+        cargo_prefix  = "cargo_fleet"
+    else:
+        function      = "deployArmy"
+        deployment    = "army"
+        cargo_prefix  = "cargo_army"
 
     params = {
         "action":            "transportOperations",
-        "function":          "deployArmy",
+        "function":          function,
         "actionRequest":     ikabot_config.actionRequest,
         "islandId":          str(item["islandId"]),
         "destinationCityId": str(item["targetCityId"]),
-        "deploymentType":    "army",
+        "deploymentType":    deployment,
         "backgroundView":    "city",
         "currentCityId":     str(item["originCityId"]),
         "templateView":      "deployment",
-        "transporter":       int(item.get("transporters", 0)),
         "ajax":              1,
     }
+    if mission_type == "army":
+        params["transporter"] = int(item.get("transporters", 0))
     for unit_id, count in item.get("units", {}).items():
-        params[f"cargo_army_{unit_id}"] = int(count)
+        params[f"{cargo_prefix}_{unit_id}"] = int(count)
 
+    logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s)",
+                function, item.get("targetCityName"), item.get("targetPlayerName"),
+                sum(item.get("units", {}).values()))
     try:
         resp      = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
@@ -1523,15 +1537,16 @@ def _dispatch_attack(session, item):
 
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "provideFeedback":
-                feedback = entry[1]
-                if isinstance(feedback, list):
-                    for fb in feedback:
-                        if isinstance(fb, dict) and fb.get("type") == 10:
-                            return True
-        logger.warning("[attack] deployArmy sem type=10 — raw: %.300s", resp)
+                fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
+                types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
+                if 10 in types:
+                    return True
+                logger.warning("[attack] %s recusado types=%s — raw: %.400s", function, types, resp)
+                return False
+        logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
         return False
     except Exception as e:
-        logger.error("[attack] dispatch exception: %s", e)
+        logger.error("[attack] dispatch exception: %s", e, exc_info=True)
         return False
 
 
@@ -1724,17 +1739,26 @@ def _process_recall_queue(session):
                         if tok:
                             ikabot_config.actionRequest = tok
                         break
-                # provideFeedback type=10 → success; type!=10 → rejected
+                # provideFeedback type=10 → success; type=11 → spy already home; other → retry
                 for entry in parsed:
                     if isinstance(entry, list) and entry[0] == "provideFeedback":
                         fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
                         types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
                         if 10 in types:
                             logger.info("[espionage] recall aceite → %s (spy=%s)", city_name, spy_id)
+                        elif 11 in types:
+                            # Type 11: spy already home / mission already concluded — remove silently
+                            logger.info("[espionage] recall: espião já em casa → %s", city_name)
                         else:
-                            logger.warning("[espionage] recall recusado → %s types=%s raw=%.300s",
-                                           city_name, types, resp)
-                            remaining.append(item)
+                            retries = item.get("retries", 0) + 1
+                            if retries >= 5:
+                                logger.warning("[espionage] recall: demasiadas tentativas → %s types=%s — a remover",
+                                               city_name, types)
+                            else:
+                                logger.warning("[espionage] recall recusado → %s types=%s (tentativa %d)",
+                                               city_name, types, retries)
+                                item["retries"] = retries
+                                remaining.append(item)
                         break
                 else:
                     # No provideFeedback — check for error entries
@@ -1746,9 +1770,15 @@ def _process_recall_queue(session):
                         logger.warning("[espionage] recall erro → %s: %s", city_name, error_entry)
                         remaining.append(item)
                     else:
-                        logger.warning("[espionage] recall sem provideFeedback → %s raw=%.400s",
-                                       city_name, resp)
-                        remaining.append(item)
+                        retries = item.get("retries", 0) + 1
+                        if retries >= 5:
+                            logger.warning("[espionage] recall: sem provideFeedback após %d tentativas → %s — a remover",
+                                           retries, city_name)
+                        else:
+                            logger.warning("[espionage] recall sem provideFeedback → %s raw=%.400s",
+                                           city_name, resp)
+                            item["retries"] = retries
+                            remaining.append(item)
             except Exception:
                 logger.info("[espionage] recall enviado (resposta não parseável) → %s", city_name)
         except Exception:

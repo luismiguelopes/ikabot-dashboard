@@ -96,8 +96,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         refresh_movements(session, ids[0])
                 if in_scan_hours:
                     try:
-                        from espionage_manager import process_spy_cycle
+                        from espionage_manager import process_spy_cycle, process_attack_queue
                         process_spy_cycle(session)
+                        process_attack_queue(session, in_active_hours=True)
                     except Exception:
                         logger.warning("[espionage] spy cycle (wake-up) falhou", exc_info=True)
                 smart_sleep(last_full_cycle_time, next_full_jitter, session)
