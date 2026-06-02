@@ -1568,7 +1568,18 @@ def _dispatch_attack(session, item):
         "ajax":              1,
     }
     if mission_type == "army":
-        params["transporter"] = int(item.get("transporters", 0))
+        requested = int(item.get("transporters", 0))
+        # Cap at available ships — requesting more than available causes type=11
+        available_ships = requested  # default: trust user
+        try:
+            with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
+                available_ships = int(json.load(_f).get("ships", {}).get("available", requested))
+        except Exception:
+            pass
+        params["transporter"] = min(requested, available_ships)
+        if requested > available_ships:
+            logger.info("[attack] transporters limitados a %d (pedido: %d, disponível: %d)",
+                        available_ships, requested, available_ships)
 
     # Include ALL unit types from the form (0 for units not being sent) + their upkeep values
     user_units = item.get("units", {})
@@ -2282,9 +2293,15 @@ def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, t
         "backgroundView":    "city",
         "currentCityId":     str(origin_id),
         "templateView":      "deployment",
-        "transporter":       int(transporters),
         "ajax":              1,
     }
+    try:
+        available_ships = int(json.load(open(os.path.join(LOGS_DIR, "statusSummary.json")))
+                              .get("ships", {}).get("available", transporters))
+    except Exception:
+        available_ships = int(transporters)
+    params["transporter"] = min(int(transporters), available_ships)
+
     for uid, upkeep in upkeep_map.items():
         params[f"cargo_army_{uid}_upkeep"] = upkeep
         params[f"cargo_army_{uid}"] = int(troop_units.get(uid, 0))

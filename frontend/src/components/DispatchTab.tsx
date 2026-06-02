@@ -70,10 +70,11 @@ export function DispatchTab() {
   const now  = useLiveClock()
 
   // Data
-  const [ownCities,  setOwnCities]  = useState<OwnCity[]>([])
-  const [military,   setMilitary]   = useState<MilitaryData | null>(null)
-  const [scanPlayers, setScanPlayers] = useState<WorldScanPlayer[]>([])
-  const [pending,    setPending]    = useState<PendingAttack[]>([])
+  const [ownCities,      setOwnCities]      = useState<OwnCity[]>([])
+  const [military,       setMilitary]       = useState<MilitaryData | null>(null)
+  const [scanPlayers,    setScanPlayers]    = useState<WorldScanPlayer[]>([])
+  const [pending,        setPending]        = useState<PendingAttack[]>([])
+  const [availableShips, setAvailableShips] = useState<number | null>(null)
 
   // Form state
   const [originCityName, setOriginCityName] = useState('')
@@ -105,6 +106,10 @@ export function DispatchTab() {
 
     fetch('/api/espionage/attack-queue').then(r => r.json()).then((data: any) => {
       setPending(data?.pending ?? [])
+    }).catch(() => {})
+
+    fetch('/api/data').then(r => r.json()).then((data: any) => {
+      setAvailableShips(data?.statusSummary?.ships?.available ?? null)
     }).catch(() => {})
   }, [originCityName])
 
@@ -333,15 +338,29 @@ export function DispatchTab() {
               <div>
                 <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
                   {t('dispatch_transporters')}
+                  {availableShips !== null && (
+                    <span className="ml-2 normal-case font-normal text-slate-400">
+                      ({t('attack_available')}: {fmt(availableShips)})
+                    </span>
+                  )}
                 </label>
                 <div className="flex items-center gap-3">
                   <input
                     type="number"
                     min={0}
+                    max={availableShips ?? undefined}
                     value={transporters}
-                    onChange={e => setTransporters(Math.max(0, Number(e.target.value)))}
+                    onChange={e => setTransporters(Math.max(0, Math.min(availableShips ?? Infinity, Number(e.target.value))))}
                     className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
+                  {availableShips !== null && (
+                    <button
+                      className="text-xs text-indigo-500 hover:text-indigo-700 font-medium"
+                      onClick={() => setTransporters(availableShips)}
+                    >
+                      Max
+                    </button>
+                  )}
                   <span className="text-sm text-slate-500">{t('dispatch_transporters_hint')}</span>
                 </div>
               </div>
