@@ -1590,9 +1590,10 @@ def _dispatch_attack(session, item):
     for unit_id, count in user_units.items():
         params[f"{cargo_prefix}_{unit_id}"] = int(count)
 
-    logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s)",
+    logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s) transporter=%s",
                 function, item.get("targetCityName"), item.get("targetPlayerName"),
-                sum(item.get("units", {}).values()))
+                sum(item.get("units", {}).values()), params.get("transporter", "N/A"))
+    logger.debug("[attack] params completos: %s", params)
     try:
         resp      = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
@@ -1608,11 +1609,12 @@ def _dispatch_attack(session, item):
             if isinstance(entry, list) and entry[0] == "provideFeedback":
                 fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
                 types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
+                logger.info("[attack] provideFeedback completo: %s", entry[1])
                 if 10 in types:
                     return True
-                logger.warning("[attack] %s recusado types=%s — raw: %.400s", function, types, resp)
+                logger.warning("[attack] %s recusado types=%s — raw completo: %s", function, types, resp)
                 return False
-        logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
+        logger.warning("[attack] %s sem provideFeedback — raw completo: %s", function, resp)
         return False
     except Exception as e:
         logger.error("[attack] dispatch exception: %s", e, exc_info=True)
