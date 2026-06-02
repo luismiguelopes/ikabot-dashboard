@@ -1494,6 +1494,7 @@ def _dispatch_attack(session, item):
     """POST deployArmy or deployFleet to attack a player city."""
     import ikabot.config as ikabot_config
 
+    origin_id    = str(item["originCityId"])
     mission_type = item.get("missionType", "army")
     if mission_type == "fleet":
         function      = "deployFleet"
@@ -1504,6 +1505,22 @@ def _dispatch_attack(session, item):
         deployment    = "army"
         cargo_prefix  = "cargo_army"
 
+    # Switch session context to the origin city (required by the game before any city action)
+    try:
+        session.post(params={
+            "action":         "header",
+            "function":       "changeCurrentCity",
+            "actionRequest":  ikabot_config.actionRequest,
+            "oldView":        "city",
+            "cityId":         origin_id,
+            "backgroundView": "city",
+            "currentCityId":  origin_id,
+            "ajax":           "1",
+        })
+        time.sleep(random.randint(3, 7))
+    except Exception:
+        pass
+
     params = {
         "action":            "transportOperations",
         "function":          function,
@@ -1512,7 +1529,7 @@ def _dispatch_attack(session, item):
         "destinationCityId": str(item["targetCityId"]),
         "deploymentType":    deployment,
         "backgroundView":    "city",
-        "currentCityId":     str(item["originCityId"]),
+        "currentCityId":     origin_id,
         "templateView":      "deployment",
         "ajax":              1,
     }
@@ -2130,6 +2147,21 @@ def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units
     """POST deployFleet to destroy enemy naval presence. Returns True on success."""
     import ikabot.config as ikabot_config
 
+    try:
+        session.post(params={
+            "action":         "header",
+            "function":       "changeCurrentCity",
+            "actionRequest":  ikabot_config.actionRequest,
+            "oldView":        "city",
+            "cityId":         str(origin_id),
+            "backgroundView": "city",
+            "currentCityId":  str(origin_id),
+            "ajax":           "1",
+        })
+        time.sleep(random.randint(3, 7))
+    except Exception:
+        pass
+
     params = {
         "action":            "transportOperations",
         "function":          "deployFleet",
@@ -2172,6 +2204,21 @@ def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units
 def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, transporters):
     """POST deployArmy for a pillage wave. Returns True on success."""
     import ikabot.config as ikabot_config
+
+    try:
+        session.post(params={
+            "action":         "header",
+            "function":       "changeCurrentCity",
+            "actionRequest":  ikabot_config.actionRequest,
+            "oldView":        "city",
+            "cityId":         str(origin_id),
+            "backgroundView": "city",
+            "currentCityId":  str(origin_id),
+            "ajax":           "1",
+        })
+        time.sleep(random.randint(3, 7))
+    except Exception:
+        pass
 
     params = {
         "action":            "transportOperations",
