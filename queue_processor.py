@@ -268,6 +268,16 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             except Exception:
                 pass
 
+        # Pending scheduled attacks — dispatch as soon as dispatchAfter is reached
+        if session and _in_scan_hours():
+            try:
+                from espionage_manager import has_pending_attacks, process_attack_queue
+                if has_pending_attacks():
+                    process_attack_queue(session, in_active_hours=True)
+                    continue
+            except Exception:
+                pass
+
         # Opportunistic island scan during idle time — uses the natural sleep
         # variation as an organic source of randomness in batch size
         if session and _in_scan_hours() and (end_time - time.time()) > 50:
