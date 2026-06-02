@@ -1490,6 +1490,35 @@ def has_pending_attacks():
         return False
 
 
+def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deployment, cargo_prefix):
+    """Fetch the deployment form to get unit upkeep values required by the game.
+    Returns dict of {unit_id: upkeep_str} for all unit types present in the form."""
+    import re
+    try:
+        raw = session.post(params={
+            "view":             "deployment",
+            "deploymentType":   deployment,
+            "destinationCityId": str(target_id),
+            "backgroundView":   "city",
+            "currentCityId":    str(origin_id),
+            "actionRequest":    ikabot_config.actionRequest,
+            "ajax":             1,
+        })
+        time.sleep(random.randint(2, 5))
+        # The response is a raw JSON string; HTML quotes are escaped as \"
+        upkeep = {}
+        for m in re.finditer(
+            r'name=\\"' + re.escape(cargo_prefix) + r'_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"',
+            raw
+        ):
+            upkeep[m.group(1)] = m.group(2)
+        logger.info("[attack] deployment form: %d tipo(s) de unidade com upkeep", len(upkeep))
+        return upkeep
+    except Exception:
+        logger.warning("[attack] falha ao obter deployment form — a continuar sem upkeep", exc_info=True)
+        return {}
+
+
 def _dispatch_attack(session, item):
     """POST deployArmy or deployFleet to attack a player city."""
     import ikabot.config as ikabot_config
@@ -1505,7 +1534,7 @@ def _dispatch_attack(session, item):
         deployment    = "army"
         cargo_prefix  = "cargo_army"
 
-    # Switch session context to the origin city (required by the game before any city action)
+    # Switch session context to origin city
     try:
         session.post(params={
             "action":         "header",
@@ -1521,6 +1550,11 @@ def _dispatch_attack(session, item):
     except Exception:
         pass
 
+    # Fetch deployment form: required to establish context + get per-unit upkeep values
+    upkeep_map = _fetch_deployment_upkeep(
+        session, ikabot_config, origin_id, item["targetCityId"], deployment, cargo_prefix
+    )
+
     params = {
         "action":            "transportOperations",
         "function":          function,
@@ -1535,7 +1569,14 @@ def _dispatch_attack(session, item):
     }
     if mission_type == "army":
         params["transporter"] = int(item.get("transporters", 0))
-    for unit_id, count in item.get("units", {}).items():
+
+    # Include ALL unit types from the form (0 for units not being sent) + their upkeep values
+    user_units = item.get("units", {})
+    for uid, upkeep in upkeep_map.items():
+        params[f"{cargo_prefix}_{uid}_upkeep"] = upkeep
+        params[f"{cargo_prefix}_{uid}"] = int(user_units.get(uid, 0))
+    # Ensure user's selections override (in case a unit wasn't in the form)
+    for unit_id, count in user_units.items():
         params[f"{cargo_prefix}_{unit_id}"] = int(count)
 
     logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s)",
@@ -2162,6 +2203,10 @@ def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units
     except Exception:
         pass
 
+    upkeep_map = _fetch_deployment_upkeep(
+        session, ikabot_config, origin_id, target_id, "fleet", "cargo_fleet"
+    )
+
     params = {
         "action":            "transportOperations",
         "function":          "deployFleet",
@@ -2174,6 +2219,9 @@ def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units
         "templateView":      "deployment",
         "ajax":              1,
     }
+    for uid, upkeep in upkeep_map.items():
+        params[f"cargo_fleet_{uid}_upkeep"] = upkeep
+        params[f"cargo_fleet_{uid}"] = int(fleet_units.get(uid, 0))
     for unit_id, count in fleet_units.items():
         params[f"cargo_fleet_{unit_id}"] = int(count)
 
@@ -2220,6 +2268,10 @@ def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, t
     except Exception:
         pass
 
+    upkeep_map = _fetch_deployment_upkeep(
+        session, ikabot_config, origin_id, target_id, "army", "cargo_army"
+    )
+
     params = {
         "action":            "transportOperations",
         "function":          "deployArmy",
@@ -2233,6 +2285,9 @@ def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, t
         "transporter":       int(transporters),
         "ajax":              1,
     }
+    for uid, upkeep in upkeep_map.items():
+        params[f"cargo_army_{uid}_upkeep"] = upkeep
+        params[f"cargo_army_{uid}"] = int(troop_units.get(uid, 0))
     for unit_id, count in troop_units.items():
         params[f"cargo_army_{unit_id}"] = int(count)
 
