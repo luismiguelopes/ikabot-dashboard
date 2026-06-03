@@ -503,7 +503,7 @@ export function DispatchTab() {
             <button
               className={btnClass('primary', 'w-full justify-center py-2.5')}
               onClick={handleSubmit}
-              disabled={submitting || !target || !originCity || target?.state === 'inactive'}
+              disabled={submitting || !target || !originCity}
             >
               {submitting
                 ? <><i className="fa-solid fa-spinner fa-spin" /> {t('dispatch_sending')}</>
