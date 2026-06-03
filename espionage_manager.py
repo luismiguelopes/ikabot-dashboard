@@ -1490,6 +1490,35 @@ def has_pending_attacks():
         return False
 
 
+def _fetch_plunder_form(session, ikabot_config, origin_id, target_id):
+    """Fetch the plunder form for a player city and log its hidden fields.
+    Used to discover the correct action/function for player pillaging."""
+    try:
+        raw = session.post(params={
+            "view":            "plunder",
+            "isMission":       "1",
+            "destinationCityId": str(target_id),
+            "backgroundView":  "city",
+            "currentCityId":   str(origin_id),
+            "actionRequest":   ikabot_config.actionRequest,
+            "ajax":            1,
+        })
+        import re
+        # Extract all hidden input fields from the form
+        hidden = re.findall(r'name=\\"([^"\\]+)\\"[^>]*value=\\"([^"\\]*)\\"', raw)
+        # Also look for action/function in the form submit URL or data
+        functions = re.findall(r'"function"\s*[:=]\s*"([^"]+)"', raw)
+        actions = re.findall(r'"action"\s*[:=]\s*"([^"]+)"', raw)
+        logger.info("[attack] plunder form hidden fields: %s", hidden[:20])
+        logger.info("[attack] plunder form functions: %s | actions: %s", functions[:5], actions[:5])
+        # Log raw for manual inspection
+        logger.info("[attack] plunder form raw (first 800): %.800s", raw)
+        return raw
+    except Exception as e:
+        logger.error("[attack] _fetch_plunder_form falhou: %s", e, exc_info=True)
+        return ""
+
+
 def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deployment, cargo_prefix):
     """Fetch the deployment form to get unit upkeep values required by the game.
     Returns dict of {unit_id: upkeep_str} for all unit types present in the form."""
@@ -1549,6 +1578,11 @@ def _dispatch_attack(session, item):
         time.sleep(random.randint(3, 7))
     except Exception:
         pass
+
+    # Diagnostic: fetch plunder form to discover correct player-attack API
+    if mission_type == "army":
+        _fetch_plunder_form(session, ikabot_config, origin_id, item["targetCityId"])
+        time.sleep(random.randint(2, 4))
 
     # Fetch deployment form: required to establish context + get per-unit upkeep values
     upkeep_map = _fetch_deployment_upkeep(
