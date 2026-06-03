@@ -32,6 +32,7 @@ interface DispatchTarget {
   islandId:   string
   islandX:    number
   islandY:    number
+  state?:     string
 }
 
 interface PendingAttack {
@@ -165,6 +166,7 @@ export function DispatchTab() {
         islandId:   p.islandId ?? '',
         islandX:    p.islandX,
         islandY:    p.islandY,
+        state:      p.state,
       }))
   })()
 
@@ -402,14 +404,22 @@ export function DispatchTab() {
                 {t('dispatch_search')}
               </label>
               {target ? (
-                <div className="flex items-center gap-2 border border-indigo-300 rounded-lg px-3 py-2 bg-indigo-50">
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-indigo-800">{target.cityName}</div>
-                    <div className="text-xs text-indigo-500">{target.playerName} · ({target.islandX}:{target.islandY})</div>
+                <div>
+                  <div className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${target.state === 'inactive' ? 'border-yellow-300 bg-yellow-50' : 'border-indigo-300 bg-indigo-50'}`}>
+                    <div className="flex-1">
+                      <div className={`text-sm font-semibold ${target.state === 'inactive' ? 'text-yellow-800' : 'text-indigo-800'}`}>{target.cityName}</div>
+                      <div className={`text-xs ${target.state === 'inactive' ? 'text-yellow-600' : 'text-indigo-500'}`}>{target.playerName} · ({target.islandX}:{target.islandY})</div>
+                    </div>
+                    <button onClick={() => { setTarget(null); setTargetSearch('') }} className="text-slate-400 hover:text-red-500">
+                      <i className="fa-solid fa-xmark" />
+                    </button>
                   </div>
-                  <button onClick={() => { setTarget(null); setTargetSearch('') }} className="text-slate-400 hover:text-red-500">
-                    <i className="fa-solid fa-xmark" />
-                  </button>
+                  {target.state === 'inactive' && (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-2 py-1.5">
+                      <i className="fa-solid fa-triangle-exclamation" />
+                      Jogador inactivo — o jogo não permite ataques (TXT_AVATAR_INACTIVE)
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -493,7 +503,7 @@ export function DispatchTab() {
             <button
               className={btnClass('primary', 'w-full justify-center py-2.5')}
               onClick={handleSubmit}
-              disabled={submitting || !target || !originCity}
+              disabled={submitting || !target || !originCity || target?.state === 'inactive'}
             >
               {submitting
                 ? <><i className="fa-solid fa-spinner fa-spin" /> {t('dispatch_sending')}</>
