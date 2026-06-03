@@ -1490,33 +1490,29 @@ def has_pending_attacks():
         return False
 
 
-def _fetch_plunder_form(session, ikabot_config, origin_id, target_id):
-    """Fetch the plunder form for a player city and log its hidden fields.
-    Used to discover the correct action/function for player pillaging."""
+def _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id):
+    """Fetch the plunder form for a player city.
+    Returns dict of {unit_id: upkeep_str} using the IDs the game expects (e.g. '303', not 's303')."""
+    import re
     try:
         raw = session.post(params={
-            "view":            "plunder",
-            "isMission":       "1",
+            "view":              "plunder",
+            "isMission":         "1",
             "destinationCityId": str(target_id),
-            "backgroundView":  "city",
-            "currentCityId":   str(origin_id),
-            "actionRequest":   ikabot_config.actionRequest,
-            "ajax":            1,
+            "backgroundView":    "city",
+            "currentCityId":     str(origin_id),
+            "actionRequest":     ikabot_config.actionRequest,
+            "ajax":              1,
         })
-        import re
-        # Extract all hidden input fields from the form
-        hidden = re.findall(r'name=\\"([^"\\]+)\\"[^>]*value=\\"([^"\\]*)\\"', raw)
-        # Also look for action/function in the form submit URL or data
-        functions = re.findall(r'"function"\s*[:=]\s*"([^"]+)"', raw)
-        actions = re.findall(r'"action"\s*[:=]\s*"([^"]+)"', raw)
-        logger.info("[attack] plunder form hidden fields: %s", hidden[:20])
-        logger.info("[attack] plunder form functions: %s | actions: %s", functions[:5], actions[:5])
-        # Log raw for manual inspection
-        logger.info("[attack] plunder form raw (first 800): %.800s", raw)
-        return raw
+        time.sleep(random.randint(2, 5))
+        upkeep = {}
+        for m in re.finditer(r'name=\\"cargo_army_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"', raw):
+            upkeep[m.group(1)] = m.group(2)
+        logger.info("[attack] plunder form: %d tipo(s) de unidade", len(upkeep))
+        return upkeep
     except Exception as e:
-        logger.error("[attack] _fetch_plunder_form falhou: %s", e, exc_info=True)
-        return ""
+        logger.warning("[attack] _fetch_plunder_upkeep falhou: %s", e)
+        return {}
 
 
 def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deployment, cargo_prefix):
@@ -1549,19 +1545,11 @@ def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deplo
 
 
 def _dispatch_attack(session, item):
-    """POST deployArmy or deployFleet to attack a player city."""
+    """Attack a player city: army uses sendArmyPlunderSea, fleet uses deployFleet."""
     import ikabot.config as ikabot_config
 
     origin_id    = str(item["originCityId"])
     mission_type = item.get("missionType", "army")
-    if mission_type == "fleet":
-        function      = "deployFleet"
-        deployment    = "fleet"
-        cargo_prefix  = "cargo_fleet"
-    else:
-        function      = "deployArmy"
-        deployment    = "army"
-        cargo_prefix  = "cargo_army"
 
     # Switch session context to origin city
     try:
@@ -1579,50 +1567,70 @@ def _dispatch_attack(session, item):
     except Exception:
         pass
 
-    # Diagnostic: fetch plunder form to discover correct player-attack API
     if mission_type == "army":
-        _fetch_plunder_form(session, ikabot_config, origin_id, item["targetCityId"])
-        time.sleep(random.randint(2, 4))
+        # Army pillage uses sendArmyPlunderSea — unit IDs from plunder form (no 's' prefix)
+        upkeep_map = _fetch_plunder_upkeep(
+            session, ikabot_config, origin_id, item["targetCityId"]
+        )
 
-    # Fetch deployment form: required to establish context + get per-unit upkeep values
-    upkeep_map = _fetch_deployment_upkeep(
-        session, ikabot_config, origin_id, item["targetCityId"], deployment, cargo_prefix
-    )
-
-    params = {
-        "action":            "transportOperations",
-        "function":          function,
-        "actionRequest":     ikabot_config.actionRequest,
-        "islandId":          str(item["islandId"]),
-        "destinationCityId": str(item["targetCityId"]),
-        "deploymentType":    deployment,
-        "backgroundView":    "city",
-        "currentCityId":     origin_id,
-        "templateView":      "deployment",
-        "ajax":              1,
-    }
-    if mission_type == "army":
         requested = int(item.get("transporters", 0))
-        # Cap at available ships — requesting more than available causes type=11
-        available_ships = requested  # default: trust user
+        available_ships = requested
         try:
             with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
                 available_ships = int(json.load(_f).get("ships", {}).get("available", requested))
         except Exception:
             pass
-        params["transporter"] = min(requested, available_ships)
-        if requested > available_ships:
-            logger.info("[attack] transporters limitados a %d (pedido: %d, disponível: %d)",
-                        available_ships, requested, available_ships)
+        capped = min(requested, available_ships)
 
-    # Include ALL unit types from the form (0 for units not being sent) + their upkeep values
-    user_units = item.get("units", {})
-    for uid, upkeep in upkeep_map.items():
-        params[f"{cargo_prefix}_{uid}_upkeep"] = upkeep
-        params[f"{cargo_prefix}_{uid}"] = int(user_units.get(uid, 0))
-    # Ensure user's selections override (in case a unit wasn't in the form)
-    for unit_id, count in user_units.items():
-        params[f"{cargo_prefix}_{unit_id}"] = int(count)
+        # Map user unit selections: strip 's' prefix to match game API IDs (s303 → 303)
+        user_units = item.get("units", {})
+        user_units_api = {(uid.lstrip("s") if uid.startswith("s") else uid): cnt
+                         for uid, cnt in user_units.items()}
+
+        params = {
+            "action":            "transportOperations",
+            "function":          "sendArmyPlunderSea",
+            "actionRequest":     ikabot_config.actionRequest,
+            "islandId":          str(item["islandId"]),
+            "destinationCityId": str(item["targetCityId"]),
+            "backgroundView":    "city",
+            "currentCityId":     origin_id,
+            "templateView":      "plunder",
+            "transporter":       capped,
+            "ajax":              1,
+        }
+        # All unit types from form with upkeep (0 for units not being sent)
+        for uid, upkeep in upkeep_map.items():
+            params[f"cargo_army_{uid}_upkeep"] = upkeep
+            params[f"cargo_army_{uid}"] = int(user_units_api.get(uid, 0))
+        # Override with user selections (handles units not in form)
+        for uid, cnt in user_units_api.items():
+            params[f"cargo_army_{uid}"] = int(cnt)
+        function = "sendArmyPlunderSea"
+
+    else:
+        # Fleet attack uses deployFleet (existing mechanism)
+        upkeep_map = _fetch_deployment_upkeep(
+            session, ikabot_config, origin_id, item["targetCityId"], "fleet", "cargo_fleet"
+        )
+        params = {
+            "action":            "transportOperations",
+            "function":          "deployFleet",
+            "actionRequest":     ikabot_config.actionRequest,
+            "islandId":          str(item["islandId"]),
+            "destinationCityId": str(item["targetCityId"]),
+            "deploymentType":    "fleet",
+            "backgroundView":    "city",
+            "currentCityId":     origin_id,
+            "templateView":      "deployment",
+            "ajax":              1,
+        }
+        for uid, upkeep in upkeep_map.items():
+            params[f"cargo_fleet_{uid}_upkeep"] = upkeep
+            params[f"cargo_fleet_{uid}"] = int(item.get("units", {}).get(uid, 0))
+        for uid, cnt in item.get("units", {}).items():
+            params[f"cargo_fleet_{uid}"] = int(cnt)
+        function = "deployFleet"
 
     logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s) transporter=%s",
                 function, item.get("targetCityName"), item.get("targetPlayerName"),
