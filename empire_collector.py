@@ -268,10 +268,18 @@ def collect_city_data(session, ids, cities):
 
 
 def _parse_unit_tab(html, css_class):
-    """Parse a cityMilitary tab HTML. css_class is 'army' or 'fleet'."""
+    """Parse a cityMilitary tab HTML. css_class is 'army' or 'fleet'.
+    The response always contains BOTH sections (army first, fleet after), regardless
+    of the activeTab requested — each section must be sliced out before pairing unit
+    divs with <td> count cells, or fleet units get the army counts."""
     import re
     if css_class == "army":
         html = html.split('<div class="fleet')[0]
+    else:
+        idx = html.find('<div class="fleet')
+        if idx < 0:
+            return {}
+        html = html[idx:]
     id_names = re.findall(
         rf'<div class="{css_class} (.*?)">\s*<div class="tooltip">(.*?)<\/div>', html
     )
@@ -315,18 +323,24 @@ def _collect_military_data(session):
                 "ajax":           "1",
             }
 
-            # Troops tab
+            # One request covers both sections — the response always carries the full
+            # cityMilitary view (army + fleet) regardless of activeTab
             params = dict(base_params, activeTab="tabUnits", currentTab="multiTab1")
             resp      = session.post(params=params)
             resp_data = json.loads(resp, strict=False)
-            troops    = _parse_unit_tab(resp_data[1][1][1], "army")
+            html      = resp_data[1][1][1]
+            troops    = _parse_unit_tab(html, "army")
+            fleet     = _parse_unit_tab(html, "fleet")
 
-            # Fleet tab
-            time.sleep(random.randint(3, 8))
-            params = dict(base_params, activeTab="tabFleet", currentTab="multiTab2")
-            resp      = session.post(params=params)
-            resp_data = json.loads(resp, strict=False)
-            fleet     = _parse_unit_tab(resp_data[1][1][1], "fleet")
+            # Raw HTML dump for parser diagnosis (counts vs in-game mismatches)
+            try:
+                debug_dir = os.path.join(LOGS_DIR, "military_debug")
+                os.makedirs(debug_dir, exist_ok=True)
+                safe_name = city_name.replace("/", "_")
+                with open(os.path.join(debug_dir, f"{safe_name}.html"), "w") as f:
+                    f.write(html)
+            except Exception:
+                pass
 
             result[city_name] = {"cityId": str(city_id), "troops": troops, "fleet": fleet}
             logger.info("[military] %s: %d tropa(s), %d frota(s)",

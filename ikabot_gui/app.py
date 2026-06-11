@@ -808,6 +808,13 @@ def api_military():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/military/refresh", methods=["POST"])
+def api_military_refresh():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(os.path.join(LOGS_DIR, ".force_military_update"), "w").close()
+    return jsonify({"ok": True, "message": "Actualização militar agendada (≤60s)."})
+
+
 @app.route("/api/espionage/attack-queue")
 def api_attack_queue_get():
     try:

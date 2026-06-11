@@ -17,7 +17,7 @@ from empire_utils import (
     ACTIVE_HOURS_START, ACTIVE_HOURS_END,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
     FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
-    FORCE_IMPORT_REPORTS_FLAG, lm, logger,
+    FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -241,6 +241,19 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             break
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
+
+        # Manual military refresh triggered by Flask UI (military.json has an 8h cache)
+        if session and os.path.exists(FORCE_MILITARY_FLAG):
+            try:
+                os.remove(FORCE_MILITARY_FLAG)
+            except Exception:
+                pass
+            try:
+                from empire_collector import _collect_military_data
+                _collect_military_data(session)
+            except Exception:
+                logger.error("military refresh falhou", exc_info=True)
+            continue
 
         # Import existing safehouse reports triggered by Flask UI
         if session and os.path.exists(FORCE_IMPORT_REPORTS_FLAG):

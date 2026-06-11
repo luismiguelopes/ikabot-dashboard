@@ -34,6 +34,7 @@ FORCE_EMPIRE_FLAG         = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG          = os.path.join(LOGS_DIR, ".force_queue_check")
 FORCE_MOVEMENTS_FLAG      = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_IMPORT_REPORTS_FLAG = os.path.join(LOGS_DIR, ".force_import_reports")
+FORCE_MILITARY_FLAG       = os.path.join(LOGS_DIR, ".force_military_update")
 SCAN_CHECKPOINT_PATH      = os.path.join(LOGS_DIR, "world_scan_checkpoint.json")
 
 

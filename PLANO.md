@@ -115,9 +115,13 @@ Testes: 40/40 a passar (`test_db.py`, `test_queue.py`, `test_attack_queue.py`).
 ## Pendências de verificação (não são trabalho novo)
 
 - [x] Confirmar in-game que `sendArmyPlunderSea` lança ataques — ✅ validado 2026-06-11.
-- [ ] Validar in-game o ataque naval (bloqueio de porto): fazer um dispatch fleet na UI
-      e verificar nos logs `[attack] blockade form (view=...)` + type=10. Se o
-      formulário não tiver os campos, os logs mostram os inputs reais para corrigir.
+- [x] Ataque naval — ✅ validado 2026-06-11: a função real é **`sendFleetOnBlockade`**
+      (auto-descoberta pelo formulário `view=blockade`); ataque saiu com type=10.
+- [x] Contagens militares erradas na UI (ex.: 290 Lança-Chamas inexistentes) — ✅ bug do
+      parser corrigido 2026-06-11: a resposta cityMilitary traz army+fleet juntos e a
+      frota emparelhava com as células do exército. Validado contra Baphomet in-game.
+      Bónus: 1 pedido HTTP por cidade (era 2) e refresh manual via
+      `POST /api/military/refresh` (P4.4 ✅).
 - [ ] Validar a primeira vaga do auto-attack (agora usa sendArmyPlunderSea).
 - [ ] Validar deploy para cidade própria (após 1 ciclo do império, para o islandId
       aparecer no own_cities.json): dispatch com destino "própria" → deployArmy type=10.
