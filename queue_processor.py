@@ -255,11 +255,12 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 logger.error("import_existing_reports falhou", exc_info=True)
             continue
 
-        # Pending spy dispatch or recalls queued by the Flask UI — process immediately
+        # Pending spy dispatch or recalls queued by the Flask UI — process immediately.
+        # has_due_recalls: recalls waiting for a spaced retry must not skip the sleep.
         if session:
             try:
-                from espionage_manager import has_pending_dispatch, process_dispatch_queue, _load_recall_queue, _process_recall_queue
-                if _load_recall_queue().get("pending"):
+                from espionage_manager import has_pending_dispatch, process_dispatch_queue, has_due_recalls, _process_recall_queue
+                if has_due_recalls():
                     _process_recall_queue(session)
                     continue
                 if has_pending_dispatch():
@@ -268,11 +269,13 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             except Exception:
                 pass
 
-        # Pending scheduled attacks — dispatch as soon as dispatchAfter is reached
+        # Pending scheduled attacks — dispatch as soon as dispatchAfter is reached.
+        # has_due_attacks (not has_pending_attacks): a future-scheduled attack must not
+        # short-circuit the sleep below, or this loop spins hot until dispatch time.
         if session and _in_scan_hours():
             try:
-                from espionage_manager import has_pending_attacks, process_attack_queue
-                if has_pending_attacks():
+                from espionage_manager import has_due_attacks, process_attack_queue
+                if has_due_attacks():
                     process_attack_queue(session, in_active_hours=True)
                     continue
             except Exception:

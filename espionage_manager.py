@@ -62,9 +62,8 @@ def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
         mark_key = f"{player_id}_{island_x}_{island_y}"
         now = int(time.time())
         try:
-            from db_manager import DbManager
-            db = DbManager()
-            db.save_mark(mark_key, player_id, str(island_x), str(island_y), "ignorar", note)
+            from db_manager import save_mark
+            save_mark(mark_key, player_id, str(island_x), str(island_y), "ignorar", note)
             return
         except Exception:
             pass
@@ -588,8 +587,12 @@ def process_dispatch_queue(session):
                 spy_data = counts_data["byCityId"]
                 logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
 
-    q["pending"] = []
-    _save_dispatch_queue(q)
+    # Merge-on-save: keep only items queued by Flask while this loop was running
+    processed_keys = {_queue_item_key(it) for it in pending}
+    fresh = _load_dispatch_queue().get("pending", [])
+    _save_dispatch_queue({
+        "pending": [it for it in fresh if _queue_item_key(it) not in processed_keys],
+    })
 
 
 def _append_failed_mission(item, error):
@@ -1490,6 +1493,27 @@ def has_pending_attacks():
         return False
 
 
+def has_due_attacks():
+    """True only if at least one pending attack has reached its dispatchAfter time.
+    smart_sleep must use this (not has_pending_attacks) — otherwise a future-scheduled
+    attack makes the wait loop spin without sleeping until the attack is due."""
+    try:
+        now = int(time.time())
+        return any(int(it.get("dispatchAfter", 0)) <= now
+                   for it in _load_attack_queue().get("pending", []))
+    except Exception:
+        return False
+
+
+def _queue_item_key(item):
+    """Stable identity for items in the JSON queues shared with Flask.
+    The queues have no cross-container locking, so processors must re-read the file
+    before saving and remove only the items they actually processed (by this key)."""
+    return item.get("id") or "{}_{}_{}".format(
+        item.get("originCityId", ""), item.get("targetCityId", ""),
+        item.get("queuedAt", item.get("addedAt", "")))
+
+
 def _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id):
     """Fetch the plunder form for a player city.
     Returns dict of {unit_id: upkeep_str} using the IDs the game expects (e.g. '303', not 's303')."""
@@ -1544,140 +1568,284 @@ def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deplo
         return {}
 
 
-def _dispatch_attack(session, item):
-    """Attack a player city: army uses sendArmyPlunderSea, fleet uses deployFleet."""
-    import ikabot.config as ikabot_config
-
-    origin_id    = str(item["originCityId"])
-    mission_type = item.get("missionType", "army")
-
-    # Switch session context to origin city
+def _change_to_origin_city(session, ikabot_config, origin_id):
+    """Switch session context to the origin city before any dispatch — without this
+    the game responds with activeTab:"" and the dispatch fails."""
     try:
         session.post(params={
             "action":         "header",
             "function":       "changeCurrentCity",
             "actionRequest":  ikabot_config.actionRequest,
             "oldView":        "city",
-            "cityId":         origin_id,
+            "cityId":         str(origin_id),
             "backgroundView": "city",
-            "currentCityId":  origin_id,
+            "currentCityId":  str(origin_id),
             "ajax":           "1",
         })
         time.sleep(random.randint(3, 7))
     except Exception:
         pass
 
-    if mission_type == "army":
-        # Army pillage uses sendArmyPlunderSea — unit IDs from plunder form (no 's' prefix)
-        upkeep_map = _fetch_plunder_upkeep(
-            session, ikabot_config, origin_id, item["targetCityId"]
-        )
 
-        requested = int(item.get("transporters", 0))
-        available_ships = requested
-        try:
-            with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
-                available_ships = int(json.load(_f).get("ships", {}).get("available", requested))
-        except Exception:
-            pass
-        capped = min(requested, available_ships)
+def _parse_attack_feedback(resp, function, ikabot_config):
+    """Parse an attack POST response: refresh CSRF token, return True on type=10.
+    Logs the game's feedback text on rejection for diagnosability."""
+    resp_data = json.loads(resp, strict=False)
 
-        # Map user unit selections: strip 's' prefix to match game API IDs (s303 → 303)
-        user_units = item.get("units", {})
-        user_units_api = {(uid.lstrip("s") if uid.startswith("s") else uid): cnt
-                         for uid, cnt in user_units.items()}
+    for entry in resp_data:
+        if isinstance(entry, list) and entry[0] == "updateGlobalData":
+            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
+            if tok:
+                ikabot_config.actionRequest = tok
+            break
 
-        params = {
-            "action":            "transportOperations",
-            "function":          "sendArmyPlunderSea",
-            "actionRequest":     ikabot_config.actionRequest,
-            "islandId":          str(item["islandId"]),
-            "destinationCityId": str(item["targetCityId"]),
-            "backgroundView":    "city",
-            "currentCityId":     origin_id,
-            "templateView":      "plunder",
-            "transporter":       capped,
-            "ajax":              1,
-        }
-        # All unit types from form with upkeep (0 for units not being sent)
-        for uid, upkeep in upkeep_map.items():
-            params[f"cargo_army_{uid}_upkeep"] = upkeep
-            params[f"cargo_army_{uid}"] = int(user_units_api.get(uid, 0))
-        # Override with user selections (handles units not in form)
-        for uid, cnt in user_units_api.items():
-            params[f"cargo_army_{uid}"] = int(cnt)
-        function = "sendArmyPlunderSea"
+    for entry in resp_data:
+        if isinstance(entry, list) and entry[0] == "provideFeedback":
+            fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
+            types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
+            if 10 in types:
+                return True
+            texts = [fb.get("text", "") for fb in fb_list if isinstance(fb, dict)]
+            logger.warning("[attack] %s recusado types=%s — %s", function, types,
+                           " | ".join(t for t in texts if t))
+            return False
+    logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
+    return False
 
-    else:
-        # Fleet attack uses deployFleet (existing mechanism)
-        upkeep_map = _fetch_deployment_upkeep(
-            session, ikabot_config, origin_id, item["targetCityId"], "fleet", "cargo_fleet"
-        )
-        params = {
-            "action":            "transportOperations",
-            "function":          "deployFleet",
-            "actionRequest":     ikabot_config.actionRequest,
-            "islandId":          str(item["islandId"]),
-            "destinationCityId": str(item["targetCityId"]),
-            "deploymentType":    "fleet",
-            "backgroundView":    "city",
-            "currentCityId":     origin_id,
-            "templateView":      "deployment",
-            "ajax":              1,
-        }
-        for uid, upkeep in upkeep_map.items():
-            params[f"cargo_fleet_{uid}_upkeep"] = upkeep
-            params[f"cargo_fleet_{uid}"] = int(item.get("units", {}).get(uid, 0))
-        for uid, cnt in item.get("units", {}).items():
-            params[f"cargo_fleet_{uid}"] = int(cnt)
-        function = "deployFleet"
 
-    logger.info("[attack] a despachar %s → %s (%s) com %d unidade(s) transporter=%s",
-                function, item.get("targetCityName"), item.get("targetPlayerName"),
-                sum(item.get("units", {}).values()), params.get("transporter", "N/A"))
+def _cap_to_available_ships(requested):
+    """transporter > available ships → server rejects with type=11. Cap it."""
+    requested = int(requested)
+    available = requested
     try:
-        resp      = session.post(params=params)
-        resp_data = json.loads(resp, strict=False)
+        with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
+            available = int(json.load(_f).get("ships", {}).get("available", requested))
+    except Exception:
+        pass
+    return min(requested, available)
 
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                if tok:
-                    ikabot_config.actionRequest = tok
-                break
 
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "provideFeedback":
-                fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
-                types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
-                if 10 in types:
-                    return True
-                # Log the feedback text from the game for diagnosability
-                texts = [fb.get("text", "") for fb in fb_list if isinstance(fb, dict)]
-                logger.warning("[attack] %s recusado types=%s — %s", function, types, " | ".join(t for t in texts if t))
-                return False
-        logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
-        return False
+def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters):
+    """Player pillage via sendArmyPlunderSea. deployArmy does NOT work here — it only
+    stations troops in own/allied cities. Accepts unit IDs with or without the CSS
+    's' prefix (military.json stores 's303', the game API expects '303').
+    Returns True on success (provideFeedback type=10)."""
+    import ikabot.config as ikabot_config
+
+    origin_id = str(origin_id)
+    _change_to_origin_city(session, ikabot_config, origin_id)
+
+    # Upkeep values are mandatory — the server rejects the POST without them
+    upkeep_map = _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id)
+
+    capped = _cap_to_available_ships(transporters)
+
+    units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
+                 for uid, cnt in units.items()}
+
+    params = {
+        "action":            "transportOperations",
+        "function":          "sendArmyPlunderSea",
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(island_id),
+        "destinationCityId": str(target_id),
+        "backgroundView":    "city",
+        "currentCityId":     origin_id,
+        "templateView":      "plunder",
+        "transporter":       capped,
+        "ajax":              1,
+    }
+    # All unit types from form with upkeep (0 for units not being sent)
+    for uid, upkeep in upkeep_map.items():
+        params[f"cargo_army_{uid}_upkeep"] = upkeep
+        params[f"cargo_army_{uid}"] = units_api.get(uid, 0)
+    # Override with user selections (handles units not in form)
+    for uid, cnt in units_api.items():
+        params[f"cargo_army_{uid}"] = cnt
+
+    logger.info("[attack] sendArmyPlunderSea %s → %s: %d unidade(s), transporter=%d",
+                origin_id, target_id, sum(units_api.values()), capped)
+    try:
+        resp = session.post(params=params)
+        return _parse_attack_feedback(resp, "sendArmyPlunderSea", ikabot_config)
     except Exception as e:
-        logger.error("[attack] dispatch exception: %s", e, exc_info=True)
+        logger.error("[attack] sendArmyPlunderSea exception: %s", e, exc_info=True)
         return False
+
+
+def _fetch_blockade_form(session, ikabot_config, origin_id, target_id):
+    """Fetch the naval-attack (port blockade) form for a player city.
+    Tries candidate view names and extracts upkeep values plus the real function name
+    from the form itself — same self-discovery approach that found sendArmyPlunderSea.
+    Returns (upkeep_dict, function_name_or_None, view_used)."""
+    import re
+    for view in ("blockade", "blockadeHarbour"):
+        try:
+            raw = session.post(params={
+                "view":              view,
+                "isMission":         "1",
+                "destinationCityId": str(target_id),
+                "backgroundView":    "city",
+                "currentCityId":     str(origin_id),
+                "actionRequest":     ikabot_config.actionRequest,
+                "ajax":              1,
+            })
+            time.sleep(random.randint(2, 5))
+        except Exception as e:
+            logger.warning("[attack] _fetch_blockade_form(%s) falhou: %s", view, e)
+            continue
+
+        upkeep = {}
+        for m in re.finditer(r'name=\\"cargo_fleet_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"', raw):
+            upkeep[m.group(1)] = m.group(2)
+        fn_m = re.search(r'name=\\"function\\"[^>]*value=\\"(\w+)\\"', raw)
+        fn = fn_m.group(1) if fn_m else None
+
+        if upkeep or fn:
+            logger.info("[attack] blockade form (view=%s): %d tipo(s) de unidade, function=%s",
+                        view, len(upkeep), fn)
+            return upkeep, fn, view
+
+        # Diagnostic: log the form's input names so the real API can be identified
+        inputs = re.findall(r'name=\\"([^\\"]+)\\"', raw)[:40]
+        logger.info("[attack] blockade form (view=%s) sem campos esperados — inputs: %s",
+                    view, inputs)
+    return {}, None, "blockade"
+
+
+def _send_fleet_blockade(session, origin_id, target_id, island_id, units):
+    """Naval attack (port blockade) against a player city. deployFleet does NOT work
+    here — it only stations ships in own/allied cities. The function name is taken
+    from the form when present (expected sendFleetBlockadeSea).
+    Returns True on success (provideFeedback type=10)."""
+    import ikabot.config as ikabot_config
+
+    origin_id = str(origin_id)
+    _change_to_origin_city(session, ikabot_config, origin_id)
+
+    upkeep_map, form_fn, view = _fetch_blockade_form(session, ikabot_config, origin_id, target_id)
+    function = form_fn or "sendFleetBlockadeSea"
+
+    units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
+                 for uid, cnt in units.items()}
+
+    params = {
+        "action":            "transportOperations",
+        "function":          function,
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(island_id),
+        "destinationCityId": str(target_id),
+        "backgroundView":    "city",
+        "currentCityId":     origin_id,
+        "templateView":      view,
+        "ajax":              1,
+    }
+    for uid, upkeep in upkeep_map.items():
+        params[f"cargo_fleet_{uid}_upkeep"] = upkeep
+        params[f"cargo_fleet_{uid}"] = units_api.get(uid, 0)
+    for uid, cnt in units_api.items():
+        params[f"cargo_fleet_{uid}"] = cnt
+
+    logger.info("[attack] %s %s → %s: %d unidade(s) naval(is)",
+                function, origin_id, target_id, sum(units_api.values()))
+    try:
+        resp = session.post(params=params)
+        return _parse_attack_feedback(resp, function, ikabot_config)
+    except Exception as e:
+        logger.error("[attack] %s exception: %s", function, e, exc_info=True)
+        return False
+
+
+def _send_deploy(session, origin_id, target_id, island_id, units, transporters, kind):
+    """Station troops/ships in an OWN (or allied) city via deployArmy/deployFleet.
+    Unlike the plunder/blockade forms, the deployment form uses the CSS-style unit
+    IDs (s303), so unit IDs are passed through unchanged.
+    Returns True on success (provideFeedback type=10)."""
+    import ikabot.config as ikabot_config
+
+    origin_id    = str(origin_id)
+    function     = "deployArmy" if kind == "army" else "deployFleet"
+    cargo_prefix = "cargo_army" if kind == "army" else "cargo_fleet"
+
+    _change_to_origin_city(session, ikabot_config, origin_id)
+    upkeep_map = _fetch_deployment_upkeep(
+        session, ikabot_config, origin_id, target_id, kind, cargo_prefix)
+
+    params = {
+        "action":            "transportOperations",
+        "function":          function,
+        "actionRequest":     ikabot_config.actionRequest,
+        "islandId":          str(island_id),
+        "destinationCityId": str(target_id),
+        "deploymentType":    kind,
+        "backgroundView":    "city",
+        "currentCityId":     origin_id,
+        "templateView":      "deployment",
+        "ajax":              1,
+    }
+    if kind == "army":
+        params["transporter"] = _cap_to_available_ships(transporters)
+
+    for uid, upkeep in upkeep_map.items():
+        params[f"{cargo_prefix}_{uid}_upkeep"] = upkeep
+        params[f"{cargo_prefix}_{uid}"] = int(units.get(uid, 0))
+    for uid, cnt in units.items():
+        params[f"{cargo_prefix}_{uid}"] = int(cnt)
+
+    logger.info("[attack] %s %s → %s: %d unidade(s)",
+                function, origin_id, target_id, sum(int(c) for c in units.values()))
+    try:
+        resp = session.post(params=params)
+        return _parse_attack_feedback(resp, function, ikabot_config)
+    except Exception as e:
+        logger.error("[attack] %s exception: %s", function, e, exc_info=True)
+        return False
+
+
+def _dispatch_attack(session, item):
+    """Dispatch a combat movement.
+    Enemy city: army → sendArmyPlunderSea, fleet → port blockade.
+    Own city:   deployArmy/deployFleet (stationing)."""
+    origin_id    = str(item["originCityId"])
+    mission_type = item.get("missionType", "army")
+    target_type  = item.get("targetType", "enemy")
+
+    if target_type == "own":
+        logger.info("[attack] a estacionar %s → cidade própria %s",
+                    mission_type, item.get("targetCityName"))
+        return _send_deploy(session, origin_id, item["targetCityId"],
+                            item["islandId"], item.get("units", {}),
+                            item.get("transporters", 0), mission_type)
+
+    if mission_type == "army":
+        logger.info("[attack] a despachar army → %s (%s)",
+                    item.get("targetCityName"), item.get("targetPlayerName"))
+        return _send_army_plunder(session, origin_id, item["targetCityId"],
+                                  item["islandId"], item.get("units", {}),
+                                  item.get("transporters", 0))
+
+    logger.info("[attack] a despachar fleet → %s (%s)",
+                item.get("targetCityName"), item.get("targetPlayerName"))
+    return _send_fleet_blockade(session, origin_id, item["targetCityId"],
+                                item["islandId"], item.get("units", {}))
 
 
 def process_attack_queue(session, in_active_hours=True):
-    """Dispatch pending attacks during active hours with random delays."""
+    """Dispatch attacks whose dispatchAfter has been reached.
+    Saves the queue only when something was dispatched, and re-reads it before saving
+    so items queued by Flask during the (slow) dispatch loop are never lost."""
     if not in_active_hours:
         return
 
-    q = _load_attack_queue()
-    pending = q.get("pending", [])
+    pending = _load_attack_queue().get("pending", [])
     if not pending:
         return
 
-    remaining = []
+    processed_keys = set()
+    retry_items = []
     dispatched = 0
     for item in pending:
         if int(time.time()) < item.get("dispatchAfter", 0):
-            remaining.append(item)
             continue
 
         if dispatched > 0:
@@ -1687,15 +1855,46 @@ def process_attack_queue(session, in_active_hours=True):
 
         ok = _dispatch_attack(session, item)
         dispatched += 1
+        processed_keys.add(_queue_item_key(item))
         if ok:
             logger.info("[attack] ataque despachado → %s (%s)",
                         item.get("targetPlayerName"), item.get("targetCityName"))
+            try:
+                from telegram_notifier import notify_attack_dispatched
+                notify_attack_dispatched(item.get("originCityName", "?"),
+                                         item.get("targetCityName", "?"),
+                                         item.get("targetPlayerName", "?"),
+                                         item.get("missionType", "army"))
+            except Exception:
+                pass
         else:
-            logger.warning("[attack] dispatch falhou para %s — removido da fila",
-                           item.get("targetPlayerName"))
+            retries = item.get("retries", 0) + 1
+            if retries >= 3:
+                logger.warning("[attack] dispatch falhou %d vezes para %s — removido da fila",
+                               retries, item.get("targetPlayerName"))
+                try:
+                    from telegram_notifier import notify_attack_failed
+                    notify_attack_failed(item.get("targetCityName", "?"),
+                                         item.get("targetPlayerName", "?"), retries)
+                except Exception:
+                    pass
+            else:
+                retry_mins = random.randint(5, 15)
+                updated = dict(item, retries=retries,
+                               dispatchAfter=int(time.time()) + retry_mins * 60)
+                retry_items.append(updated)
+                logger.warning("[attack] dispatch falhou para %s (tentativa %d/3) — "
+                               "nova tentativa em %d min",
+                               item.get("targetPlayerName"), retries, retry_mins)
 
-    q["pending"] = remaining
-    _save_attack_queue(q)
+    if not processed_keys:
+        return
+
+    fresh = _load_attack_queue().get("pending", [])
+    _save_attack_queue({
+        "pending": [it for it in fresh if _queue_item_key(it) not in processed_keys]
+                   + retry_items,
+    })
 
 
 def force_warehouse_mission(target_city_id):
@@ -1792,8 +1991,26 @@ def recall_spy_mission(target_city_id):
     _save_missions(data)
 
 
+def has_due_recalls():
+    """True if at least one pending recall is ready for (re)attempt.
+    Mirrors has_due_attacks — items waiting for a spaced retry must not make
+    smart_sleep spin without sleeping."""
+    try:
+        now = int(time.time())
+        return any(int(it.get("nextAttemptAfter", 0)) <= now
+                   for it in _load_recall_queue().get("pending", []))
+    except Exception:
+        return False
+
+
+def _retry_recall_later(item, remaining):
+    """Reschedule a failed recall attempt 3-10 min ahead instead of immediately."""
+    item["nextAttemptAfter"] = int(time.time()) + random.randint(3, 10) * 60
+    remaining.append(item)
+
+
 def _process_recall_queue(session):
-    """Send retreat requests to the game server for all pending recalls."""
+    """Send retreat requests to the game server for all due pending recalls."""
     import ikabot.config as ikabot_config
     q = _load_recall_queue()
     pending = q.get("pending", [])
@@ -1801,6 +2018,9 @@ def _process_recall_queue(session):
         return
     remaining = []
     for item in pending:
+        if int(time.time()) < int(item.get("nextAttemptAfter", 0)):
+            remaining.append(item)
+            continue
         time.sleep(random.randint(3, 8))
         origin_id  = item.get("originCityId", "")
         target_id  = item.get("targetCityId", "")
@@ -1871,7 +2091,7 @@ def _process_recall_queue(session):
                                 logger.warning("[espionage] recall recusado → %s types=%s (tentativa %d)",
                                                city_name, types, retries)
                                 item["retries"] = retries
-                                remaining.append(item)
+                                _retry_recall_later(item, remaining)
                         break
                 else:
                     # No provideFeedback — check for error entries
@@ -1881,7 +2101,7 @@ def _process_recall_queue(session):
                     )
                     if error_entry:
                         logger.warning("[espionage] recall erro → %s: %s", city_name, error_entry)
-                        remaining.append(item)
+                        _retry_recall_later(item, remaining)
                     else:
                         retries = item.get("retries", 0) + 1
                         if retries >= 5:
@@ -1891,14 +2111,17 @@ def _process_recall_queue(session):
                             logger.warning("[espionage] recall sem provideFeedback → %s raw=%.400s",
                                            city_name, resp)
                             item["retries"] = retries
-                            remaining.append(item)
+                            _retry_recall_later(item, remaining)
             except Exception:
                 logger.info("[espionage] recall enviado (resposta não parseável) → %s", city_name)
         except Exception:
             logger.warning("[espionage] recall excepção → %s", city_name, exc_info=True)
-            remaining.append(item)
-    q["pending"] = remaining
-    _save_recall_queue(q)
+            _retry_recall_later(item, remaining)
+    # Merge-on-save: re-read so recalls queued by Flask during this loop are kept
+    processed_keys = {_queue_item_key(it) for it in pending}
+    fresh = _load_recall_queue().get("pending", [])
+    new_items = [it for it in fresh if _queue_item_key(it) not in processed_keys]
+    _save_recall_queue({"pending": remaining + new_items})
 
 
 def process_spy_cycle(session):
@@ -2240,140 +2463,16 @@ def evaluate_auto_attacks(session):
 
 
 def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units):
-    """POST deployFleet to destroy enemy naval presence. Returns True on success."""
-    import ikabot.config as ikabot_config
-
-    try:
-        session.post(params={
-            "action":         "header",
-            "function":       "changeCurrentCity",
-            "actionRequest":  ikabot_config.actionRequest,
-            "oldView":        "city",
-            "cityId":         str(origin_id),
-            "backgroundView": "city",
-            "currentCityId":  str(origin_id),
-            "ajax":           "1",
-        })
-        time.sleep(random.randint(3, 7))
-    except Exception:
-        pass
-
-    upkeep_map = _fetch_deployment_upkeep(
-        session, ikabot_config, origin_id, target_id, "fleet", "cargo_fleet"
-    )
-
-    params = {
-        "action":            "transportOperations",
-        "function":          "deployFleet",
-        "actionRequest":     ikabot_config.actionRequest,
-        "islandId":          str(island_id),
-        "destinationCityId": str(target_id),
-        "deploymentType":    "fleet",
-        "backgroundView":    "city",
-        "currentCityId":     str(origin_id),
-        "templateView":      "deployment",
-        "ajax":              1,
-    }
-    for uid, upkeep in upkeep_map.items():
-        params[f"cargo_fleet_{uid}_upkeep"] = upkeep
-        params[f"cargo_fleet_{uid}"] = int(fleet_units.get(uid, 0))
-    for unit_id, count in fleet_units.items():
-        params[f"cargo_fleet_{unit_id}"] = int(count)
-
-    try:
-        resp      = session.post(params=params)
-        resp_data = json.loads(resp, strict=False)
-
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                if tok:
-                    ikabot_config.actionRequest = tok
-                break
-
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "provideFeedback":
-                if isinstance(entry[1], list):
-                    for fb in entry[1]:
-                        if isinstance(fb, dict) and fb.get("type") == 10:
-                            return True
-        logger.warning("[auto-attack] deployFleet sem type=10 — raw: %.300s", resp)
-        return False
-    except Exception as e:
-        logger.error("[auto-attack] deployFleet exception: %s", e)
-        return False
+    """Naval strike to clear the enemy port before an army wave. Uses the blockade
+    mission — deployFleet only stations ships in own/allied cities."""
+    return _send_fleet_blockade(session, origin_id, target_id, island_id, fleet_units)
 
 
 def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, transporters):
-    """POST deployArmy for a pillage wave. Returns True on success."""
-    import ikabot.config as ikabot_config
-
-    try:
-        session.post(params={
-            "action":         "header",
-            "function":       "changeCurrentCity",
-            "actionRequest":  ikabot_config.actionRequest,
-            "oldView":        "city",
-            "cityId":         str(origin_id),
-            "backgroundView": "city",
-            "currentCityId":  str(origin_id),
-            "ajax":           "1",
-        })
-        time.sleep(random.randint(3, 7))
-    except Exception:
-        pass
-
-    upkeep_map = _fetch_deployment_upkeep(
-        session, ikabot_config, origin_id, target_id, "army", "cargo_army"
-    )
-
-    params = {
-        "action":            "transportOperations",
-        "function":          "deployArmy",
-        "actionRequest":     ikabot_config.actionRequest,
-        "islandId":          str(island_id),
-        "destinationCityId": str(target_id),
-        "deploymentType":    "army",
-        "backgroundView":    "city",
-        "currentCityId":     str(origin_id),
-        "templateView":      "deployment",
-        "ajax":              1,
-    }
-    try:
-        available_ships = int(json.load(open(os.path.join(LOGS_DIR, "statusSummary.json")))
-                              .get("ships", {}).get("available", transporters))
-    except Exception:
-        available_ships = int(transporters)
-    params["transporter"] = min(int(transporters), available_ships)
-
-    for uid, upkeep in upkeep_map.items():
-        params[f"cargo_army_{uid}_upkeep"] = upkeep
-        params[f"cargo_army_{uid}"] = int(troop_units.get(uid, 0))
-    for unit_id, count in troop_units.items():
-        params[f"cargo_army_{unit_id}"] = int(count)
-
-    try:
-        resp      = session.post(params=params)
-        resp_data = json.loads(resp, strict=False)
-
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                if tok:
-                    ikabot_config.actionRequest = tok
-                break
-
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "provideFeedback":
-                if isinstance(entry[1], list):
-                    for fb in entry[1]:
-                        if isinstance(fb, dict) and fb.get("type") == 10:
-                            return True
-        logger.warning("[auto-attack] deployArmy sem type=10 — raw: %.300s", resp)
-        return False
-    except Exception as e:
-        logger.error("[auto-attack] deployArmy exception: %s", e)
-        return False
+    """Pillage wave against a player city. Uses sendArmyPlunderSea — deployArmy only
+    stations troops in own/allied cities and the server rejects it for attacks."""
+    return _send_army_plunder(session, origin_id, target_id, island_id,
+                              troop_units, transporters)
 
 
 def process_auto_attack_waves(session, in_active_hours=True):

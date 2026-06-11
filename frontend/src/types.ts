@@ -133,6 +133,7 @@ export interface OwnCity {
   cityId: number
   x: number
   y: number
+  islandId?: string
 }
 
 export interface WorldScanIsland {

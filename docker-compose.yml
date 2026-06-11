@@ -51,7 +51,7 @@ services:
       - ikalogs_volume:/tmp/ikalogs/
     working_dir: /gui
     command: >
-      bash -c "pip install flask && python app.py"
+      bash -c "pip install 'flask==3.1.*' && python app.py"
 
   frontend:
     image: node:20-alpine

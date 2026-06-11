@@ -177,7 +177,10 @@ def collect_city_data(session, ids, cities):
         city_name = city_data.get("cityName", city_data.get("name", "Unknown"))
         island_x = int(float(city_data.get("islandXCoord", city_data.get("x", 0)) or 0))
         island_y = int(float(city_data.get("islandYCoord", city_data.get("y", 0)) or 0))
-        own_cities_list.append({"name": city_name, "cityId": id, "x": island_x, "y": island_y})
+        own_cities_list.append({
+            "name": city_name, "cityId": id, "x": island_x, "y": island_y,
+            "islandId": str(city_data.get("islandId", "")),
+        })
         logger.info(lm("city_done", city=city_name))
         _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 

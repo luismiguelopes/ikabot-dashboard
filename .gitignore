@@ -9,3 +9,13 @@ CLAUDE.md
 
 # macOS
 .DS_Store
+
+# Python artifacts
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Docker mountpoint artifacts (0-byte files created by bind mounts)
+ikabot_gui/db_manager.py
+ikabot_gui/telegram_notifier.py
+ikabot_gui/__pycache__/

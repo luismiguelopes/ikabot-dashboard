@@ -39,6 +39,7 @@ LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_DISPATCH_QUEUE_PATH    = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
+SPY_RECALL_QUEUE_PATH      = os.path.join(LOGS_DIR, "spy_recall_queue.json")
 SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
 ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
@@ -146,17 +147,6 @@ def load_all_data():
         try:
             with open(LAST_ALIVE_JSON_PATH) as f:
                 last_alive = json.load(f).get("lastAlive")
-        except Exception:
-            pass
-
-    if last_alive:
-        try:
-            import telegram_notifier as _tg
-            offline_min = int((time.time() - last_alive) / 60)
-            if offline_min > 90:
-                _tg.notify_bot_offline(offline_min)
-            else:
-                _tg.clear_bot_offline()
         except Exception:
             pass
 
@@ -769,6 +759,7 @@ def api_espionage_settings_post():
 
 @app.route("/api/espionage/dispatch", methods=["POST"])
 def api_espionage_dispatch():
+    import uuid
     body = request.get_json(silent=True) or {}
     required = ["originCityId", "targetCityId", "islandId",
                 "targetPlayerName", "targetCityName", "islandX", "islandY"]
@@ -777,6 +768,7 @@ def api_espionage_dispatch():
         return jsonify({"error": f"Missing fields: {missing}"}), 400
 
     item = {
+        "id":               str(uuid.uuid4())[:8],
         "originCityId":     str(body["originCityId"]),
         "targetCityId":     str(body["targetCityId"]),
         "islandId":         str(body["islandId"]),
@@ -907,6 +899,10 @@ def api_dispatch_combat():
     if mission_type not in ("army", "fleet"):
         return jsonify({"error": "missionType deve ser 'army' ou 'fleet'"}), 400
 
+    target_type = data.get("targetType", "enemy")
+    if target_type not in ("own", "enemy"):
+        return jsonify({"error": "targetType deve ser 'own' ou 'enemy'"}), 400
+
     now = int(time.time())
     schedule_type = data.get("scheduleType", "now")
     if schedule_type == "delay":
@@ -938,6 +934,7 @@ def api_dispatch_combat():
         "units":            units,
         "transporters":     int(data.get("transporters", 0)),
         "missionType":      mission_type,
+        "targetType":       target_type,
         "addedAt":          now,
         "dispatchAfter":    dispatch_after,
         "missionId":        None,
@@ -1012,11 +1009,6 @@ def api_espionage_import_reports():
     os.makedirs(LOGS_DIR, exist_ok=True)
     open(FORCE_IMPORT_REPORTS_FLAG, "w").close()
     return jsonify({"status": "queued"})
-
-
-SPY_MISSIONS_PATH      = os.path.join(LOGS_DIR, "spy_missions.json")
-SPY_DISPATCH_QUEUE_PATH = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
-SPY_RECALL_QUEUE_PATH   = os.path.join(LOGS_DIR, "spy_recall_queue.json")
 
 
 def _load_json(path, default):
@@ -1165,5 +1157,35 @@ def api_stream():
     )
 
 
+def _offline_watch_loop():
+    """Notify via Telegram when the bot stops writing last_alive (checked every 5 min).
+    Lives in its own thread — a GET endpoint must not have notification side effects."""
+    while True:
+        time.sleep(300)
+        try:
+            with open(LAST_ALIVE_JSON_PATH) as f:
+                last_alive = json.load(f).get("lastAlive")
+        except Exception:
+            continue
+        if not last_alive:
+            continue
+        try:
+            import telegram_notifier as _tg
+            offline_min = int((time.time() - last_alive) / 60)
+            if offline_min > 90:
+                _tg.notify_bot_offline(offline_min)
+            else:
+                _tg.clear_bot_offline()
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, threaded=True)
+    # debug=False: the Werkzeug debugger is an RCE if the port is ever exposed.
+    # use_reloader keeps the convenient auto-reload on file changes.
+    # WERKZEUG_RUN_MAIN guard: the reloader parent process also imports this module —
+    # only the worker child may start the watcher thread (avoids double notifications).
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        import threading
+        threading.Thread(target=_offline_watch_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=True, threaded=True)

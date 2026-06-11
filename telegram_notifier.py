@@ -63,6 +63,16 @@ def clear_wine_critical(city: str) -> None:
     _wine_critical_notified.discard(city)
 
 
+def notify_attack_dispatched(origin: str, target_city: str, player: str, mission: str) -> None:
+    icon = "⚓" if mission == "fleet" else "⚔️"
+    _send(f"{icon} <b>Ataque lançado</b>\n{origin} → {target_city} ({player})")
+
+
+def notify_attack_failed(target_city: str, player: str, attempts: int) -> None:
+    _send(f"❌ <b>Ataque falhou</b>\n{target_city} ({player}) — "
+          f"removido da fila após {attempts} tentativas")
+
+
 def notify_bot_offline(minutes: int) -> None:
     global _offline_notified
     if _offline_notified:

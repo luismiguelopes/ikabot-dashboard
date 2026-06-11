@@ -147,7 +147,7 @@ export function DispatchTab() {
           cityId:     String(c.cityId),
           cityName:   c.name,
           playerName: 'Própria',
-          islandId:   '',
+          islandId:   String(c.islandId ?? ''),
           islandX:    c.x,
           islandY:    c.y,
         }))
@@ -196,6 +196,10 @@ export function DispatchTab() {
       setFeedback({ ok: false, msg: 'Selecciona pelo menos uma unidade.' })
       return
     }
+    if (target.type === 'own' && !target.islandId) {
+      setFeedback({ ok: false, msg: 'Cidade própria ainda sem islandId — força uma actualização do império (Home → Atualizar) e tenta de novo.' })
+      return
+    }
 
     setSubmitting(true)
     setFeedback(null)
@@ -214,6 +218,7 @@ export function DispatchTab() {
           islandX:          target.islandX,
           islandY:          target.islandY,
           missionType,
+          targetType:       target.type,
           units,
           transporters:     missionType === 'army' ? transporters : 0,
           scheduleType,
@@ -416,8 +421,8 @@ export function DispatchTab() {
                   </div>
                   {target.state === 'inactive' && (
                     <div className="mt-1.5 flex items-center gap-1.5 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-2 py-1.5">
-                      <i className="fa-solid fa-triangle-exclamation" />
-                      Jogador inactivo — o jogo não permite ataques (TXT_AVATAR_INACTIVE)
+                      <i className="fa-solid fa-circle-info" />
+                      Jogador inactivo — atacável; confirma que ainda tem recursos antes de enviar
                     </div>
                   )}
                 </div>
