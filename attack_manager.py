@@ -123,9 +123,14 @@ def _change_to_origin_city(session, ikabot_config, origin_id):
         pass
 
 
+# Last rejection text from the game — read by _log_attack_attempt right after a dispatch
+_last_feedback_text = ""
+
+
 def _parse_attack_feedback(resp, function, ikabot_config):
     """Parse an attack POST response: refresh CSRF token, return True on type=10.
     Logs the game's feedback text on rejection for diagnosability."""
+    global _last_feedback_text
     resp_data = json.loads(resp, strict=False)
 
     for entry in resp_data:
@@ -140,25 +145,64 @@ def _parse_attack_feedback(resp, function, ikabot_config):
             fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
             types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
             if 10 in types:
+                _last_feedback_text = ""
                 return True
             texts = [fb.get("text", "") for fb in fb_list if isinstance(fb, dict)]
+            _last_feedback_text = " | ".join(t for t in texts if t) or f"types={types}"
             logger.warning("[attack] %s recusado types=%s — %s", function, types,
-                           " | ".join(t for t in texts if t))
+                           _last_feedback_text)
             return False
+    _last_feedback_text = "sem provideFeedback na resposta"
     logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
     return False
 
 
-def _cap_to_available_ships(requested):
-    """transporter > available ships → server rejects with type=11. Cap it."""
-    requested = int(requested)
-    available = requested
+def _log_attack_attempt(item, ok, source="manual"):
+    """Persist one dispatch attempt in the attack_log table (F1 — attack history)."""
     try:
-        with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
-            available = int(json.load(_f).get("ships", {}).get("available", requested))
+        from db_manager import log_attack
+        log_attack({
+            "originCity":   item.get("originCityName") or str(item.get("originCityId", "")),
+            "targetCity":   item.get("targetCityName", ""),
+            "targetPlayer": item.get("targetPlayerName", ""),
+            "islandX":      item.get("islandX"),
+            "islandY":      item.get("islandY"),
+            "missionType":  item.get("missionType", "army"),
+            "targetType":   item.get("targetType", "enemy"),
+            "source":       source,
+            "units":        item.get("units"),
+            "transporters": item.get("transporters", 0),
+            "success":      ok,
+            "error":        None if ok else (_last_feedback_text or "dispatch falhou"),
+        })
     except Exception:
-        pass
-    return min(requested, available)
+        logger.warning("[attack] registo no attack_log falhou", exc_info=True)
+
+
+def _cap_to_available_ships(requested, session=None):
+    """transporter > available ships → server rejects with type=11. Cap it.
+    Prefers a LIVE count from the game at dispatch time — statusSummary.json can be
+    up to an empire cycle (~1h) stale, and ships busy at scheduling time may be back."""
+    requested = int(requested)
+    available = None
+    if session is not None:
+        try:
+            from ikabot.helpers.naval import getAvailableShips
+            available = int(getAvailableShips(session))
+            time.sleep(random.randint(2, 5))
+        except Exception:
+            available = None
+    if available is None:
+        try:
+            with open(os.path.join(LOGS_DIR, "statusSummary.json")) as _f:
+                available = int(json.load(_f).get("ships", {}).get("available", requested))
+        except Exception:
+            available = requested
+    capped = min(requested, available)
+    if capped < requested:
+        logger.info("[attack] transporters limitados a %d (pedidos %d, livres %d)",
+                    capped, requested, available)
+    return capped
 
 
 def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters):
@@ -174,7 +218,7 @@ def _send_army_plunder(session, origin_id, target_id, island_id, units, transpor
     # Upkeep values are mandatory — the server rejects the POST without them
     upkeep_map = _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id)
 
-    capped = _cap_to_available_ships(transporters)
+    capped = _cap_to_available_ships(transporters, session)
 
     units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
                  for uid, cnt in units.items()}
@@ -320,7 +364,7 @@ def _send_deploy(session, origin_id, target_id, island_id, units, transporters, 
         "ajax":              1,
     }
     if kind == "army":
-        params["transporter"] = _cap_to_available_ships(transporters)
+        params["transporter"] = _cap_to_available_ships(transporters, session)
 
     for uid, upkeep in upkeep_map.items():
         params[f"{cargo_prefix}_{uid}_upkeep"] = upkeep
@@ -395,6 +439,7 @@ def process_attack_queue(session, in_active_hours=True):
 
         ok = _dispatch_attack(session, item)
         dispatched += 1
+        _log_attack_attempt(item, ok)
         if ok:
             queue_remove(ATTACK_QUEUE, [item.get("id")])
             logger.info("[attack] ataque despachado → %s (%s)",
@@ -732,6 +777,7 @@ def evaluate_auto_attacks(session):
             "id":               uuid.uuid4().hex[:8],
             "sourceMissionKey": mission_key,
             "targetPlayerName": m.get("targetPlayerName"),
+            "targetCityName":   m.get("targetCityName", ""),
             "targetCityId":     str(m.get("targetCityId", "")),
             "targetIslandId":   str(m.get("targetIslandId", "")),
             "islandX":          target_x,
@@ -762,6 +808,21 @@ def _dispatch_army_wave(session, origin_id, target_id, island_id, troop_units, t
     stations troops in own/allied cities and the server rejects it for attacks."""
     return _send_army_plunder(session, origin_id, target_id, island_id,
                               troop_units, transporters)
+
+
+def _log_wave_attempt(plan, wave, mission_type, ok):
+    """attack_log entry for an auto-attack wave dispatch."""
+    _log_attack_attempt({
+        "originCityName":   wave.get("originCityName"),
+        "originCityId":     wave.get("originCityId"),
+        "targetCityName":   plan.get("targetCityName", ""),
+        "targetPlayerName": plan.get("targetPlayerName", ""),
+        "islandX":          plan.get("islandX"),
+        "islandY":          plan.get("islandY"),
+        "missionType":      mission_type,
+        "units":            wave.get("fleetUnits" if mission_type == "fleet" else "troopUnits"),
+        "transporters":     wave.get("transporters", 0) if mission_type == "army" else 0,
+    }, ok, source="auto")
 
 
 def process_auto_attack_waves(session, in_active_hours=True):
@@ -796,6 +857,7 @@ def process_auto_attack_waves(session, in_active_hours=True):
                         plan["targetCityId"], plan["targetIslandId"],
                         wave["fleetUnits"],
                     )
+                    _log_wave_attempt(plan, wave, "fleet", ok)
                     if ok:
                         waves_data["waves"][pi]["wavePlans"][wi]["fleetDispatchedAt"] = now
                         waves_data["waves"][pi]["wavePlans"][wi]["status"] = "FLEET_DISPATCHED"
@@ -815,6 +877,7 @@ def process_auto_attack_waves(session, in_active_hours=True):
                         plan["targetCityId"], plan["targetIslandId"],
                         wave["troopUnits"], wave["transporters"],
                     )
+                    _log_wave_attempt(plan, wave, "army", ok)
                     if ok:
                         waves_data["waves"][pi]["wavePlans"][wi]["armyDispatchedAt"] = now
                         waves_data["waves"][pi]["wavePlans"][wi]["status"] = "ARMY_DISPATCHED"
@@ -836,6 +899,7 @@ def process_auto_attack_waves(session, in_active_hours=True):
                         plan["targetCityId"], plan["targetIslandId"],
                         wave["troopUnits"], wave["transporters"],
                     )
+                    _log_wave_attempt(plan, wave, "army", ok)
                     if ok:
                         waves_data["waves"][pi]["wavePlans"][wi]["armyDispatchedAt"] = now
                         waves_data["waves"][pi]["wavePlans"][wi]["status"] = "ARMY_DISPATCHED"

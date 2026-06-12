@@ -799,6 +799,154 @@ def api_military():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/attack-log")
+def api_attack_log():
+    if not _db:
+        return jsonify([])
+    try:
+        limit = int(request.args.get("limit", 100))
+        target = request.args.get("target", "").strip() or None
+        return jsonify(_db.get_attack_log(limit=limit, target=target))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+CONSOLIDATE_SETTINGS_PATH = os.path.join(LOGS_DIR, "consolidate_settings.json")
+CONSOLIDATE_STATE_PATH    = os.path.join(LOGS_DIR, "consolidate_state.json")
+
+_DEFAULT_CONSOLIDATE_SETTINGS = {
+    "enabled":       False,
+    "destCityId":    "",
+    "destCityName":  "",
+    "intervalHours": 6,
+    "minSendTotal":  1000,
+}
+
+
+@app.route("/api/transport/queue")
+def api_transport_queue_get():
+    if not _db:
+        return jsonify({"pending": []})
+    try:
+        return jsonify({"pending": _db.queue_items("transport")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/transport/queue/add", methods=["POST"])
+def api_transport_queue_add():
+    import uuid
+    data = request.get_json(silent=True) or {}
+    required = ["originCityId", "originCityName", "destCityId", "destCityName"]
+    missing = [k for k in required if str(data.get(k, "")).strip() == ""]
+    if missing:
+        return jsonify({"error": f"Campo obrigatório: {missing}"}), 400
+    if str(data["originCityId"]) == str(data["destCityId"]):
+        return jsonify({"error": "Origem e destino têm de ser diferentes"}), 400
+
+    try:
+        resources = [max(0, int(a)) for a in (data.get("resources") or [])][:5]
+    except (ValueError, TypeError):
+        return jsonify({"error": "resources inválidos"}), 400
+    resources += [0] * (5 - len(resources))
+    if sum(resources) <= 0:
+        return jsonify({"error": "Selecciona pelo menos um recurso"}), 400
+
+    ships = int(data.get("ships", 0))
+    if ships <= 0:
+        return jsonify({"error": "Número de navios obrigatório"}), 400
+    ship_type = data.get("shipType", "transporters")
+    if ship_type not in ("transporters", "freighters"):
+        return jsonify({"error": "shipType inválido"}), 400
+
+    now = int(time.time())
+    schedule_type = data.get("scheduleType", "now")
+    if schedule_type == "delay":
+        dispatch_after = now + max(1, int(data.get("delayMinutes", 1))) * 60
+    elif schedule_type == "at":
+        dispatch_after = int(data.get("dispatchAfter", now))
+        if dispatch_after <= now:
+            return jsonify({"error": "Hora de lançamento já passou"}), 400
+    else:
+        dispatch_after = now + 10
+
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+
+    item = {
+        "id":             str(uuid.uuid4())[:8],
+        "originCityId":   str(data["originCityId"]),
+        "originCityName": str(data["originCityName"]),
+        "destCityId":     str(data["destCityId"]),
+        "destCityName":   str(data["destCityName"]),
+        "islandId":       str(data.get("islandId", "")),
+        "resources":      resources,
+        "ships":          ships,
+        "shipType":       ship_type,
+        "addedAt":        now,
+        "dispatchAfter":  dispatch_after,
+    }
+    try:
+        _db.queue_add("transport", item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "queued", "item": item})
+
+
+@app.route("/api/transport/queue/cancel", methods=["POST"])
+def api_transport_queue_cancel():
+    data = request.get_json(silent=True) or {}
+    item_id = data.get("id")
+    if not item_id:
+        return jsonify({"error": "id obrigatório"}), 400
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    try:
+        removed = _db.queue_remove("transport", [item_id])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if removed == 0:
+        return jsonify({"error": "Transporte não encontrado"}), 404
+    return jsonify({"status": "cancelled"})
+
+
+@app.route("/api/transport/consolidate")
+def api_consolidate_get():
+    try:
+        with open(CONSOLIDATE_SETTINGS_PATH) as f:
+            settings = json.load(f)
+        for k, v in _DEFAULT_CONSOLIDATE_SETTINGS.items():
+            settings.setdefault(k, v)
+    except (FileNotFoundError, json.JSONDecodeError):
+        settings = dict(_DEFAULT_CONSOLIDATE_SETTINGS)
+    state = {"lastRun": 0, "lastSent": {}}
+    try:
+        with open(CONSOLIDATE_STATE_PATH) as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    settings["lastRun"]  = state.get("lastRun", 0)
+    settings["lastSent"] = state.get("lastSent", {})
+    return jsonify(settings)
+
+
+@app.route("/api/transport/consolidate", methods=["POST"])
+def api_consolidate_post():
+    data = request.get_json(silent=True) or {}
+    settings = dict(_DEFAULT_CONSOLIDATE_SETTINGS)
+    settings["enabled"]       = bool(data.get("enabled", False))
+    settings["destCityId"]    = str(data.get("destCityId", ""))
+    settings["destCityName"]  = str(data.get("destCityName", ""))
+    settings["intervalHours"] = max(1, min(48, int(data.get("intervalHours", 6))))
+    settings["minSendTotal"]  = max(0, int(data.get("minSendTotal", 1000)))
+    if settings["enabled"] and not settings["destCityId"]:
+        return jsonify({"error": "Cidade de destino obrigatória"}), 400
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(CONSOLIDATE_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return jsonify({"status": "ok", "settings": settings})
+
+
 @app.route("/api/military/refresh", methods=["POST"])
 def api_military_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)

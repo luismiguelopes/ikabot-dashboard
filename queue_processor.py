@@ -294,6 +294,16 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             except Exception:
                 pass
 
+        # Pending scheduled resource transports (same due-gating as attacks)
+        if session and _in_scan_hours():
+            try:
+                from transport_manager import has_due_transports, process_transport_queue
+                if has_due_transports():
+                    process_transport_queue(session, in_active_hours=True)
+                    continue
+            except Exception:
+                pass
+
         # Opportunistic island scan during idle time — uses the natural sleep
         # variation as an organic source of randomness in batch size
         if session and _in_scan_hours() and (end_time - time.time()) > 50:

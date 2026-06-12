@@ -6,6 +6,7 @@ import { RefreshButton } from './ui/RefreshButton'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { DispatchTab } from './DispatchTab'
+import { TransportTab } from './TransportTab'
 import type { Movement } from '../types'
 
 function MovementsTab() {
@@ -106,8 +107,9 @@ export function MovementsPage() {
   const [tab, setTab] = useState('movements')
 
   const tabs = [
-    { key: 'movements', label: t('tab_movements'), icon: 'fa-ship'       },
-    { key: 'dispatch',  label: t('tab_dispatch'),  icon: 'fa-crosshairs' },
+    { key: 'movements', label: t('tab_movements'), icon: 'fa-ship'          },
+    { key: 'dispatch',  label: t('tab_dispatch'),  icon: 'fa-crosshairs'    },
+    { key: 'transport', label: t('tab_transport'), icon: 'fa-boxes-stacked' },
   ]
 
   return (
@@ -131,6 +133,7 @@ export function MovementsPage() {
       </div>
       {tab === 'movements' && <MovementsTab />}
       {tab === 'dispatch'  && <DispatchTab />}
+      {tab === 'transport' && <TransportTab />}
     </div>
   )
 }

@@ -141,6 +141,15 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     logger.info(lm("queue_movements_refresh"))
                     refresh_movements(session, ids[0])
 
+            # ── Scheduled transports + consolidation (only during active hours) ──
+            if in_scan_hours:
+                try:
+                    from transport_manager import process_transport_queue, process_consolidation
+                    process_transport_queue(session, in_active_hours=True)
+                    process_consolidation(session, in_active_hours=True)
+                except Exception:
+                    logger.warning("[transport] ciclo de transportes falhou", exc_info=True)
+
             # ── Espionage cycle (only during active hours) ───────────────────
             if in_scan_hours:
                 try:

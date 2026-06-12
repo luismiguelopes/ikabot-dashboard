@@ -35,6 +35,21 @@ interface DispatchTarget {
   state?:     string
 }
 
+interface AttackLogEntry {
+  id:            number
+  ts:            number
+  origin_city:   string
+  target_city:   string
+  target_player: string
+  mission_type:  string
+  target_type:   string
+  source:        string
+  units:         Record<string, number>
+  transporters:  number
+  success:       boolean
+  error:         string | null
+}
+
 interface PendingAttack {
   id:               string
   originCityId:     string
@@ -63,6 +78,15 @@ function btnClass(variant: 'primary' | 'danger' | 'ghost', extra = '') {
   return base + 'text-slate-500 hover:bg-slate-100 ' + extra
 }
 
+// Mirror of the bot's _calc_travel_secs model: same island ≈ 10 min; otherwise
+// 1200s × distance for warships/transports, troops on transports ≈ 2/3 of that.
+function travelSecs(ox: number, oy: number, tx: number, ty: number, mission: 'army' | 'fleet'): number {
+  if (ox === tx && oy === ty) return 600
+  const dist = Math.sqrt((ox - tx) ** 2 + (oy - ty) ** 2)
+  const fleet = Math.ceil(1200 * dist)
+  return mission === 'army' ? Math.round(fleet * 2 / 3) : fleet
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function DispatchTab() {
@@ -76,6 +100,9 @@ export function DispatchTab() {
   const [scanPlayers,    setScanPlayers]    = useState<WorldScanPlayer[]>([])
   const [pending,        setPending]        = useState<PendingAttack[]>([])
   const [availableShips, setAvailableShips] = useState<number | null>(null)
+  const [attackLog,      setAttackLog]      = useState<AttackLogEntry[]>([])
+  const [logFilter,      setLogFilter]      = useState('')
+  const [totalShips,     setTotalShips]     = useState<number | null>(null)
 
   // Form state
   const [originCityName, setOriginCityName] = useState('')
@@ -84,7 +111,7 @@ export function DispatchTab() {
   const [targetMode,     setTargetMode]     = useState<'own' | 'enemy'>('enemy')
   const [targetSearch,   setTargetSearch]   = useState('')
   const [target,         setTarget]         = useState<DispatchTarget | null>(null)
-  const [scheduleType,   setScheduleType]   = useState<'now' | 'delay' | 'at'>('now')
+  const [scheduleType,   setScheduleType]   = useState<'now' | 'delay' | 'at' | 'arrive'>('now')
   const [delayMinutes,   setDelayMinutes]   = useState(30)
   const [atTime,         setAtTime]         = useState('')
   const [transporters,   setTransporters]   = useState(0)
@@ -111,6 +138,11 @@ export function DispatchTab() {
 
     fetch('/api/data').then(r => r.json()).then((data: any) => {
       setAvailableShips(data?.statusSummary?.ships?.available ?? null)
+      setTotalShips(data?.statusSummary?.ships?.total ?? null)
+    }).catch(() => {})
+
+    fetch('/api/attack-log?limit=100').then(r => r.json()).then((data: any) => {
+      if (Array.isArray(data)) setAttackLog(data)
     }).catch(() => {})
   }, [originCityName])
 
@@ -170,6 +202,12 @@ export function DispatchTab() {
       }))
   })()
 
+  // ── Derived: travel time + arrival estimate (F2) ───────────────────────────
+
+  const travel = originCity && target
+    ? travelSecs(originCity.x, originCity.y, target.islandX, target.islandY, missionType)
+    : null
+
   // ── Schedule helpers ────────────────────────────────────────────────────────
 
   function computeDispatchAfter(): number {
@@ -182,8 +220,21 @@ export function DispatchTab() {
       if (d.getTime() / 1000 <= base) d.setDate(d.getDate() + 1)
       return Math.floor(d.getTime() / 1000)
     }
+    if (scheduleType === 'arrive' && atTime) {
+      // Work backwards: launch = desired arrival − travel time
+      const [h, m] = atTime.split(':').map(Number)
+      const d = new Date()
+      d.setHours(h, m, 0, 0)
+      let arrival = Math.floor(d.getTime() / 1000)
+      const tv = travel ?? 0
+      while (arrival - tv <= base) arrival += 86400
+      return arrival - tv
+    }
     return base + 10
   }
+
+  const previewDispatchAt = computeDispatchAfter()
+  const previewArrivalAt  = travel !== null ? previewDispatchAt + travel : null
 
   // ── Submit ──────────────────────────────────────────────────────────────────
 
@@ -221,7 +272,9 @@ export function DispatchTab() {
           targetType:       target.type,
           units,
           transporters:     missionType === 'army' ? transporters : 0,
-          scheduleType,
+          // 'arrive' is a client-side mode: the launch time is pre-computed, so the
+          // backend sees a plain 'at' schedule
+          scheduleType:     scheduleType === 'arrive' ? 'at' : scheduleType,
           delayMinutes,
           dispatchAfter:    computeDispatchAfter(),
         }),
@@ -347,29 +400,39 @@ export function DispatchTab() {
                   {t('dispatch_transporters')}
                   {availableShips !== null && (
                     <span className="ml-2 normal-case font-normal text-slate-400">
-                      ({t('attack_available')}: {fmt(availableShips)})
+                      ({t('attack_available')}: {fmt(availableShips)}
+                      {totalShips !== null && ` / ${fmt(totalShips)} ${t('dispatch_ships_total')}`})
                     </span>
                   )}
                 </label>
                 <div className="flex items-center gap-3">
+                  {/* Scheduling cap is the FLEET TOTAL, not currently-free ships: busy
+                      ships may be back by dispatch time; the bot caps to the live free
+                      count at launch. */}
                   <input
                     type="number"
                     min={0}
-                    max={availableShips ?? undefined}
+                    max={totalShips ?? undefined}
                     value={transporters}
-                    onChange={e => setTransporters(Math.max(0, Math.min(availableShips ?? Infinity, Number(e.target.value))))}
+                    onChange={e => setTransporters(Math.max(0, Math.min(totalShips ?? Infinity, Number(e.target.value))))}
                     className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
-                  {availableShips !== null && (
+                  {(totalShips ?? availableShips) !== null && (
                     <button
                       className="text-xs text-indigo-500 hover:text-indigo-700 font-medium"
-                      onClick={() => setTransporters(availableShips)}
+                      onClick={() => setTransporters((totalShips ?? availableShips)!)}
                     >
                       Max
                     </button>
                   )}
                   <span className="text-sm text-slate-500">{t('dispatch_transporters_hint')}</span>
                 </div>
+                {availableShips !== null && transporters > availableShips && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-2 py-1.5">
+                    <i className="fa-solid fa-circle-info" />
+                    {t('dispatch_ships_over')}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -459,7 +522,7 @@ export function DispatchTab() {
                 {t('dispatch_schedule')}
               </label>
               <div className="flex gap-2 mb-2">
-                {(['now', 'delay', 'at'] as const).map(st => (
+                {(['now', 'delay', 'at', 'arrive'] as const).map(st => (
                   <button
                     key={st}
                     onClick={() => setScheduleType(st)}
@@ -469,7 +532,10 @@ export function DispatchTab() {
                         : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
                     }`}
                   >
-                    {t(st === 'now' ? 'dispatch_sched_now' : st === 'delay' ? 'dispatch_sched_delay' : 'dispatch_sched_at')}
+                    {t(st === 'now' ? 'dispatch_sched_now'
+                       : st === 'delay' ? 'dispatch_sched_delay'
+                       : st === 'at' ? 'dispatch_sched_at'
+                       : 'dispatch_sched_arrive')}
                   </button>
                 ))}
               </div>
@@ -486,7 +552,7 @@ export function DispatchTab() {
                   <span className="text-sm text-slate-500">{t('dispatch_minutes')}</span>
                 </div>
               )}
-              {scheduleType === 'at' && (
+              {(scheduleType === 'at' || scheduleType === 'arrive') && (
                 <input
                   type="time"
                   value={atTime}
@@ -495,6 +561,28 @@ export function DispatchTab() {
                 />
               )}
             </div>
+
+            {/* ETA preview (F2) — travel model mirrors the bot's _calc_travel_secs */}
+            {target && travel !== null && (
+              <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600 flex items-center gap-x-4 gap-y-1 flex-wrap">
+                <span>
+                  <i className="fa-solid fa-route mr-1 text-slate-400" />
+                  {t('dispatch_travel')}: ~{fmtDuration(travel)}
+                </span>
+                {scheduleType === 'arrive' && (
+                  <span>
+                    <i className="fa-solid fa-paper-plane mr-1 text-slate-400" />
+                    {t('dispatch_launch_at')} {fmtArrival(previewDispatchAt, lang)}
+                  </span>
+                )}
+                {previewArrivalAt !== null && (
+                  <span>
+                    <i className="fa-solid fa-flag-checkered mr-1 text-slate-400" />
+                    {t('dispatch_arrival')}: ~{fmtArrival(previewArrivalAt, lang)}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Feedback */}
             {feedback && (
@@ -576,6 +664,75 @@ export function DispatchTab() {
           </div>
         </Card>
       )}
+
+      {/* ── Dispatch history (attack_log) ─────────────────────────────────── */}
+      <Card>
+        <CardHeader icon="fa-clock-rotate-left" title={t('dispatch_history')} />
+        <div className="px-5 py-3 border-b border-slate-100">
+          <input
+            type="text"
+            placeholder={t('dispatch_history_filter')}
+            value={logFilter}
+            onChange={e => setLogFilter(e.target.value)}
+            className="w-full sm:w-72 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+        </div>
+        {(() => {
+          const q = logFilter.trim().toLowerCase()
+          const rows = attackLog.filter(e =>
+            !q ||
+            e.target_city?.toLowerCase().includes(q) ||
+            e.target_player?.toLowerCase().includes(q)
+          )
+          if (rows.length === 0) {
+            return <p className="px-5 py-4 text-sm text-slate-400 italic">{t('dispatch_history_empty')}</p>
+          }
+          return (
+            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+              {rows.map(e => {
+                const unitsTotal = Object.values(e.units || {}).reduce((a, b) => a + b, 0)
+                return (
+                  <div key={e.id} className="px-5 py-2.5 flex items-center gap-3">
+                    <i className={`fa-solid ${e.success ? 'fa-circle-check text-emerald-500' : 'fa-circle-xmark text-red-500'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-slate-700 truncate">
+                        <span className="text-indigo-600 font-medium">{e.origin_city}</span>
+                        <span className="mx-1.5 text-slate-400">→</span>
+                        <span className={e.target_type === 'own' ? 'text-indigo-600' : 'text-red-600'}>
+                          {e.target_city || '?'}
+                        </span>
+                        {e.target_player && (
+                          <span className="text-slate-400 text-xs ml-1">({e.target_player})</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>
+                          <i className={`fa-solid ${e.mission_type === 'fleet' ? 'fa-anchor' : 'fa-person-military-rifle'} mr-1`} />
+                          {fmt(unitsTotal)} {t('dispatch_units_label')}
+                        </span>
+                        {e.mission_type !== 'fleet' && e.transporters > 0 && (
+                          <span><i className="fa-solid fa-ship mr-1" />{fmt(e.transporters)}</span>
+                        )}
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          e.source === 'auto' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {t(e.source === 'auto' ? 'dispatch_source_auto' : 'dispatch_source_manual')}
+                        </span>
+                        {!e.success && e.error && (
+                          <span className="text-red-400 truncate max-w-xs" title={e.error}>{e.error}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-400 flex-shrink-0">
+                      {fmtArrival(e.ts, lang)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()}
+      </Card>
     </div>
   )
 }

@@ -100,19 +100,12 @@ Testes: 62/62 a passar (db, queue, attack_queue, espionage_parsers, military_par
 
 ---
 
-## P4 — Features novas (por ordem de valor)
+## P4 — Features novas
 
-1. **Histórico de ataques** — tabela `attack_log` em SQLite (alvo, unidades, transporters,
-   resultado, timestamp), página/secção na UI. Hoje não há memória do que foi lançado.
-2. **ETA de chegada no DispatchTab** — usar `_calc_travel_secs` para mostrar tempo de
-   viagem e hora de chegada estimada ao seleccionar origem + alvo.
-3. **Validação de capacidade de saque** — avisar quando os transporters não chegam para o
-   loot conhecido do último relatório de espionagem do alvo.
-4. **Botão "refresh military"** — flag file `.force_military_update` (military.json tem
-   cache de 8h e a UI de dispatch pode mostrar tropas desactualizadas).
-5. **Notificações Telegram de combate** — ataque despachado / falhado / regresso de frota.
-6. **Ondas manuais no Dispatcher** (Fase 2 da feature) — repetir o mesmo ataque N vezes
-   com intervalo configurável, reaproveitando a infra do auto-attack.
+Catálogo completo movido para **FEATURES.md** (F1-F11, com ordem sugerida).
+Já concluídas daqui: refresh military (✅), Telegram de combate (✅), retry (✅).
+Próximas recomendadas: F6 (alarme de ataque recebido) → F1 (histórico de ataques)
+→ F2 (ETA de chegada no DispatchTab).
 
 ---
 

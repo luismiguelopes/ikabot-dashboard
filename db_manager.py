@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _connect():
@@ -47,6 +47,28 @@ def _run_migrations(conn):
             )
         """)
         conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+    if current < 5:
+        # v5 = attack_log: persistent record of every combat dispatch attempt
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attack_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                origin_city TEXT,
+                target_city TEXT,
+                target_player TEXT,
+                island_x INTEGER,
+                island_y INTEGER,
+                mission_type TEXT,
+                target_type TEXT,
+                source TEXT,
+                units TEXT,
+                transporters INTEGER,
+                success INTEGER,
+                error TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_attack_log_ts ON attack_log(ts)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (5)")
     conn.commit()
 
 
@@ -237,6 +259,73 @@ def queue_remove(queue, item_ids):
             return cur.rowcount
     finally:
         conn.close()
+
+
+# ── Attack log ────────────────────────────────────────────────────────────────
+
+def log_attack(entry):
+    """Record one combat dispatch attempt.
+    entry keys: ts, originCity, targetCity, targetPlayer, islandX, islandY,
+    missionType, targetType, source ('manual'|'auto'), units (dict),
+    transporters, success (bool), error (str|None)."""
+    init_db()
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("""
+                INSERT INTO attack_log
+                (ts, origin_city, target_city, target_player, island_x, island_y,
+                 mission_type, target_type, source, units, transporters, success, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                entry.get("ts") or int(time.time()),
+                entry.get("originCity", ""),
+                entry.get("targetCity", ""),
+                entry.get("targetPlayer", ""),
+                entry.get("islandX"),
+                entry.get("islandY"),
+                entry.get("missionType", "army"),
+                entry.get("targetType", "enemy"),
+                entry.get("source", "manual"),
+                json.dumps(entry.get("units") or {}),
+                int(entry.get("transporters") or 0),
+                1 if entry.get("success") else 0,
+                entry.get("error"),
+            ))
+    finally:
+        conn.close()
+
+
+def get_attack_log(limit=100, target=None):
+    """Return recent dispatch attempts, newest first. Optional filter by
+    target city or player name (substring, case-insensitive)."""
+    init_db()
+    limit = max(1, min(int(limit), 1000))
+    conn = _connect()
+    try:
+        if target:
+            pat = f"%{target.lower()}%"
+            rows = conn.execute("""
+                SELECT * FROM attack_log
+                WHERE lower(target_city) LIKE ? OR lower(target_player) LIKE ?
+                ORDER BY ts DESC, id DESC LIMIT ?
+            """, (pat, pat, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM attack_log ORDER BY ts DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["units"] = json.loads(d.get("units") or "{}")
+        except Exception:
+            d["units"] = {}
+        d["success"] = bool(d["success"])
+        out.append(d)
+    return out
 
 
 def _migrate_shared_queues():

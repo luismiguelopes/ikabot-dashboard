@@ -192,6 +192,74 @@ def test_failed_dispatch_removed_after_third_attempt(monkeypatch, tmp_path):
     assert db_manager.queue_items("attack") == []
 
 
+# ── attack_log (F1 — histórico de ataques) ────────────────────────────────────
+
+def test_log_attack_roundtrip(tmp_path):
+    _setup_db(tmp_path)
+    db_manager.log_attack({
+        "originCity": "Baphomet", "targetCity": "AlvoCity", "targetPlayer": "JogadorX",
+        "islandX": 43, "islandY": 57, "missionType": "army", "targetType": "enemy",
+        "source": "manual", "units": {"303": 100}, "transporters": 50, "success": True,
+    })
+    db_manager.log_attack({
+        "originCity": "Baphomet", "targetCity": "OutraCity", "targetPlayer": "JogadorY",
+        "missionType": "fleet", "success": False, "error": "types=[11]",
+    })
+    log = db_manager.get_attack_log()
+    assert len(log) == 2
+    assert log[0]["target_city"] == "OutraCity"      # newest first
+    assert log[0]["success"] is False
+    assert log[0]["error"] == "types=[11]"
+    assert log[1]["units"] == {"303": 100}
+    assert log[1]["success"] is True
+
+
+def test_get_attack_log_filter_by_target(tmp_path):
+    _setup_db(tmp_path)
+    db_manager.log_attack({"targetCity": "AlvoCity", "targetPlayer": "JogadorX", "success": True})
+    db_manager.log_attack({"targetCity": "OutraCity", "targetPlayer": "JogadorY", "success": True})
+    assert len(db_manager.get_attack_log(target="alvo")) == 1
+    assert len(db_manager.get_attack_log(target="jogador")) == 2
+    assert db_manager.get_attack_log(target="nada") == []
+
+
+def test_process_attack_queue_writes_log(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    now = int(time.time())
+    _add_attacks([{"id": "due1", "dispatchAfter": now - 10, "missionType": "army",
+                   "originCityName": "Baphomet", "targetCityName": "AlvoCity",
+                   "targetPlayerName": "JogadorX", "units": {"303": 10}}])
+    monkeypatch.setattr(am, "_dispatch_attack", lambda s, i: True)
+
+    am.process_attack_queue(session=None, in_active_hours=True)
+
+    log = db_manager.get_attack_log()
+    assert len(log) == 1
+    assert log[0]["origin_city"] == "Baphomet"
+    assert log[0]["target_player"] == "JogadorX"
+    assert log[0]["source"] == "manual"
+    assert log[0]["success"] is True
+
+
+def test_failed_attempt_logged_with_error(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    now = int(time.time())
+    _add_attacks([{"id": "due1", "dispatchAfter": now - 10,
+                   "targetPlayerName": "P", "targetCityName": "C"}])
+
+    def fake_fail(session, item):
+        am._last_feedback_text = "O jogador neste momento está inactivo"
+        return False
+
+    monkeypatch.setattr(am, "_dispatch_attack", fake_fail)
+    am.process_attack_queue(session=None, in_active_hours=True)
+
+    log = db_manager.get_attack_log()
+    assert len(log) == 1
+    assert log[0]["success"] is False
+    assert "inactivo" in log[0]["error"]
+
+
 # ── has_due_recalls ───────────────────────────────────────────────────────────
 
 def test_has_due_recalls_true_without_next_attempt(tmp_path):
