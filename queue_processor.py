@@ -287,7 +287,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # short-circuit the sleep below, or this loop spins hot until dispatch time.
         if session and _in_scan_hours():
             try:
-                from espionage_manager import has_due_attacks, process_attack_queue
+                from attack_manager import has_due_attacks, process_attack_queue
                 if has_due_attacks():
                     process_attack_queue(session, in_active_hours=True)
                     continue

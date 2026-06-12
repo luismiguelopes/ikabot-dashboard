@@ -1,8 +1,8 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
-Estado: **P0, P1 e P2 concluídos em 2026-06-11**. Army dispatch validado in-game ✅;
-fleet (bloqueio de porto), auto-attack e deploy para cidade própria por validar.
-Testes: 40/40 a passar (`test_db.py`, `test_queue.py`, `test_attack_queue.py`).
+Estado: **P0-P3 concluídos** (P0-P2 em 2026-06-11, P3 em 2026-06-12). Army e fleet
+dispatch validados in-game ✅; auto-attack e deploy para cidade própria por validar.
+Testes: 62/62 a passar (db, queue, attack_queue, espionage_parsers, military_parser).
 
 ---
 
@@ -84,15 +84,19 @@ Testes: 40/40 a passar (`test_db.py`, `test_queue.py`, `test_attack_queue.py`).
 
 ---
 
-## P3 — Sustentabilidade
+## P3 — Sustentabilidade ✅ CONCLUÍDO 2026-06-12
 
-- **P3.1** Testes para `espionage_manager`: parsers de HTML (`_parse_safehouse_page`,
-  `_parse_reports_from_html`, `_parse_garrison_troops`, `_parse_arrival_countdown`) com
-  fixtures de HTML real; lógica de filas (due/retry) sem rede.
-- **P3.2** Split do `espionage_manager.py` (2700 linhas) em `spy_manager.py` +
-  `attack_manager.py` (+ `report_parser.py`).
-- **P3.3** Migrar filas JSON partilhadas (attack, dispatch, recall, waves) para SQLite —
-  elimina as races de vez.
+- **P3.1 ✅** Testes dos parsers HTML (`test_espionage_parsers.py`, 17 testes: safehouse,
+  countdown, spy session id, garrison, relatórios, missões activas, threshold).
+- **P3.2 ✅** Split: `attack_manager.py` (fila de ataques, senders, auto-attack waves)
+  separado do `espionage_manager.py` (espiões, recalls, parsing). Novo volume no compose.
+- **P3.3 ✅** Filas attack/spy_dispatch/spy_recall migradas para SQLite
+  (`db_manager.shared_queue`, schema v4): items com `id`, remoção transaccional por item
+  (zero races), migração automática dos JSON antigos (renomeados `.migrated`).
+  `auto_attack_waves.json` ficou em JSON (só o bot escreve; Flask lê/cancela — risco
+  baixo; migrar se vier a dar problemas).
+- ⚠️ Lição operacional: o auto-reload do Flask não apanha edições que substituem o inode
+  dos ficheiros montados — reiniciar SEMPRE os dois containers após editar .py.
 
 ---
 

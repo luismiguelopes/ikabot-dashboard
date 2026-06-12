@@ -96,7 +96,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         refresh_movements(session, ids[0])
                 if in_scan_hours:
                     try:
-                        from espionage_manager import process_spy_cycle, process_attack_queue
+                        from espionage_manager import process_spy_cycle
+                        from attack_manager import process_attack_queue
                         process_spy_cycle(session)
                         process_attack_queue(session, in_active_hours=True)
                     except Exception:
@@ -143,9 +144,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── Espionage cycle (only during active hours) ───────────────────
             if in_scan_hours:
                 try:
-                    from espionage_manager import (
-                        fetch_spy_counts, process_spy_cycle, process_attack_queue,
-                        evaluate_auto_attacks, process_auto_attack_waves,
+                    from espionage_manager import fetch_spy_counts, process_spy_cycle
+                    from attack_manager import (
+                        process_attack_queue, evaluate_auto_attacks, process_auto_attack_waves,
                     )
                     fetch_spy_counts(session)
                     process_spy_cycle(session)

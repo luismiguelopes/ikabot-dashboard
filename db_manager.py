@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _connect():
@@ -35,6 +35,18 @@ def _run_migrations(conn):
         # v3 = city_order column on queue_items for stable inter-city ordering
         conn.execute("ALTER TABLE queue_items ADD COLUMN city_order INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+    if current < 4:
+        # v4 = shared_queue: attack/spy-dispatch/recall queues moved off racy JSON files
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shared_queue (
+                queue TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at INTEGER,
+                PRIMARY KEY (queue, item_id)
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version) VALUES (4)")
     conn.commit()
 
 
@@ -153,6 +165,110 @@ def init_db():
     _migrate_marks()
     _migrate_building_costs()
     _migrate_queue()
+    _migrate_shared_queues()
+
+
+# ── Shared queues (attack, spy dispatch, spy recall) ──────────────────────────
+# Single SQLite table replaces the JSON files that both containers wrote without
+# locking. Items are JSON payloads keyed by (queue, item_id); processors remove
+# items one by one right after handling them, so there is no save-back race.
+
+_SHARED_QUEUE_JSON = {
+    "attack":       "attack_queue.json",
+    "spy_dispatch": "spy_dispatch_queue.json",
+    "spy_recall":   "spy_recall_queue.json",
+}
+
+
+def queue_add(queue, item):
+    """Insert/replace one item in a shared queue. Ensures item['id']; returns it."""
+    import uuid
+    init_db()
+    item = dict(item)
+    if not item.get("id"):
+        item["id"] = uuid.uuid4().hex[:8]
+    created = item.get("queuedAt") or item.get("addedAt") or int(time.time())
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO shared_queue (queue, item_id, payload, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (queue, item["id"], json.dumps(item), created))
+    finally:
+        conn.close()
+    return item["id"]
+
+
+def queue_items(queue):
+    """Return all items of a shared queue, oldest first."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT payload FROM shared_queue WHERE queue = ? ORDER BY created_at, rowid",
+            (queue,)
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        try:
+            out.append(json.loads(r["payload"]))
+        except Exception:
+            pass
+    return out
+
+
+def queue_remove(queue, item_ids):
+    """Remove items by id. Returns number of rows deleted."""
+    init_db()
+    item_ids = [i for i in item_ids if i]
+    if not item_ids:
+        return 0
+    conn = _connect()
+    try:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM shared_queue WHERE queue = ? AND item_id IN ({})".format(
+                    ",".join("?" * len(item_ids))),
+                (queue, *item_ids),
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+def _migrate_shared_queues():
+    """One-time import of pending items from the legacy JSON queue files.
+    The file is renamed to .migrated afterwards so stale copies of the old code
+    cannot resurrect already-processed items."""
+    for queue, fname in _SHARED_QUEUE_JSON.items():
+        path = os.path.join(_LOGS_DIR, fname)
+        if not os.path.exists(path):
+            continue
+        conn = _connect()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM shared_queue WHERE queue = ?", (queue,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if count == 0:
+            try:
+                with open(path) as f:
+                    pending = json.load(f).get("pending", [])
+            except Exception:
+                pending = []
+            for item in pending:
+                try:
+                    queue_add(queue, item)
+                except Exception:
+                    pass
+        try:
+            os.rename(path, path + ".migrated")
+        except Exception:
+            pass
 
 
 # ── Empire snapshot ───────────────────────────────────────────────────────────

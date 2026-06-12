@@ -38,11 +38,8 @@ NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
-SPY_DISPATCH_QUEUE_PATH    = os.path.join(LOGS_DIR, "spy_dispatch_queue.json")
-SPY_RECALL_QUEUE_PATH      = os.path.join(LOGS_DIR, "spy_recall_queue.json")
 SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
 ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
-ATTACK_QUEUE_PATH          = os.path.join(LOGS_DIR, "attack_queue.json")
 MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
 AUTO_ATTACK_WAVES_PATH     = os.path.join(LOGS_DIR, "auto_attack_waves.json")
 AUTO_ATTACK_SETTINGS_PATH    = os.path.join(LOGS_DIR, "auto_attack_settings.json")
@@ -781,16 +778,10 @@ def api_espionage_dispatch():
         "queuedAt":         int(time.time()),
     }
 
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
     try:
-        try:
-            with open(SPY_DISPATCH_QUEUE_PATH) as f:
-                q = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            q = {"pending": []}
-        q["pending"].append(item)
-        os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(SPY_DISPATCH_QUEUE_PATH, "w") as f:
-            json.dump(q, f)
+        _db.queue_add("spy_dispatch", item)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -817,11 +808,10 @@ def api_military_refresh():
 
 @app.route("/api/espionage/attack-queue")
 def api_attack_queue_get():
-    try:
-        with open(ATTACK_QUEUE_PATH) as f:
-            return jsonify(json.load(f))
-    except FileNotFoundError:
+    if not _db:
         return jsonify({"pending": []})
+    try:
+        return jsonify({"pending": _db.queue_items("attack")})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -838,11 +828,8 @@ def api_attack_queue_add():
     if not units:
         return jsonify({"error": "units não pode estar vazio"}), 400
 
-    try:
-        with open(ATTACK_QUEUE_PATH) as f:
-            q = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        q = {"pending": []}
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
 
     delay_min = _rnd.randint(5, 20)
     item = {
@@ -861,10 +848,10 @@ def api_attack_queue_add():
         "dispatchAfter":    int(time.time()) + delay_min * 60,
         "missionId":        data.get("missionId"),
     }
-    q["pending"].append(item)
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(ATTACK_QUEUE_PATH, "w") as f:
-        json.dump(q, f, indent=2)
+    try:
+        _db.queue_add("attack", item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     return jsonify({"status": "queued", "item": item})
 
 
@@ -874,17 +861,14 @@ def api_attack_queue_cancel():
     attack_id = data.get("id")
     if not attack_id:
         return jsonify({"error": "id obrigatório"}), 400
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
     try:
-        with open(ATTACK_QUEUE_PATH) as f:
-            q = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify({"error": "Fila vazia"}), 404
-    original = len(q.get("pending", []))
-    q["pending"] = [it for it in q.get("pending", []) if it.get("id") != attack_id]
-    if len(q["pending"]) == original:
+        removed = _db.queue_remove("attack", [attack_id])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if removed == 0:
         return jsonify({"error": "Ataque não encontrado"}), 404
-    with open(ATTACK_QUEUE_PATH, "w") as f:
-        json.dump(q, f, indent=2)
     return jsonify({"status": "cancelled"})
 
 
@@ -922,11 +906,8 @@ def api_dispatch_combat():
     else:
         dispatch_after = now + 10
 
-    try:
-        with open(ATTACK_QUEUE_PATH) as f:
-            q = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        q = {"pending": []}
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
 
     item = {
         "id":               str(uuid.uuid4())[:8],
@@ -946,10 +927,10 @@ def api_dispatch_combat():
         "dispatchAfter":    dispatch_after,
         "missionId":        None,
     }
-    q["pending"].append(item)
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(ATTACK_QUEUE_PATH, "w") as f:
-        json.dump(q, f, indent=2)
+    try:
+        _db.queue_add("attack", item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     return jsonify({"status": "queued", "item": item})
 
 
@@ -1097,9 +1078,8 @@ def api_espionage_recall_spy():
         missions[i]["state"]      = "RECALLED"
         missions[i]["recalledAt"] = now
         position = m.get("safehousePosition")
-        if position:
-            q = _load_json(SPY_RECALL_QUEUE_PATH, {"pending": []})
-            q.setdefault("pending", []).append({
+        if position and _db:
+            _db.queue_add("spy_recall", {
                 "targetCityId":   city_id,
                 "targetIslandId": str(m.get("targetIslandId", "")),
                 "originCityId":   origin_id,
@@ -1109,7 +1089,6 @@ def api_espionage_recall_spy():
                 "numAgents":      m.get("numAgents", 1),
                 "queuedAt":       now,
             })
-            _save_json(SPY_RECALL_QUEUE_PATH, q)
         changed = True
         break  # recall only the first active mission found
     if not changed:
