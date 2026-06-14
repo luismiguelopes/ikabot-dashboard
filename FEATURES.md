@@ -33,11 +33,18 @@ Cruzar transporters seleccionados com o último relatório de espionagem do alvo
 "50 navios = 25.000 de capacidade, mas o armazém tem 180.000 — faltam navios".
 Os dados já existem (spy_missions.json result.resources + capacidade por navio).
 
-### F4. Farming de alvos (ciclo completo) — a feature mais ambiciosa
-"Atacar este alvo a cada X horas enquanto o saque do relatório > Y":
-re-espionagem automática antes de cada vaga → avaliação → ataque → repete.
-A infra já existe quase toda (spy state machine + attack queue + auto-attack);
-falta o orquestrador de ciclo por alvo e a UI de gestão.
+### F4. Farming de alvos (ciclo completo) ✅ IMPLEMENTADO 2026-06-13
+`farm_manager.py`: máquina de estados por alvo (SQLite `farm_targets`, schema v7)
+IDLE → SPYING → ATTACKING → IDLE. Reutiliza a fila de espiões (re-espia ao chegar a
+hora), avalia o saque fresco e, se compensar (≥ minLoot, frota inimiga ≤ maxEnemyShips,
+existe origem com tropas), enfileira o ataque na fila de ataques (frota primeiro se
+tier 2). Espera o regresso estimado e repete a cada intervalHours.
+- UI: botão "adicionar ao farm" no alvo do separador Ataque + cartão de gestão
+  (toggle, correr-já, remover, estado, saque/ataques).
+- API: `GET /api/farm`, `POST /api/farm/{add,update,remove}`.
+- Alvos em farm são excluídos do auto-attack one-shot (evita ataques duplos).
+- Respeita pausa e horas activas. Desligado por defeito (sem alvos).
+⚠️ Por validar in-game o ciclo completo.
 
 ### F5. Notificação de regresso com saque
 Destacar nos movimentos o regresso de tropas/frota e notificar via Telegram
@@ -114,6 +121,7 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
 
 ## Já implementadas (referência)
 
+- ✅ F4 Farming de alvos (farm_manager, máquina de estados por alvo) — 2026-06-13
 - ✅ F1.b Estatísticas de saque por alvo (loot_log + /api/loot-stats) — 2026-06-13
 - ✅ F8.b Pré-posicionamento proactivo do próximo item da fila — 2026-06-13
 - ✅ F9 Otimizador de vinho (transportes preventivos) — 2026-06-13

@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def _connect():
@@ -88,6 +88,35 @@ def _run_migrations(conn):
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_loot_log_ts ON loot_log(ts)")
         conn.execute("INSERT INTO schema_version (version) VALUES (6)")
+    if current < 7:
+        # v7 = farm_targets: continuous spy→attack→repeat loop per target (F4)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS farm_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_city_id TEXT UNIQUE,
+                target_city_name TEXT,
+                target_player TEXT,
+                island_id TEXT,
+                island_x INTEGER,
+                island_y INTEGER,
+                enabled INTEGER DEFAULT 1,
+                interval_hours INTEGER DEFAULT 8,
+                min_loot INTEGER DEFAULT 50000,
+                max_enemy_ships INTEGER DEFAULT 0,
+                state TEXT DEFAULT 'IDLE',
+                next_run_at INTEGER DEFAULT 0,
+                spy_dispatched_at INTEGER DEFAULT 0,
+                attack_return_at INTEGER DEFAULT 0,
+                last_spy_at INTEGER DEFAULT 0,
+                last_attack_at INTEGER DEFAULT 0,
+                last_loot INTEGER DEFAULT 0,
+                total_raids INTEGER DEFAULT 0,
+                total_loot INTEGER DEFAULT 0,
+                note TEXT DEFAULT '',
+                created_at INTEGER
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version) VALUES (7)")
     conn.commit()
 
 
@@ -345,6 +374,111 @@ def get_attack_log(limit=100, target=None):
         d["success"] = bool(d["success"])
         out.append(d)
     return out
+
+
+# ── Farm targets (F4 — continuous spy→attack loop) ────────────────────────────
+
+_FARM_UPDATE_COLS = {
+    "target_city_name", "target_player", "island_id", "island_x", "island_y",
+    "enabled", "interval_hours", "min_loot", "max_enemy_ships", "state",
+    "next_run_at", "spy_dispatched_at", "attack_return_at", "last_spy_at",
+    "last_attack_at", "last_loot", "total_raids", "total_loot", "note",
+}
+
+
+def _farm_row_to_dict(row):
+    d = dict(row)
+    d["enabled"] = bool(d.get("enabled"))
+    return d
+
+
+def farm_add(target):
+    """Insert a farm target (idempotent on target_city_id). Refreshes identity/config
+    fields if it already exists; never resets accumulated stats or runtime state."""
+    init_db()
+    now = int(time.time())
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("""
+                INSERT INTO farm_targets
+                (target_city_id, target_city_name, target_player, island_id,
+                 island_x, island_y, enabled, interval_hours, min_loot, max_enemy_ships,
+                 state, next_run_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
+                ON CONFLICT(target_city_id) DO UPDATE SET
+                    target_city_name=excluded.target_city_name,
+                    target_player=excluded.target_player,
+                    island_id=excluded.island_id,
+                    island_x=excluded.island_x,
+                    island_y=excluded.island_y,
+                    enabled=excluded.enabled,
+                    interval_hours=excluded.interval_hours,
+                    min_loot=excluded.min_loot,
+                    max_enemy_ships=excluded.max_enemy_ships
+            """, (
+                str(target["targetCityId"]), target.get("targetCityName", ""),
+                target.get("targetPlayer", ""), str(target.get("islandId", "")),
+                int(target.get("islandX", 0)), int(target.get("islandY", 0)),
+                1 if target.get("enabled", True) else 0,
+                int(target.get("intervalHours", 8)),
+                int(target.get("minLoot", 50000)),
+                int(target.get("maxEnemyShips", 0)),
+                now,
+            ))
+    finally:
+        conn.close()
+
+
+def farm_list():
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT * FROM farm_targets ORDER BY created_at").fetchall()
+    finally:
+        conn.close()
+    return [_farm_row_to_dict(r) for r in rows]
+
+
+def farm_get(target_city_id):
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT * FROM farm_targets WHERE target_city_id = ?",
+                           (str(target_city_id),)).fetchone()
+    finally:
+        conn.close()
+    return _farm_row_to_dict(row) if row else None
+
+
+def farm_update(target_city_id, fields):
+    """Update whitelisted columns for one farm target."""
+    init_db()
+    cols = {k: v for k, v in fields.items() if k in _FARM_UPDATE_COLS}
+    if not cols:
+        return
+    assignments = ", ".join(f"{k} = ?" for k in cols)
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                f"UPDATE farm_targets SET {assignments} WHERE target_city_id = ?",
+                (*cols.values(), str(target_city_id)),
+            )
+    finally:
+        conn.close()
+
+
+def farm_remove(target_city_id):
+    init_db()
+    conn = _connect()
+    try:
+        with conn:
+            cur = conn.execute("DELETE FROM farm_targets WHERE target_city_id = ?",
+                               (str(target_city_id),))
+            return cur.rowcount
+    finally:
+        conn.close()
 
 
 # ── Loot log (F1.b — actual plunder from returning fleets) ────────────────────

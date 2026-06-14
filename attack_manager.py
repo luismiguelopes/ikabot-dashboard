@@ -663,6 +663,15 @@ def evaluate_auto_attacks(session):
     waves_data    = _load_auto_attack_waves()
     existing_keys = {w.get("sourceMissionKey") for w in waves_data.get("waves", [])}
 
+    # Targets handled by the continuous farm (F4) are off-limits to the one-shot
+    # auto-attack, otherwise the same DONE report triggers both.
+    farm_ids = set()
+    try:
+        from db_manager import farm_list
+        farm_ids = {str(f["target_city_id"]) for f in farm_list() if f.get("enabled")}
+    except Exception:
+        pass
+
     ship_capacity = 400
     try:
         from ikabot.helpers.pedirInfo import getShipCapacity
@@ -686,6 +695,9 @@ def evaluate_auto_attacks(session):
             continue
         if not m.get("garrisonResult"):
             continue
+
+        if str(m.get("targetCityId", "")) in farm_ids:
+            continue  # farmed target — handled by farm_manager
 
         mission_key = f"{m['targetCityId']}_{m['islandX']}_{m['islandY']}"
         if mission_key in existing_keys:

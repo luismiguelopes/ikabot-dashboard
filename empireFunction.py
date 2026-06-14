@@ -165,6 +165,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     process_attack_queue(session, in_active_hours=in_scan_hours)
                     evaluate_auto_attacks(session)
                     process_auto_attack_waves(session, in_active_hours=in_scan_hours)
+                    from farm_manager import process_farm_targets
+                    process_farm_targets(session, in_active_hours=in_scan_hours)
                 except Exception:
                     logger.warning("[espionage] spy cycle falhou", exc_info=True)
 

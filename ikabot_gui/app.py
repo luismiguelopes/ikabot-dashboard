@@ -950,6 +950,82 @@ def api_consolidate_post():
     return jsonify({"status": "ok", "settings": settings})
 
 
+@app.route("/api/farm")
+def api_farm_list():
+    if not _db:
+        return jsonify([])
+    try:
+        return jsonify(_db.farm_list())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/farm/add", methods=["POST"])
+def api_farm_add():
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    data = request.get_json(silent=True) or {}
+    if not str(data.get("targetCityId", "")).strip():
+        return jsonify({"error": "targetCityId obrigatório"}), 400
+    try:
+        _db.farm_add({
+            "targetCityId":   str(data["targetCityId"]),
+            "targetCityName": data.get("targetCityName", ""),
+            "targetPlayer":   data.get("targetPlayer", ""),
+            "islandId":       str(data.get("islandId", "")),
+            "islandX":        int(data.get("islandX", 0)),
+            "islandY":        int(data.get("islandY", 0)),
+            "enabled":        bool(data.get("enabled", True)),
+            "intervalHours":  max(1, min(168, int(data.get("intervalHours", 8)))),
+            "minLoot":        max(0, int(data.get("minLoot", 50000))),
+            "maxEnemyShips":  max(0, int(data.get("maxEnemyShips", 0))),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/api/farm/update", methods=["POST"])
+def api_farm_update():
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    data = request.get_json(silent=True) or {}
+    tid = str(data.get("targetCityId", "")).strip()
+    if not tid:
+        return jsonify({"error": "targetCityId obrigatório"}), 400
+    fields = {}
+    if "enabled" in data:        fields["enabled"] = 1 if data["enabled"] else 0
+    if "intervalHours" in data:  fields["interval_hours"] = max(1, min(168, int(data["intervalHours"])))
+    if "minLoot" in data:        fields["min_loot"] = max(0, int(data["minLoot"]))
+    if "maxEnemyShips" in data:  fields["max_enemy_ships"] = max(0, int(data["maxEnemyShips"]))
+    # Manual reset back to IDLE/now so the next cycle re-runs immediately
+    if data.get("runNow"):
+        fields["state"] = "IDLE"
+        fields["next_run_at"] = 0
+    try:
+        _db.farm_update(tid, fields)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/api/farm/remove", methods=["POST"])
+def api_farm_remove():
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    data = request.get_json(silent=True) or {}
+    tid = str(data.get("targetCityId", "")).strip()
+    if not tid:
+        return jsonify({"error": "targetCityId obrigatório"}), 400
+    try:
+        removed = _db.farm_remove(tid)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if removed == 0:
+        return jsonify({"error": "Alvo não encontrado"}), 404
+    return jsonify({"ok": True})
+
+
 @app.route("/api/loot-log")
 def api_loot_log():
     if not _db:

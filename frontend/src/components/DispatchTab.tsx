@@ -7,6 +7,21 @@ import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import type { OwnCity, WorldScanPlayer } from '../types'
 
+interface FarmTarget {
+  target_city_id:   string
+  target_city_name: string
+  target_player:    string
+  enabled:          boolean
+  interval_hours:   number
+  min_loot:         number
+  max_enemy_ships:  number
+  state:            string
+  next_run_at:      number
+  last_loot:        number
+  total_raids:      number
+  total_loot:       number
+}
+
 interface LootStat {
   from_player: string
   raids:       number
@@ -115,6 +130,7 @@ export function DispatchTab() {
   const [availableShips, setAvailableShips] = useState<number | null>(null)
   const [attackLog,      setAttackLog]      = useState<AttackLogEntry[]>([])
   const [lootStats,      setLootStats]      = useState<LootStat[]>([])
+  const [farmTargets,    setFarmTargets]    = useState<FarmTarget[]>([])
   const [logFilter,      setLogFilter]      = useState('')
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
 
@@ -161,6 +177,10 @@ export function DispatchTab() {
 
     fetch('/api/loot-stats').then(r => r.json()).then((data: any) => {
       if (Array.isArray(data)) setLootStats(data)
+    }).catch(() => {})
+
+    fetch('/api/farm').then(r => r.json()).then((data: any) => {
+      if (Array.isArray(data)) setFarmTargets(data)
     }).catch(() => {})
   }, [originCityName])
 
@@ -321,6 +341,46 @@ export function DispatchTab() {
     })
     loadAll()
   }
+
+  // ── Farm (F4) ────────────────────────────────────────────────────────────────
+
+  async function handleAddFarm() {
+    if (!target || target.type !== 'enemy') return
+    await fetch('/api/farm/add', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetCityId:   target.cityId,
+        targetCityName: target.cityName,
+        targetPlayer:   target.playerName,
+        islandId:       target.islandId,
+        islandX:        target.islandX,
+        islandY:        target.islandY,
+      }),
+    }).catch(() => {})
+    setFeedback({ ok: true, msg: `${t('farm_add')}: ${target.cityName}` })
+    loadAll()
+  }
+
+  async function farmUpdate(targetCityId: string, body: Record<string, unknown>) {
+    await fetch('/api/farm/update', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ targetCityId, ...body }),
+    }).catch(() => {})
+    loadAll()
+  }
+
+  async function farmRemove(targetCityId: string) {
+    await fetch('/api/farm/remove', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ targetCityId }),
+    }).catch(() => {})
+    loadAll()
+  }
+
+  const farmIds = new Set(farmTargets.map(f => f.target_city_id))
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -496,6 +556,15 @@ export function DispatchTab() {
                       <div className={`text-sm font-semibold ${target.state === 'inactive' ? 'text-yellow-800' : 'text-indigo-800'}`}>{target.cityName}</div>
                       <div className={`text-xs ${target.state === 'inactive' ? 'text-yellow-600' : 'text-indigo-500'}`}>{target.playerName} · ({target.islandX}:{target.islandY})</div>
                     </div>
+                    {target.type === 'enemy' && target.cityId && !farmIds.has(target.cityId) && (
+                      <button
+                        onClick={handleAddFarm}
+                        title={t('farm_add')}
+                        className="text-xs text-amber-600 hover:text-amber-700 font-medium whitespace-nowrap"
+                      >
+                        <i className="fa-solid fa-seedling mr-1" />{t('farm_add')}
+                      </button>
+                    )}
                     <button onClick={() => { setTarget(null); setTargetSearch('') }} className="text-slate-400 hover:text-red-500">
                       <i className="fa-solid fa-xmark" />
                     </button>
@@ -784,6 +853,54 @@ export function DispatchTab() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Target farm (F4) ──────────────────────────────────────────────── */}
+      <Card className="mt-4">
+        <CardHeader icon="fa-seedling" title={t('farm_title')} />
+        <p className="px-5 pt-2 text-xs text-slate-400">{t('farm_note')}</p>
+        {farmTargets.length === 0 ? (
+          <p className="px-5 py-4 text-sm text-slate-400 italic">{t('farm_empty')}</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {farmTargets.map(f => {
+              const stateColor = f.state === 'ATTACKING' ? 'bg-red-100 text-red-600'
+                : f.state === 'SPYING' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'
+              return (
+                <div key={f.target_city_id} className="px-5 py-3 flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={() => farmUpdate(f.target_city_id, { enabled: !f.enabled })}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${f.enabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                    title={t('transport_enabled')}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${f.enabled ? 'translate-x-5' : 'translate-x-1'}`} />
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-700 truncate">
+                      {f.target_city_name}
+                      <span className="text-slate-400 text-xs ml-1 font-normal">({f.target_player})</span>
+                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium ${stateColor}`}>
+                        {t(`farm_state_${f.state}`)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      {t('farm_interval', { n: String(f.interval_hours) })} · {t('farm_minloot')} {fmt(f.min_loot)} · {t('farm_raids')}: {f.total_raids}
+                      {f.last_loot > 0 && <> · {t('farm_lastloot')} {fmt(f.last_loot)}</>}
+                    </div>
+                  </div>
+                  <button onClick={() => farmUpdate(f.target_city_id, { runNow: true })}
+                          className="text-xs text-indigo-500 hover:text-indigo-700 font-medium" title={t('farm_runnow')}>
+                    <i className="fa-solid fa-bolt mr-1" />{t('farm_runnow')}
+                  </button>
+                  <button onClick={() => farmRemove(f.target_city_id)}
+                          className="text-xs text-red-400 hover:text-red-600 font-medium" title={t('farm_remove')}>
+                    <i className="fa-solid fa-trash" />
+                  </button>
+                </div>
+              )
+            })}
           </div>
         )}
       </Card>
