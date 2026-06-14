@@ -1,9 +1,15 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import logging
+import logging.handlers
 import os
 import re
+
+LOGS_DIR = "/tmp/ikalogs/"
+LOG_FILE_PATH = os.path.join(LOGS_DIR, "bot.log")
+PAUSE_PATH    = os.path.join(LOGS_DIR, "pause.json")
 
 
 def _setup_logger():
@@ -15,6 +21,18 @@ def _setup_logger():
             datefmt="%H:%M:%S",
         ))
         _log.addHandler(_handler)
+        # File handler (bounded) so the dashboard can tail the bot log (F10).
+        try:
+            os.makedirs(LOGS_DIR, exist_ok=True)
+            _fh = logging.handlers.RotatingFileHandler(
+                LOG_FILE_PATH, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+            _fh.setFormatter(logging.Formatter(
+                "%(asctime)s %(levelname)s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            ))
+            _log.addHandler(_fh)
+        except Exception:
+            pass
         _log.setLevel(logging.INFO)
         _log.propagate = False
     # Silence ikabot's internal HTTP/session debug noise
@@ -25,7 +43,18 @@ def _setup_logger():
 
 logger = _setup_logger()
 
-LOGS_DIR = "/tmp/ikalogs/"
+
+def is_paused():
+    """Global pause (F11): when True the bot keeps collecting data but launches no
+    new actions — building constructions, transports/consolidation and combat
+    dispatches. Toggled from the dashboard via pause.json on the shared volume."""
+    try:
+        with open(PAUSE_PATH) as f:
+            return bool(json.load(f).get("paused", False))
+    except Exception:
+        return False
+
+
 QUEUE_JSON_PATH           = os.path.join(LOGS_DIR, "building_queue.json")
 QUEUE_SETTINGS_PATH       = os.path.join(LOGS_DIR, "queue_settings.json")
 LAST_ALIVE_JSON_PATH      = os.path.join(LOGS_DIR, "last_alive.json")

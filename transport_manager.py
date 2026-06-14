@@ -150,6 +150,10 @@ def process_transport_queue(session, in_active_hours=True):
     with random backoff on failure."""
     if not in_active_hours:
         return
+    from empire_utils import is_paused
+    if is_paused():
+        logger.info("[pause] em pausa — fila de transportes ignorada")
+        return
 
     pending = _transport_queue_items()
     if not pending:
@@ -228,6 +232,9 @@ def process_consolidation(session, in_active_hours=True):
     Respects the queue resourceBuffer and building-queue reservations, so it never
     starves a city below the configured floor nor steals from planned upgrades."""
     if not in_active_hours:
+        return
+    from empire_utils import is_paused
+    if is_paused():
         return
     settings = get_consolidate_settings()
     if not settings.get("enabled") or not settings.get("destCityId"):

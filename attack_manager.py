@@ -416,6 +416,10 @@ def process_attack_queue(session, in_active_hours=True):
     being handled, so items queued by Flask mid-loop are untouched — no save-back race."""
     if not in_active_hours:
         return
+    from empire_utils import is_paused
+    if is_paused():
+        logger.info("[pause] em pausa — fila de ataques ignorada")
+        return
 
     pending = _attack_queue_items()
     if not pending:
@@ -828,6 +832,9 @@ def _log_wave_attempt(plan, wave, mission_type, ok):
 def process_auto_attack_waves(session, in_active_hours=True):
     """Dispatch pending attack wave plans: fleet (tier 2) then army."""
     if not in_active_hours:
+        return
+    from empire_utils import is_paused
+    if is_paused():
         return
 
     settings = _load_auto_attack_settings()

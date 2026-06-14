@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { LangContext, loadLang } from './i18n'
+import { LangContext, loadLang, useT } from './i18n'
 import { loadThresholds } from './utils'
 import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
 import type { ApiData, AlertThresholds, CityResources } from './types'
@@ -16,6 +16,17 @@ import { CalculadorasPage } from './components/calculadoras/CalculadorasPage'
 import { BuildingQueueTab } from './components/Construction'
 import { MundoPage } from './components/mundo/MundoPage'
 import { SettingsPage } from './components/SettingsPage'
+import { LogsPage } from './components/LogsPage'
+
+function PausedBanner() {
+  const t = useT()
+  return (
+    <div className="mb-4 flex items-center gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-4 py-2.5">
+      <i className="fa-solid fa-pause shrink-0" />
+      {t('pause_banner')}
+    </div>
+  )
+}
 
 function LoadingScreen() {
   return (
@@ -115,6 +126,21 @@ export default function App() {
     return n
   }, [data, thresholds])
 
+  // Global pause (F11) — fetched from the bot, toggled from the sidebar
+  const [paused, setPaused] = useState(false)
+  const refreshPause = useCallback(() => {
+    fetch('/api/pause').then(r => r.json()).then((d: { paused?: boolean }) => setPaused(!!d.paused)).catch(() => {})
+  }, [])
+  useEffect(() => { refreshPause() }, [refreshPause])
+  const togglePause = useCallback(() => {
+    const next = !paused
+    setPaused(next)  // optimistic
+    fetch('/api/pause', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: next }),
+    }).then(r => r.json()).then((d: { paused?: boolean }) => setPaused(!!d.paused)).catch(refreshPause)
+  }, [paused, refreshPause])
+
   const [sseConnected, setSseConnected] = useState(true)
 
   useEffect(() => {
@@ -158,8 +184,11 @@ export default function App() {
           alertCount={alertCount}
           movCount={movCount}
           sseConnected={sseConnected}
+          paused={paused}
+          onTogglePause={togglePause}
         />
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
+          {paused && <PausedBanner />}
           {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
           {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
           {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
@@ -169,6 +198,7 @@ export default function App() {
           {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
+          {page === 'logs'         && <LogsPage />}
           {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
         </main>
       </div>

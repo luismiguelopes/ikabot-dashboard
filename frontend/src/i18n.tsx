@@ -4,7 +4,9 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
   en: {
     nav_home:'Home', nav_cities:'Cities', nav_buildings:'Buildings',
     nav_movements:'Movements', nav_alerts:'Alerts', nav_history:'History',
-    nav_calculators:'Calculators', nav_world:'World', nav_construction:'Construction',
+    nav_calculators:'Calculators', nav_world:'World', nav_construction:'Construction', nav_logs:'Logs',
+    logs_title:'Bot Log', logs_lines:'lines', logs_empty:'No log output yet.', logs_autoscroll:'Auto-scroll', logs_paused_note:'Bot is paused — only data collection is running.',
+    pause_resume:'Resume bot', pause_pause:'Pause bot', pause_banner:'Bot paused — no attacks, transports or constructions. Data collection continues.', pause_tooltip:'Suspends attacks, transports and constructions; keeps collecting data.',
     stale_data:'Stale data', refresh_in:'Refresh in {t}', bot_offline:'Bot offline', sse_offline:'Live updates off',
     transport_error:'Transport error', transport_error_detail:'Failed to send {resource} from {origin} at {ts}',
     lang_other:'PT',
@@ -402,7 +404,9 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
   pt: {
     nav_home:'Início', nav_cities:'Cidades', nav_buildings:'Edifícios',
     nav_movements:'Movimentos', nav_alerts:'Alertas', nav_history:'Histórico',
-    nav_calculators:'Calculadoras', nav_world:'Mundo', nav_construction:'Construção',
+    nav_calculators:'Calculadoras', nav_world:'Mundo', nav_construction:'Construção', nav_logs:'Logs',
+    logs_title:'Log do Bot', logs_lines:'linhas', logs_empty:'Ainda sem saída de log.', logs_autoscroll:'Auto-scroll', logs_paused_note:'Bot em pausa — só a recolha de dados está activa.',
+    pause_resume:'Retomar bot', pause_pause:'Pausar bot', pause_banner:'Bot em pausa — sem ataques, transportes ou construções. A recolha de dados continua.', pause_tooltip:'Suspende ataques, transportes e construções; continua a recolher dados.',
     stale_data:'Dados desatualizados', refresh_in:'Refresh em {t}', bot_offline:'Bot offline', sse_offline:'Atualizações offline',
     transport_error:'Erro de transporte', transport_error_detail:'Falhou envio de {resource} de {origin} às {ts}',
     lang_other:'EN',

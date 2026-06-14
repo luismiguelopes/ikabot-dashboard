@@ -73,13 +73,18 @@ preventivos quando a autonomia projectada cai abaixo de N horas, antes do alerta
 
 ## 🔧 Operacional
 
-### F10. Página de logs na UI
-Tail do log do bot via SSE no dashboard — hoje é preciso `docker logs ikabot`.
+### F10. Página de logs na UI ✅ IMPLEMENTADO 2026-06-13
+Nova página "Logs" no menu: tail do log do bot (poll 5s, 100-1000 linhas, auto-scroll,
+cores por nível). O bot passou a escrever para `bot.log` no volume partilhado via
+`RotatingFileHandler` (1 MB × 2 backups, com data completa); Flask serve em
+`GET /api/logs?lines=N`. Dispensa o `docker logs ikabot`.
 
-### F11. Pausa global
-Botão "suspender acções" (mantém recolha de dados; pára dispatches, transportes e
-construções) para quando estás a jogar manualmente — evita acções sobrepostas
-que pareçam suspeitas ou interfiram.
+### F11. Pausa global ✅ IMPLEMENTADO 2026-06-13
+Botão na sidebar (com banner amarelo quando activo) que suspende ataques, transportes/
+consolidação e construções, mantendo toda a recolha de dados (império, scan, movimentos,
+militar, espionagem). Estado em `pause.json`; `empire_utils.is_paused()` é verificado
+no topo de cada processador de acção, e o smart_sleep não cria busy-loop em pausa.
+API: `GET/POST /api/pause`.
 
 ### F12. Transportes agendados + consolidação ✅ IMPLEMENTADO 2026-06-12
 Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"):
@@ -96,6 +101,8 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
 
 ## Já implementadas (referência)
 
+- ✅ F10 Página de logs do bot na UI (bot.log rotativo + /api/logs) — 2026-06-13
+- ✅ F11 Pausa global (sidebar + banner, guards nos processadores) — 2026-06-13
 - ✅ F8 Previsão de recursos da fila de construção (hora de relógio, em-trânsito, vinho líquido) — 2026-06-13
 - ✅ F12 Transportes agendados + consolidação automática — 2026-06-12
 - ✅ F1 Histórico de ataques (attack_log SQLite + UI no DispatchTab) — 2026-06-12

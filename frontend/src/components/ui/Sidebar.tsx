@@ -35,9 +35,11 @@ interface SidebarProps {
   alertCount: number
   movCount: number
   sseConnected: boolean
+  paused: boolean
+  onTogglePause: () => void
 }
 
-export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, sseConnected }: SidebarProps) {
+export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, sseConnected, paused, onTogglePause }: SidebarProps) {
   const t = useT()
   const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60
   const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > 90 * 60
@@ -74,10 +76,23 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
         <NavItem icon="fa-calculator"           label={t('nav_calculators')}  active={active === 'calc'}         onClick={() => setActive('calc')}         />
         <NavItem icon="fa-list-check"           label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
         <NavItem icon="fa-earth-europe"         label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
+        <NavItem icon="fa-terminal"             label={t('nav_logs')}         active={active === 'logs'}         onClick={() => setActive('logs')}         />
       </nav>
 
-      {/* Settings — visually separated, above status footer */}
-      <div className="px-3 py-2 border-t border-slate-700/60">
+      {/* Pause toggle + Settings — separated, above status footer */}
+      <div className="px-3 py-2 border-t border-slate-700/60 space-y-1">
+        <button
+          onClick={onTogglePause}
+          title={t('pause_tooltip')}
+          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+            paused
+              ? 'bg-amber-500 text-white shadow hover:bg-amber-600'
+              : 'text-slate-400 hover:bg-slate-700 hover:text-slate-100'
+          }`}
+        >
+          <i className={`fa-solid ${paused ? 'fa-play' : 'fa-pause'} w-4 text-center text-sm`} />
+          <span className="flex-1 text-left">{t(paused ? 'pause_resume' : 'pause_pause')}</span>
+        </button>
         <NavItem icon="fa-gear" label={t('settings')} active={active === 'settings'} onClick={() => setActive('settings')} />
       </div>
 

@@ -285,7 +285,10 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # Pending scheduled attacks — dispatch as soon as dispatchAfter is reached.
         # has_due_attacks (not has_pending_attacks): a future-scheduled attack must not
         # short-circuit the sleep below, or this loop spins hot until dispatch time.
-        if session and _in_scan_hours():
+        # is_paused() must gate the `continue` paths too: a due item the processor
+        # refuses to handle while paused would otherwise spin this loop hot.
+        from empire_utils import is_paused
+        if session and _in_scan_hours() and not is_paused():
             try:
                 from attack_manager import has_due_attacks, process_attack_queue
                 if has_due_attacks():
@@ -295,7 +298,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 pass
 
         # Pending scheduled resource transports (same due-gating as attacks)
-        if session and _in_scan_hours():
+        if session and _in_scan_hours() and not is_paused():
             try:
                 from transport_manager import has_due_transports, process_transport_queue
                 if has_due_transports():
@@ -688,6 +691,10 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
 
 def process_building_queue(session, ids, cities):
     """Process one queue cycle. Returns True if any transport was dispatched."""
+    from empire_utils import is_paused
+    if is_paused():
+        logger.info("[pause] em pausa — fila de construção ignorada")
+        return False
     logger.info(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
     data = _load_queue()
     if not data.get("enabled", True):

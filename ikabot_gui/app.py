@@ -1249,6 +1249,49 @@ def api_espionage_recall_spy():
     return jsonify({"ok": True})
 
 
+BOT_LOG_PATH = os.path.join(LOGS_DIR, "bot.log")
+PAUSE_PATH   = os.path.join(LOGS_DIR, "pause.json")
+
+
+@app.route("/api/logs")
+def api_logs():
+    """Tail the bot log (F10). bot.log is size-bounded (rotating), so reading it
+    whole is cheap."""
+    try:
+        n = max(1, min(int(request.args.get("lines", 200)), 2000))
+    except (ValueError, TypeError):
+        n = 200
+    if not os.path.exists(BOT_LOG_PATH):
+        return jsonify({"lines": [], "note": "bot.log ainda não existe — aguarda o bot arrancar"})
+    try:
+        with open(BOT_LOG_PATH, encoding="utf-8", errors="replace") as f:
+            content = f.read().splitlines()
+        return jsonify({"lines": content[-n:]})
+    except Exception as e:
+        return jsonify({"lines": [], "error": str(e)}), 500
+
+
+@app.route("/api/pause")
+def api_pause_get():
+    paused = False
+    try:
+        with open(PAUSE_PATH) as f:
+            paused = bool(json.load(f).get("paused", False))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return jsonify({"paused": paused})
+
+
+@app.route("/api/pause", methods=["POST"])
+def api_pause_set():
+    data = request.get_json(silent=True) or {}
+    paused = bool(data.get("paused", False))
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(PAUSE_PATH, "w") as f:
+        json.dump({"paused": paused}, f)
+    return jsonify({"ok": True, "paused": paused})
+
+
 @app.route("/api/health")
 def api_health():
     db_ok = False
