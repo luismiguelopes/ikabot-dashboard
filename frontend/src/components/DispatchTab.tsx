@@ -2,9 +2,22 @@ import { useState, useEffect, useCallback } from 'react'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
+import { MATERIALS } from '../constants'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import type { OwnCity, WorldScanPlayer } from '../types'
+
+interface LootStat {
+  from_player: string
+  raids:       number
+  last_ts:     number
+  wood:        number
+  wine:        number
+  marble:      number
+  crystal:     number
+  sulfur:      number
+  total:       number
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +114,7 @@ export function DispatchTab() {
   const [pending,        setPending]        = useState<PendingAttack[]>([])
   const [availableShips, setAvailableShips] = useState<number | null>(null)
   const [attackLog,      setAttackLog]      = useState<AttackLogEntry[]>([])
+  const [lootStats,      setLootStats]      = useState<LootStat[]>([])
   const [logFilter,      setLogFilter]      = useState('')
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
 
@@ -143,6 +157,10 @@ export function DispatchTab() {
 
     fetch('/api/attack-log?limit=100').then(r => r.json()).then((data: any) => {
       if (Array.isArray(data)) setAttackLog(data)
+    }).catch(() => {})
+
+    fetch('/api/loot-stats').then(r => r.json()).then((data: any) => {
+      if (Array.isArray(data)) setLootStats(data)
     }).catch(() => {})
   }, [originCityName])
 
@@ -732,6 +750,42 @@ export function DispatchTab() {
             </div>
           )
         })()}
+      </Card>
+
+      {/* ── Loot by target (F1.b) ─────────────────────────────────────────── */}
+      <Card className="mt-4">
+        <CardHeader icon="fa-coins" title={t('loot_title')} />
+        <p className="px-5 pt-2 text-xs text-slate-400">{t('loot_note')}</p>
+        {lootStats.length === 0 ? (
+          <p className="px-5 py-4 text-sm text-slate-400 italic">{t('loot_empty')}</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {lootStats.map(s => (
+              <div key={s.from_player || '?'} className="px-5 py-2.5 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-slate-700 truncate">
+                    {s.from_player || '?'}
+                    <span className="text-slate-400 text-xs ml-2 font-normal">
+                      {s.raids} {t('loot_raids')} · {t('loot_last')} {fmtArrival(s.last_ts, lang)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                    {MATERIALS.map((m, i) => {
+                      const v = [s.wood, s.wine, s.marble, s.crystal, s.sulfur][i]
+                      return v > 0 && (
+                        <span key={m.en}><i className={`fa-solid ${m.icon} mr-1 ${m.color}`} />{fmt(v)}</span>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-sm font-mono font-semibold text-amber-600">{fmt(s.total)}</div>
+                  <div className="text-[10px] text-slate-400 uppercase">{t('loot_total')}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   )

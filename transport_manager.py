@@ -11,6 +11,7 @@ Reuses the dispatch/bundling machinery from queue_processor.
 """
 
 import json
+import math
 import os
 import random
 import time
@@ -32,6 +33,13 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "intervalHours": 6,
     "minSendTotal":  1000,
     "shipType":      "transporters",  # transporters | freighters | both
+}
+
+WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
+_DEFAULT_WINE_SETTINGS = {
+    "enabled":        False,
+    "thresholdHours": 12,   # act when a city's wine runway drops below this
+    "targetHours":    48,   # top the city up to this many hours of consumption
 }
 
 
@@ -364,3 +372,124 @@ def process_consolidation(session, in_active_hours=True):
     _save_consolidate_state(state)
     if sent_summary:
         logger.info("[consolidate] ronda concluída → %s: %s", dest_name, sent_summary)
+
+
+# ── Wine balancer (F9) ────────────────────────────────────────────────────────
+
+def get_wine_settings():
+    try:
+        with open(WINE_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_WINE_SETTINGS.items():
+            s.setdefault(k, v)
+        return s
+    except (FileNotFoundError, json.JSONDecodeError):
+        return dict(_DEFAULT_WINE_SETTINGS)
+
+
+def save_wine_settings(data):
+    settings = dict(_DEFAULT_WINE_SETTINGS)
+    settings["enabled"]        = bool(data.get("enabled", False))
+    settings["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
+    settings["targetHours"]    = max(settings["thresholdHours"], min(336, int(data.get("targetHours", 48))))
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WINE_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return settings
+
+
+def process_wine_balancer(session, in_active_hours=True):
+    """Pre-empt wine shortages: when a city's projected wine runway drops below
+    thresholdHours, ship wine from self-sufficient cities (runway = ∞) to top it up to
+    targetHours of consumption — before the critical alert would even fire."""
+    if not in_active_hours:
+        return
+    from empire_utils import is_paused
+    if is_paused():
+        return
+    settings = get_wine_settings()
+    if not settings.get("enabled"):
+        return
+
+    from ikabot.helpers.naval import getAvailableShips
+    from ikabot.helpers.pedirInfo import getShipCapacity
+    from queue_processor import _dispatch_transport, _load_resources_json
+
+    resources = _load_resources_json()
+    if not resources:
+        return
+    try:
+        with open(OWN_CITIES_PATH) as f:
+            own = {c["name"]: c for c in json.load(f)}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+
+    threshold = int(settings["thresholdHours"]) * 3600
+    target_h  = int(settings["targetHours"])
+
+    needy, sources = [], []
+    for name, d in resources.items():
+        cons     = int(d.get("wineConsumptionPerHour", 0) or 0)
+        stock    = int(d.get("Wine", 0) or 0)
+        runs_out = d.get("wineRunsOutIn", -1)
+        if runs_out != -1 and 0 < runs_out < threshold and cons > 0:
+            deficit = max(0, cons * target_h - stock)
+            if deficit > 0:
+                needy.append((name, runs_out, deficit))
+        elif runs_out == -1:
+            # self-sufficient: keep targetHours for itself, lend the rest
+            reserve = cons * target_h
+            spare = max(0, stock - reserve)
+            if spare > 0:
+                sources.append([name, spare])
+
+    if not needy or not sources:
+        return
+
+    needy.sort(key=lambda x: x[1])  # most urgent (lowest runway) first
+    try:
+        ships_available = int(getAvailableShips(session))
+        ship_cap, _ = getShipCapacity(session)
+        time.sleep(random.randint(2, 5))
+    except Exception:
+        logger.warning("[wine] não foi possível obter navios — a saltar")
+        return
+    if ships_available <= 0 or ship_cap <= 0:
+        return
+
+    first = True
+    for dest_name, runs_out, deficit in needy:
+        if ships_available <= 0:
+            break
+        dest = own.get(dest_name)
+        dest_island = str((dest or {}).get("islandId", ""))
+        if not dest or not dest_island:
+            continue
+        remaining = deficit
+        for src in sources:
+            if remaining <= 0 or ships_available <= 0:
+                break
+            src_name, spare = src[0], src[1]
+            if spare <= 0 or src_name == dest_name:
+                continue
+            src_city = own.get(src_name)
+            if not src_city:
+                continue
+            amount = min(spare, remaining)
+            ships_to_use = min(math.ceil(amount / ship_cap), ships_available)
+            amount = min(amount, ships_to_use * ship_cap)
+            if amount <= 0:
+                continue
+            if not first:
+                time.sleep(random.randint(12, 30))
+            first = False
+            ok = _dispatch_transport(session, src_city["cityId"], dest["cityId"],
+                                     dest_island, ships_to_use, [0, int(amount), 0, 0, 0])
+            if ok:
+                ships_available -= ships_to_use
+                src[1] -= amount
+                remaining -= amount
+                logger.info("[wine] %s → %s: %d vinho (%d navios, runway %dh)",
+                            src_name, dest_name, int(amount), ships_to_use, runs_out // 3600)
+            else:
+                logger.warning("[wine] envio de %s → %s recusado", src_name, dest_name)

@@ -30,6 +30,12 @@ interface ConsolidateSettings {
   lastSent?:     Record<string, number>
 }
 
+interface WineSettings {
+  enabled:        boolean
+  thresholdHours: number
+  targetHours:    number
+}
+
 function selectClass() {
   return 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700'
 }
@@ -44,6 +50,9 @@ export function TransportTab() {
   const [resourcesData, setResourcesData] = useState<Record<string, any>>({})
   const [pending,       setPending]       = useState<PendingTransport[]>([])
   const [consolidate,   setConsolidate]   = useState<ConsolidateSettings | null>(null)
+  const [wine,          setWine]          = useState<WineSettings | null>(null)
+  const [wineSaving,    setWineSaving]    = useState(false)
+  const [wineSaved,     setWineSaved]     = useState(false)
 
   // Manual form state
   const [originName,   setOriginName]   = useState('')
@@ -79,7 +88,25 @@ export function TransportTab() {
     }).catch(() => {})
 
     fetch('/api/transport/consolidate').then(r => r.json()).then(setConsolidate).catch(() => {})
+    fetch('/api/transport/wine').then(r => r.json()).then(setWine).catch(() => {})
   }, [])
+
+  async function handleSaveWine() {
+    if (!wine) return
+    setWineSaving(true)
+    setWineSaved(false)
+    try {
+      const res = await fetch('/api/transport/wine', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wine),
+      })
+      const json = await res.json()
+      if (json.settings) setWine(json.settings)
+      setWineSaved(true)
+    } catch { /* ignore */ } finally {
+      setWineSaving(false)
+    }
+  }
 
   useEffect(() => { loadAll() }, [])
 
@@ -437,6 +464,68 @@ export function TransportTab() {
           </div>
         </Card>
       </div>
+
+      {/* ── Wine balancer (F9) ────────────────────────────────────────────── */}
+      <Card className="mb-4">
+        <CardHeader icon="fa-wine-bottle" title={t('wine_title')} />
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-slate-500">{t('wine_hint')}</p>
+          {wine && (
+            <>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setWine({ ...wine, enabled: !wine.enabled })}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    wine.enabled ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    wine.enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+                <span className="text-sm text-slate-700">{t('transport_enabled')}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 max-w-md">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                    {t('wine_threshold')}
+                  </label>
+                  <input
+                    type="number" min={1} max={168}
+                    value={wine.thresholdHours}
+                    onChange={e => setWine({ ...wine, thresholdHours: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                    {t('wine_target')}
+                  </label>
+                  <input
+                    type="number" min={wine.thresholdHours} max={336}
+                    value={wine.targetHours}
+                    onChange={e => setWine({ ...wine, targetHours: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+              </div>
+
+              {wineSaved && (
+                <div className="rounded-lg px-3 py-2 text-sm bg-emerald-50 text-emerald-700">{t('transport_saved')}</div>
+              )}
+              <button
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40"
+                onClick={handleSaveWine}
+                disabled={wineSaving}
+              >
+                <i className={`fa-solid ${wineSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`} />
+                {t('transport_save')}
+              </button>
+            </>
+          )}
+        </div>
+      </Card>
 
       {/* ── Pending transports ─────────────────────────────────────────────── */}
       {pending.length > 0 && (

@@ -950,6 +950,57 @@ def api_consolidate_post():
     return jsonify({"status": "ok", "settings": settings})
 
 
+@app.route("/api/loot-log")
+def api_loot_log():
+    if not _db:
+        return jsonify([])
+    try:
+        limit  = int(request.args.get("limit", 100))
+        target = request.args.get("target", "").strip() or None
+        return jsonify(_db.get_loot_log(limit=limit, target=target))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/loot-stats")
+def api_loot_stats():
+    if not _db:
+        return jsonify([])
+    try:
+        return jsonify(_db.get_loot_stats())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
+_DEFAULT_WINE_SETTINGS = {"enabled": False, "thresholdHours": 12, "targetHours": 48}
+
+
+@app.route("/api/transport/wine")
+def api_wine_get():
+    try:
+        with open(WINE_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_WINE_SETTINGS.items():
+            s.setdefault(k, v)
+    except (FileNotFoundError, json.JSONDecodeError):
+        s = dict(_DEFAULT_WINE_SETTINGS)
+    return jsonify(s)
+
+
+@app.route("/api/transport/wine", methods=["POST"])
+def api_wine_post():
+    data = request.get_json(silent=True) or {}
+    s = dict(_DEFAULT_WINE_SETTINGS)
+    s["enabled"]        = bool(data.get("enabled", False))
+    s["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
+    s["targetHours"]    = max(s["thresholdHours"], min(336, int(data.get("targetHours", 48))))
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WINE_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return jsonify({"status": "ok", "settings": s})
+
+
 @app.route("/api/military/refresh", methods=["POST"])
 def api_military_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)

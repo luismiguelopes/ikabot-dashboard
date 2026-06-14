@@ -144,9 +144,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── Scheduled transports + consolidation (only during active hours) ──
             if in_scan_hours:
                 try:
-                    from transport_manager import process_transport_queue, process_consolidation
+                    from transport_manager import (
+                        process_transport_queue, process_consolidation, process_wine_balancer,
+                    )
                     process_transport_queue(session, in_active_hours=True)
                     process_consolidation(session, in_active_hours=True)
+                    process_wine_balancer(session, in_active_hours=True)
                 except Exception:
                     logger.warning("[transport] ciclo de transportes falhou", exc_info=True)
 

@@ -173,6 +173,74 @@ def test_consolidation_both_does_two_passes(monkeypatch, tmp_path):
     assert [c[0] for c in calls] == [False, True]  # transporters first, then freighters
 
 
+# ── Wine balancer (F9) ────────────────────────────────────────────────────────
+
+def test_wine_settings_defaults_and_save(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm, "WINE_SETTINGS_PATH", str(tmp_path / "w.json"))
+    assert tm.get_wine_settings()["enabled"] is False
+    saved = tm.save_wine_settings({"enabled": True, "thresholdHours": 10, "targetHours": 60})
+    assert saved["thresholdHours"] == 10 and saved["targetHours"] == 60
+    assert tm.get_wine_settings()["enabled"] is True
+
+
+def test_wine_target_not_below_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm, "WINE_SETTINGS_PATH", str(tmp_path / "w.json"))
+    saved = tm.save_wine_settings({"enabled": True, "thresholdHours": 24, "targetHours": 10})
+    assert saved["targetHours"] >= saved["thresholdHours"]  # clamped up to threshold
+
+
+def test_wine_balancer_ships_wine_to_needy(monkeypatch, tmp_path):
+    """Needy city (low runway) gets wine from a self-sufficient city."""
+    monkeypatch.setattr(tm, "WINE_SETTINGS_PATH", str(tmp_path / "w.json"))
+    monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
+    monkeypatch.setattr(tm.random, "randint", lambda a, b: 0)
+    tm.save_wine_settings({"enabled": True, "thresholdHours": 12, "targetHours": 48})
+    with open(tmp_path / "own.json", "w") as f:
+        json.dump([{"cityId": 1, "name": "Dry",   "islandId": "5"},
+                   {"cityId": 2, "name": "Vinery", "islandId": "6"}], f)
+
+    import queue_processor as qp
+    monkeypatch.setattr(qp, "_load_resources_json", lambda: {
+        "Dry":    {"Wine": 1000,   "wineConsumptionPerHour": 1000, "wineRunsOutIn": 1 * 3600},
+        "Vinery": {"Wine": 500000, "wineConsumptionPerHour": 500,  "wineRunsOutIn": -1},
+    })
+    import ikabot.helpers.naval as naval
+    import ikabot.helpers.pedirInfo as pedir
+    monkeypatch.setattr(naval, "getAvailableShips", lambda s: 100, raising=False)
+    monkeypatch.setattr(pedir, "getShipCapacity", lambda s: (5000, 25000), raising=False)
+
+    calls = []
+    def fake_dispatch(session, origin, dest, island, ships, send_list, use_freighters=False):
+        calls.append((str(origin), str(dest), send_list[1]))
+        return True
+    monkeypatch.setattr(qp, "_dispatch_transport", fake_dispatch)
+
+    tm.process_wine_balancer(session=object(), in_active_hours=True)
+
+    assert len(calls) == 1
+    origin, dest, wine_amt = calls[0]
+    assert origin == "2" and dest == "1"   # Vinery → Dry
+    # Dry needs 1000*48 - 1000 = 47000 wine; capped by ships (100*5000) so full deficit
+    assert wine_amt == 47000
+
+
+def test_wine_balancer_noop_when_no_needy(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm, "WINE_SETTINGS_PATH", str(tmp_path / "w.json"))
+    monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
+    tm.save_wine_settings({"enabled": True, "thresholdHours": 12, "targetHours": 48})
+    with open(tmp_path / "own.json", "w") as f:
+        json.dump([{"cityId": 1, "name": "A", "islandId": "5"}], f)
+    import queue_processor as qp
+    monkeypatch.setattr(qp, "_load_resources_json", lambda: {
+        "A": {"Wine": 999999, "wineConsumptionPerHour": 100, "wineRunsOutIn": -1},
+    })
+    calls = []
+    monkeypatch.setattr(qp, "_dispatch_transport",
+                        lambda *a, **k: calls.append(1) or True)
+    tm.process_wine_balancer(session=object(), in_active_hours=True)
+    assert calls == []
+
+
 def test_consolidation_skips_when_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "CONSOLIDATE_SETTINGS_PATH", str(tmp_path / "cs.json"))
     with open(tmp_path / "cs.json", "w") as f:

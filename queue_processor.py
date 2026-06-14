@@ -689,6 +689,19 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
 
 # ── Main queue processor ──────────────────────────────────────────────────────
 
+def _needs_transport_for_buffer(city_name, item, target_b, city_data):
+    """True if doing this upgrade now would push some resource below the configured
+    buffer — i.e. a top-up transport is warranted even though the server would allow it."""
+    buf = _get_resource_buffer()
+    if not any(b > 0 for b in buf):
+        return False
+    cost_check = _get_upgrade_cost_from_cache(city_name, item["building"], target_b["level"])
+    if cost_check is None:
+        return False
+    avail_check = city_data.get("availableResources", [0] * 5)
+    return any(cost_check[i] > 0 and avail_check[i] - cost_check[i] < buf[i] for i in range(5))
+
+
 def process_building_queue(session, ids, cities):
     """Process one queue cycle. Returns True if any transport was dispatched."""
     from empire_utils import is_paused
@@ -772,6 +785,33 @@ def process_building_queue(session, ids, cities):
                     }
                     changed = True
             logger.info(lm("queue_city_busy", city=city_name))
+
+            # ── F8.b: pre-stage the NEXT queued item while this one builds ──────
+            # Construction takes hours during which no resources are moved otherwise.
+            # Move what the next item needs now so it can start the moment a slot frees.
+            if _in_active_hours():
+                busy_names = {b["name"] for b in city_data["position"] if b.get("isBusy")}
+                pre_item = next(
+                    (it for it in items
+                     if it["building"] not in busy_names
+                     and any(b["name"] == it["building"] and not b.get("isMaxLevel")
+                             and b["level"] < it["targetLevel"]
+                             for b in city_data["position"])),
+                    None,
+                )
+                if pre_item:
+                    pre_cands = [
+                        b for b in city_data["position"]
+                        if b["name"] == pre_item["building"]
+                        and not b.get("isMaxLevel") and b["level"] < pre_item["targetLevel"]
+                    ]
+                    pre_target = min(pre_cands, key=lambda b: b["level"])
+                    if pre_target.get("canUpgrade") is False or _needs_transport_for_buffer(
+                            city_name, pre_item, pre_target, city_data):
+                        logger.info(lm("queue_prestage", city=city_name, building=pre_item["building"]))
+                        if _try_transport(session, city_name, city_id, city_data, pre_item,
+                                          pre_target, queues, name_to_id, transport_errors):
+                            dispatched_any = True
             continue
 
         # ── Try to start the next item ────────────────────────────────────────
@@ -798,15 +838,8 @@ def process_building_queue(session, ids, cities):
             continue
 
         # ── Determine if transport is needed (server + buffer check) ─────────
-        need_transport = target_b.get("canUpgrade") is False
-        if not need_transport:
-            buf = _get_resource_buffer()
-            if any(b > 0 for b in buf):
-                cost_check = _get_upgrade_cost_from_cache(city_name, next_item["building"], target_b["level"])
-                if cost_check is not None:
-                    avail_check = city_data.get("availableResources", [0] * 5)
-                    if any(cost_check[i] > 0 and avail_check[i] - cost_check[i] < buf[i] for i in range(5)):
-                        need_transport = True
+        need_transport = (target_b.get("canUpgrade") is False
+                          or _needs_transport_for_buffer(city_name, next_item, target_b, city_data))
 
         if need_transport:
             if _in_active_hours():

@@ -41,7 +41,36 @@ sys.modules["ikabot.function.constructionList"].getResourcesNeeded = lambda *a: 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import only the pure functions we can test without a live session
-from queue_processor import _build_send_list
+import queue_processor
+from queue_processor import _build_send_list, _needs_transport_for_buffer
+
+
+# ── _needs_transport_for_buffer (F8.b) ─────────────────────────────────────────
+
+def test_needs_transport_for_buffer(monkeypatch):
+    item = {"building": "townHall"}
+    target_b = {"level": 10}
+    monkeypatch.setattr(queue_processor, "_get_upgrade_cost_from_cache",
+                        lambda c, b, lv: [5000, 0, 2000, 0, 0])
+    city = {"availableResources": [6000, 0, 2500, 0, 0]}
+
+    # No buffer → never needs a top-up
+    monkeypatch.setattr(queue_processor, "_get_resource_buffer", lambda: [0, 0, 0, 0, 0])
+    assert _needs_transport_for_buffer("C", item, target_b, city) is False
+
+    # Buffer 2000: wood 6000-5000=1000 < 2000 → needs transport
+    monkeypatch.setattr(queue_processor, "_get_resource_buffer", lambda: [2000, 0, 0, 0, 0])
+    assert _needs_transport_for_buffer("C", item, target_b, city) is True
+
+    # Buffer 500: wood 1000 >= 500, marble 500 >= 500 → fine
+    monkeypatch.setattr(queue_processor, "_get_resource_buffer", lambda: [500, 0, 500, 0, 0])
+    assert _needs_transport_for_buffer("C", item, target_b, city) is False
+
+
+def test_needs_transport_for_buffer_no_cost_data(monkeypatch):
+    monkeypatch.setattr(queue_processor, "_get_resource_buffer", lambda: [2000, 0, 0, 0, 0])
+    monkeypatch.setattr(queue_processor, "_get_upgrade_cost_from_cache", lambda c, b, lv: None)
+    assert _needs_transport_for_buffer("C", {"building": "x"}, {"level": 1}, {"availableResources": [0]*5}) is False
 
 
 # ── _build_send_list ──────────────────────────────────────────────────────────

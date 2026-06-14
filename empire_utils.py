@@ -248,6 +248,10 @@ _LM = {
         "en": "      -> Queue [{city}]: construction already in progress, skipping.",
         "pt": "      -> Fila [{city}]: construção já em curso, a saltar.",
     },
+    "queue_prestage": {
+        "en": "      -> Queue [{city}]: pre-staging resources for next item ({building}) while busy.",
+        "pt": "      -> Fila [{city}]: a pré-posicionar recursos para o próximo item ({building}) durante a obra.",
+    },
     "queue_started": {
         "en": "      -> Queue [{city}]: started {building} {from_lv} → {to_lv}.",
         "pt": "      -> Fila [{city}]: iniciada construção {building} {from_lv} → {to_lv}.",

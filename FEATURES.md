@@ -11,7 +11,12 @@ unidades, transporters, tipo (army/fleet, own/enemy), fonte (manual/auto), resul
 e texto de erro do jogo. Regista manuais E vagas do auto-attack.
 UI: cartão "Histórico de despachos" no DispatchTab com filtro por alvo/jogador.
 API: `GET /api/attack-log?limit=&target=`.
-Futuro (F1.b): estatísticas de saque por alvo cruzando com movimentos de regresso.
+### F1.b ✅ IMPLEMENTADO 2026-06-13
+Estatísticas de saque real por alvo. `_collect_movements` deteta frotas próprias a
+regressar de cidades de outros jogadores com recursos (saque) e regista-as em `loot_log`
+(schema v6), deduplicadas pela hora de chegada. Cartão "Saque por alvo" no separador
+Ataque (total + nº de ataques + último, por jogador). API: `/api/loot-stats`, `/api/loot-log`.
+⚠️ Best-effort: uma ida-e-volta curta entre ciclos de movimentos pode escapar.
 
 ### F2. ETA de chegada no DispatchTab ✅ IMPLEMENTADO 2026-06-12
 Painel de ETA no formulário: tempo de viagem estimado + hora de chegada, replicando
@@ -65,11 +70,19 @@ Implementação client-side (Construction.tsx), reutiliza produção/custos/movi
 já existentes; sem alterações no bot.
 Nota: a previsão usa produção do império; como a fila auto-transporta de cidades
 com excedente, o tempo real costuma ser melhor que o estimado (estimativa conservadora).
-Futuro (F8.b): agendar transportes proactivamente com base nesta previsão.
+### F8.b ✅ IMPLEMENTADO 2026-06-13
+Transporte proactivo: enquanto uma construção decorre (horas), o `process_building_queue`
+passou a pré-posicionar os recursos do PRÓXIMO item da fila dessa cidade (primeiro item
+cujo edifício não está em obra), em vez de esperar a construção acabar. Reutiliza o
+`_try_transport` e a lógica de buffer (`_needs_transport_for_buffer`, extraída). Bounded a
+um item; só nas horas activas; respeita pausa.
 
-### F9. Otimizador de vinho
-Já existe `wineRunsOutIn` por cidade — sugerir (ou automatizar) transportes de vinho
-preventivos quando a autonomia projectada cai abaixo de N horas, antes do alerta crítico.
+### F9. Otimizador de vinho ✅ IMPLEMENTADO 2026-06-13
+`process_wine_balancer`: quando a autonomia de vinho (`wineRunsOutIn`) de uma cidade cai
+abaixo de `thresholdHours`, envia vinho das cidades auto-suficientes (runway = ∞, que
+guardam `targetHours` para si) para a reabastecer até `targetHours` de consumo — antes do
+alerta crítico. Cartão no separador Transportes; API `GET/POST /api/transport/wine`.
+Respeita pausa e horas activas.
 
 ## 🔧 Operacional
 
@@ -101,6 +114,9 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
 
 ## Já implementadas (referência)
 
+- ✅ F1.b Estatísticas de saque por alvo (loot_log + /api/loot-stats) — 2026-06-13
+- ✅ F8.b Pré-posicionamento proactivo do próximo item da fila — 2026-06-13
+- ✅ F9 Otimizador de vinho (transportes preventivos) — 2026-06-13
 - ✅ F10 Página de logs do bot na UI (bot.log rotativo + /api/logs) — 2026-06-13
 - ✅ F11 Pausa global (sidebar + banner, guards nos processadores) — 2026-06-13
 - ✅ F8 Previsão de recursos da fila de construção (hora de relógio, em-trânsito, vinho líquido) — 2026-06-13

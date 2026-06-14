@@ -48,6 +48,7 @@ def _collect_movements(session, city_id):
         time_now = int(float(data[0][1]["time"]))
 
         movements = []
+        loot_returns = []
         for m in movements_raw:
             time_left = int(float(m["eventTime"])) - time_now
             arrival_ts = int(float(m["eventTime"]))
@@ -86,7 +87,40 @@ def _collect_movements(session, city_id):
                 entry["troops"] = m["army"].get("amount", 0)
                 entry["fleets"] = m["fleet"].get("amount", 0)
 
+            # F1.b: a returning own fleet carrying resources, coming from another
+            # player's city, is plunder. (Returns from own-city transports are empty,
+            # so the resource check already excludes internal traffic.)
+            if (is_returning and entry["isOwn"] and entry["resources"]
+                    and m["origin"].get("avatarName") != m["target"].get("avatarName")):
+                loot = [0, 0, 0, 0, 0]
+                for r in entry["resources"]:
+                    name = r.get("resource")
+                    if name in materials_names_english:
+                        try:
+                            loot[materials_names_english.index(name)] = int(
+                                str(r.get("amount", "0")).replace(",", "").replace(".", ""))
+                        except ValueError:
+                            pass
+                if sum(loot) > 0:
+                    loot_returns.append({
+                        "ts":         arrival_ts,
+                        "fromCity":   m["origin"].get("name", ""),
+                        "fromPlayer": m["origin"].get("avatarName", ""),
+                        "toCity":     m["target"].get("name", ""),
+                        "resources":  loot,
+                        "returnKey":  "{}|{}|{}".format(entry["origin"], entry["destination"], arrival_ts),
+                    })
+
             movements.append(entry)
+
+        if loot_returns:
+            try:
+                from db_manager import log_loot
+                for lr in loot_returns:
+                    log_loot(lr)
+                logger.info("[loot] %d regresso(s) com saque registado(s)", len(loot_returns))
+            except Exception:
+                logger.warning("[loot] falha ao registar saque", exc_info=True)
 
         return movements
     except Exception:

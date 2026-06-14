@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 def _connect():
@@ -69,6 +69,25 @@ def _run_migrations(conn):
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_attack_log_ts ON attack_log(ts)")
         conn.execute("INSERT INTO schema_version (version) VALUES (5)")
+    if current < 6:
+        # v6 = loot_log: actual plunder observed on returning own fleets (F1.b)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS loot_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                from_city TEXT,
+                from_player TEXT,
+                to_city TEXT,
+                wood INTEGER DEFAULT 0,
+                wine INTEGER DEFAULT 0,
+                marble INTEGER DEFAULT 0,
+                crystal INTEGER DEFAULT 0,
+                sulfur INTEGER DEFAULT 0,
+                return_key TEXT UNIQUE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_loot_log_ts ON loot_log(ts)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (6)")
     conn.commit()
 
 
@@ -325,6 +344,84 @@ def get_attack_log(limit=100, target=None):
             d["units"] = {}
         d["success"] = bool(d["success"])
         out.append(d)
+    return out
+
+
+# ── Loot log (F1.b — actual plunder from returning fleets) ────────────────────
+
+def log_loot(entry):
+    """Record loot observed on a returning own fleet. Deduped by return_key
+    (origin|destination|arrivalTime), so re-seeing the same return across movement
+    snapshots is a no-op. entry: ts, fromCity, fromPlayer, toCity, resources (5-array),
+    returnKey."""
+    init_db()
+    r = entry.get("resources") or [0, 0, 0, 0, 0]
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO loot_log
+                (ts, from_city, from_player, to_city, wood, wine, marble, crystal, sulfur, return_key)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                entry.get("ts") or int(time.time()),
+                entry.get("fromCity", ""), entry.get("fromPlayer", ""),
+                entry.get("toCity", ""),
+                int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]),
+                entry.get("returnKey", ""),
+            ))
+    finally:
+        conn.close()
+
+
+def get_loot_log(limit=100, target=None):
+    """Recent loot returns, newest first; optional substring filter on city/player."""
+    init_db()
+    limit = max(1, min(int(limit), 1000))
+    conn = _connect()
+    try:
+        if target:
+            pat = f"%{target.lower()}%"
+            rows = conn.execute("""
+                SELECT * FROM loot_log
+                WHERE lower(from_city) LIKE ? OR lower(from_player) LIKE ?
+                ORDER BY ts DESC, id DESC LIMIT ?
+            """, (pat, pat, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM loot_log ORDER BY ts DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_loot_stats():
+    """Aggregate loot per source player: total resources, raid count, last raid ts.
+    Sorted by total desc."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute("""
+            SELECT from_player,
+                   COUNT(*)        AS raids,
+                   MAX(ts)         AS last_ts,
+                   SUM(wood)       AS wood,
+                   SUM(wine)       AS wine,
+                   SUM(marble)     AS marble,
+                   SUM(crystal)    AS crystal,
+                   SUM(sulfur)     AS sulfur
+            FROM loot_log
+            GROUP BY from_player
+        """).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["total"] = (d["wood"] or 0) + (d["wine"] or 0) + (d["marble"] or 0) + (d["crystal"] or 0) + (d["sulfur"] or 0)
+        out.append(d)
+    out.sort(key=lambda x: x["total"], reverse=True)
     return out
 
 
