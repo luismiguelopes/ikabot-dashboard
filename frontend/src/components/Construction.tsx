@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useT, useLang } from '../i18n'
-import { fmt, fmtTs, fmtDuration } from '../utils'
+import { fmt, fmtTs, fmtDuration, fmtForecast } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
-import { MATERIALS, COST_KEYS } from '../constants'
+import { MATERIALS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { ConstructionTemplate } from './ConstructionTemplate'
-import type { ApiData, BuildingQueue, BuildingCostsData } from '../types'
+import type { ApiData, BuildingQueue, BuildingCostsData, Movement } from '../types'
 
 interface BuildingInCity {
   name: string
@@ -17,6 +17,25 @@ interface BuildingInCity {
 function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; costsData: BuildingCostsData | null; data: ApiData }) {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
+  const now  = useLiveClock()
+
+  // In-transit own resources (forecast counts what is already on the way)
+  const [inTransit, setInTransit] = useState<number[]>([0, 0, 0, 0, 0])
+  useEffect(() => {
+    fetch('/api/movements').then(r => r.json()).then((moves: Movement[]) => {
+      const totals = [0, 0, 0, 0, 0]
+      const idx: Record<string, number> = { Wood: 0, Wine: 1, Marble: 2, Crystal: 3, Sulfur: 4 }
+      for (const m of moves || []) {
+        if (!m.isOwn || m.direction !== '->') continue
+        for (const r of m.resources || []) {
+          const i = idx[r.resource]
+          if (i === undefined) continue
+          totals[i] += parseInt(String(r.amount).replace(/[.,\s ]/g, ''), 10) || 0
+        }
+      }
+      setInTransit(totals)
+    }).catch(() => {})
+  }, [])
 
   const budget = useMemo(() => {
     if (!costsData) return null
@@ -51,7 +70,8 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
       }
     }
 
-    const available = [0, 0, 0, 0, 0]
+    // Available = current stock + resources already in transit between own cities
+    const available = [...inTransit]
     Object.values(data.resourcesData).forEach(city => {
       available[0] += city.Wood    || 0
       available[1] += city.Wine    || 0
@@ -60,9 +80,13 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
       available[4] += city.Sulfur  || 0
     })
 
-    const production = data.statusSummary.resources.production
-    return { total, available, production, itemCount }
-  }, [queue, costsData, data])
+    // Net accumulation rate per hour. Wine is special: population consumption eats
+    // into the stock, so the rate that matters is production − consumption (can be ≤0).
+    const production = [...data.statusSummary.resources.production]
+    const effRate = [...production]
+    effRate[1] = production[1] - (data.statusSummary.wine_consumption || 0)
+    return { total, available, effRate, itemCount }
+  }, [queue, costsData, data, inTransit])
 
   const totalQueued = Object.values(queue?.queues || {}).reduce((s, v) => s + v.length, 0)
 
@@ -77,20 +101,27 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
 
   if (!budget) return null
 
-  const activeResources = MATERIALS.map((m, i) => ({
-    ...m,
-    needed:    budget.total[i],
-    available: budget.available[i],
-    missing:   Math.max(0, budget.total[i] - budget.available[i]),
-    prodPerH:  budget.production[i],
-  })).filter(r => r.needed > 0)
+  const nowSecs = now / 1000
+  const activeResources = MATERIALS.map((m, i) => {
+    const missing  = Math.max(0, budget.total[i] - budget.available[i])
+    const rate     = budget.effRate[i]
+    // null = never accumulates (rate ≤ 0 while still missing); 0 = already covered
+    const etaSecs  = missing <= 0 ? 0 : rate > 0 ? (missing / rate) * 3600 : null
+    return {
+      ...m,
+      needed:    budget.total[i],
+      available: budget.available[i],
+      inTransit: inTransit[i],
+      missing,
+      rate,
+      etaSecs,
+    }
+  }).filter(r => r.needed > 0)
 
-  const etaSecs = activeResources.reduce<number | null>((worst, r) => {
-    if (r.missing <= 0) return worst
-    if (r.prodPerH <= 0) return null
-    const secs = (r.missing / r.prodPerH) * 3600
-    if (worst === null) return secs
-    return Math.max(worst, secs)
+  // Overall = worst per-resource ETA; null if any needed resource never accumulates
+  const overallEta = activeResources.reduce<number | null>((worst, r) => {
+    if (worst === null || r.etaSecs === null) return r.etaSecs === null ? null : worst
+    return Math.max(worst, r.etaSecs)
   }, 0)
 
   return (
@@ -119,7 +150,7 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
                     <span className="text-slate-400 w-20 text-right font-mono">{fmt(r.available)}</span>
                     <span className="text-slate-300">/</span>
                     <span className="text-slate-600 font-mono w-20">{fmt(r.needed)}</span>
-                    <span className={`ml-auto font-semibold font-mono w-20 text-right ${r.missing > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                    <span className={`ml-auto font-semibold font-mono w-24 text-right ${r.missing > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
                       {r.missing > 0 ? `-${fmt(r.missing)}` : '✓'}
                     </span>
                   </div>
@@ -129,16 +160,24 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
                       style={{ width: `${pct}%` }}
                     />
                   </div>
+                  {r.missing > 0 && (
+                    <div className="text-[11px] text-slate-400 text-right">
+                      {r.etaSecs === null
+                        ? <span className="text-red-400"><i className="fa-solid fa-triangle-exclamation mr-1" />{t('budget_wine_shrinking')}</span>
+                        : <>{t('budget_ready_at', { time: fmtForecast(nowSecs + r.etaSecs, lang) })} · {fmtDuration(r.etaSecs)}</>}
+                      {r.inTransit > 0 && <span className="ml-1 text-indigo-400">({t('budget_in_transit', { n: fmt(r.inTransit) })})</span>}
+                    </div>
+                  )}
                 </div>
               )
             })}
-            {etaSecs !== null && etaSecs > 0 && (
+            {overallEta !== null && overallEta > 0 && (
               <p className="text-xs text-indigo-500 font-medium pt-1">
                 <i className="fa-solid fa-hourglass-half mr-1" />
-                {t('budget_eta')}: {fmtDuration(etaSecs)} {COST_KEYS.length > 0 ? `(${t('budget_available').toLowerCase()}: ${t('empire_prod_only').toLowerCase()})` : ''}
+                {t('budget_all_ready_at', { time: fmtForecast(nowSecs + overallEta, lang) })} · {fmtDuration(overallEta)}
               </p>
             )}
-            {etaSecs === 0 && (
+            {overallEta === 0 && (
               <p className="text-xs text-emerald-600 font-medium pt-1">
                 <i className="fa-solid fa-circle-check mr-1" /> {t('budget_ready')}
               </p>

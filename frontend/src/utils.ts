@@ -66,6 +66,17 @@ export function fmtTs(ts: number | undefined | null, lang = 'en'): string {
   })
 }
 
+// Forecast wall-clock: time only when it lands today, day+month+time otherwise.
+export function fmtForecast(ts: number | null | undefined, lang = 'en'): string {
+  if (!ts || !isFinite(ts) || ts > 1e12) return '∞'
+  const d = new Date(ts * 1000)
+  const now = new Date()
+  const sameDay = d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+  return d.toLocaleString(getLocale(lang), sameDay
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export function calcUpgradeTime(
   needed: number[],
   available: number[],

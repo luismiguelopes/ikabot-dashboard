@@ -53,9 +53,19 @@ scan_collector incremental com uma fila de ilhas restrita.
 
 ## 💰 Economia
 
-### F8. Previsão de recursos
-Produção/hora + custos da fila de construção → "terás mármore para o nível 32
-às 14:00 de amanhã"; agendar transportes com base na previsão em vez de reagir.
+### F8. Previsão de recursos ✅ IMPLEMENTADO 2026-06-13
+O orçamento da fila de construção (Construção → Queue Budget) passou a dar uma
+previsão precisa com hora de relógio:
+- conta os recursos **em trânsito** entre cidades próprias (antes só somava o stock)
+- usa **vinho líquido** (produção − consumo da população); se negativo, marca o
+  vinho como "a diminuir" em vez de dar um ETA falso
+- mostra por recurso "pronto ~HH:MM" (+ dia se não for hoje) e a duração, e um
+  "Tudo pronto ~HH:MM" global (pior recurso)
+Implementação client-side (Construction.tsx), reutiliza produção/custos/movimentos
+já existentes; sem alterações no bot.
+Nota: a previsão usa produção do império; como a fila auto-transporta de cidades
+com excedente, o tempo real costuma ser melhor que o estimado (estimativa conservadora).
+Futuro (F8.b): agendar transportes proactivamente com base nesta previsão.
 
 ### F9. Otimizador de vinho
 Já existe `wineRunsOutIn` por cidade — sugerir (ou automatizar) transportes de vinho
@@ -86,6 +96,7 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
 
 ## Já implementadas (referência)
 
+- ✅ F8 Previsão de recursos da fila de construção (hora de relógio, em-trânsito, vinho líquido) — 2026-06-13
 - ✅ F12 Transportes agendados + consolidação automática — 2026-06-12
 - ✅ F1 Histórico de ataques (attack_log SQLite + UI no DispatchTab) — 2026-06-12
 - ✅ F2 ETA de chegada + agendamento por hora de chegada no DispatchTab — 2026-06-12
