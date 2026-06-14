@@ -820,6 +820,7 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "destCityName":  "",
     "intervalHours": 6,
     "minSendTotal":  1000,
+    "shipType":      "transporters",  # transporters | freighters | both
 }
 
 
@@ -939,6 +940,8 @@ def api_consolidate_post():
     settings["destCityName"]  = str(data.get("destCityName", ""))
     settings["intervalHours"] = max(1, min(48, int(data.get("intervalHours", 6))))
     settings["minSendTotal"]  = max(0, int(data.get("minSendTotal", 1000)))
+    ship_type = data.get("shipType", "transporters")
+    settings["shipType"] = ship_type if ship_type in ("transporters", "freighters", "both") else "transporters"
     if settings["enabled"] and not settings["destCityId"]:
         return jsonify({"error": "Cidade de destino obrigatória"}), 400
     os.makedirs(LOGS_DIR, exist_ok=True)

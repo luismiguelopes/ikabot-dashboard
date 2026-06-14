@@ -25,6 +25,7 @@ interface ConsolidateSettings {
   destCityName:  string
   intervalHours: number
   minSendTotal:  number
+  shipType:      'transporters' | 'freighters' | 'both'
   lastRun?:      number
   lastSent?:     Record<string, number>
 }
@@ -383,6 +384,30 @@ export function TransportTab() {
                       onChange={e => setConsolidate({ ...consolidate, minSendTotal: Math.max(0, Number(e.target.value)) })}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                    {t('transport_consolidate_ships')}
+                  </label>
+                  <div className="flex gap-2">
+                    {(['transporters', 'freighters', 'both'] as const).map(st => (
+                      <button
+                        key={st}
+                        onClick={() => setConsolidate({ ...consolidate, shipType: st })}
+                        className={`flex-1 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                          consolidate.shipType === st
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                        }`}
+                      >
+                        <i className={`fa-solid ${st === 'transporters' ? 'fa-sailboat' : st === 'freighters' ? 'fa-ferry' : 'fa-layer-group'} mr-1`} />
+                        {t(st === 'transporters' ? 'transport_ship_type_transporters'
+                           : st === 'freighters' ? 'transport_ship_type_freighters'
+                           : 'transport_ship_type_both')}
+                      </button>
+                    ))}
                   </div>
                 </div>
 

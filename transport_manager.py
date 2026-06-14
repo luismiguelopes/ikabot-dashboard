@@ -31,6 +31,7 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "destCityName":  "",
     "intervalHours": 6,
     "minSendTotal":  1000,
+    "shipType":      "transporters",  # transporters | freighters | both
 }
 
 
@@ -248,7 +249,7 @@ def process_consolidation(session, in_active_hours=True):
         logger.warning("[consolidate] destino %s sem islandId — aguarda ciclo do império", dest_name)
         return
 
-    from ikabot.helpers.naval import getAvailableShips
+    from ikabot.helpers.naval import getAvailableShips, getAvailableFreighters
     from ikabot.helpers.pedirInfo import getShipCapacity
     from queue_processor import (
         _dispatch_transport, _build_send_list, _get_resource_buffer,
@@ -268,10 +269,20 @@ def process_consolidation(session, in_active_hours=True):
     except Exception:
         pass
 
+    ship_type = settings.get("shipType", "transporters")
+    if ship_type not in ("transporters", "freighters", "both"):
+        ship_type = "transporters"
+    use_trans   = ship_type in ("transporters", "both")
+    use_freight = ship_type in ("freighters", "both")
+
+    # Live availability + capacity for whichever ship types this mode uses
     try:
-        ships_available = int(getAvailableShips(session))
-        ship_cap, _ = getShipCapacity(session)
+        ship_cap, freighter_cap = getShipCapacity(session)
+        trans_avail = int(getAvailableShips(session)) if use_trans else 0
         time.sleep(random.randint(2, 5))
+        freight_avail = int(getAvailableFreighters(session)) if use_freight else 0
+        if use_freight:
+            time.sleep(random.randint(2, 5))
     except Exception:
         logger.warning("[consolidate] não foi possível obter navios — a saltar")
         return
@@ -283,40 +294,63 @@ def process_consolidation(session, in_active_hours=True):
     except (FileNotFoundError, json.JSONDecodeError):
         return
 
+    # Mutable counters shared across cities; each pass below decrements its own type.
+    avail = {"transporters": trans_avail, "freighters": freight_avail}
     sent_summary = {}
-    first = True
+    dispatched_any = [False]  # list so the inner helper can flip it
+
+    def _send_pass(src, dest_id, remaining, kind, capacity, max_ships):
+        """One transport dispatch from src for the given ship kind, capped to max_ships.
+        Mutates `remaining` (resources still to send) and returns ships used (0 if none)."""
+        if max_ships <= 0 or sum(remaining) == 0:
+            return 0
+        send_list, ships_to_use = _build_send_list(remaining, remaining, capacity, max_ships)
+        if sum(send_list) == 0:
+            return 0
+        if dispatched_any[0]:
+            time.sleep(random.randint(12, 30))
+        ok = _dispatch_transport(session, src.get("cityId"), dest_id, dest_island,
+                                 ships_to_use, send_list,
+                                 use_freighters=(kind == "freighters"))
+        dispatched_any[0] = True
+        if not ok:
+            logger.warning("[consolidate] envio de %s (%s) recusado pelo servidor",
+                           src.get("name", ""), kind)
+            return 0
+        for i in range(5):
+            remaining[i] = max(0, remaining[i] - send_list[i])
+        sent = sum(send_list)
+        src_name = src.get("name", "")
+        sent_summary[src_name] = sent_summary.get(src_name, 0) + sent
+        logger.info("[consolidate] %s → %s: %s (%d %s)",
+                    src_name, dest_name,
+                    {k: v for k, v in zip(_RESOURCES_ENG, send_list) if v > 0},
+                    ships_to_use, "cargueiros" if kind == "freighters" else "navios")
+        return ships_to_use
+
     for src in random.sample(own_cities, len(own_cities)):
         if str(src.get("cityId")) == str(settings["destCityId"]):
             continue
-        if ships_available <= 0:
+        if avail["transporters"] <= 0 and avail["freighters"] <= 0:
             break
         src_name = src.get("name", "")
         src_res  = resources.get(src_name, {})
-        avail    = [int(src_res.get(k, 0)) for k in _RESOURCES_ENG]
+        stock    = [int(src_res.get(k, 0)) for k in _RESOURCES_ENG]
         reserved = _calc_city_reserved(src_name, queues, empire, costs)
-        surplus  = _calc_surplus(avail, buffer, reserved)
+        surplus  = _calc_surplus(stock, buffer, reserved)
         if sum(surplus) < min_send:
             continue
 
-        send_list, ships_to_use = _build_send_list(surplus, surplus, ship_cap, ships_available)
-        if sum(send_list) == 0:
-            continue
-
-        if not first:
-            time.sleep(random.randint(12, 30))
-        first = False
-
-        ok = _dispatch_transport(session, src.get("cityId"), settings["destCityId"],
-                                 dest_island, ships_to_use, send_list)
-        if ok:
-            ships_available -= ships_to_use
-            sent_summary[src_name] = sum(send_list)
-            logger.info("[consolidate] %s → %s: %s (%d navios)",
-                        src_name, dest_name,
-                        {k: v for k, v in zip(_RESOURCES_ENG, send_list) if v > 0},
-                        ships_to_use)
-        else:
-            logger.warning("[consolidate] envio de %s recusado pelo servidor", src_name)
+        remaining = list(surplus)
+        # Transporters first (faster); freighters then mop up any large leftover.
+        if use_trans:
+            avail["transporters"] -= _send_pass(
+                src, settings["destCityId"], remaining,
+                "transporters", ship_cap, avail["transporters"])
+        if use_freight:
+            avail["freighters"] -= _send_pass(
+                src, settings["destCityId"], remaining,
+                "freighters", freighter_cap, avail["freighters"])
 
     state["lastRun"]  = now
     state["lastSent"] = sent_summary

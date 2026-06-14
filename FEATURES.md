@@ -81,6 +81,8 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
   em horas + mínimo para enviar; a cada ronda envia o excedente de todas as cidades
   acima do resourceBuffer das Settings E das reservas da fila de construção.
   Estado da última ronda visível na UI.
+  Selector de tipo de barco (2026-06-13): comércio / cargueiros / ambos. No modo
+  "ambos" envia primeiro com transporters e o restante grande com cargueiros.
 
 ## Já implementadas (referência)
 
