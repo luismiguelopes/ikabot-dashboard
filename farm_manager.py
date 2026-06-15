@@ -308,6 +308,7 @@ def process_farm_targets(session, in_active_hours=True):
                 "islandY":          t.get("island_y", 0),
                 "numAgents":        spy_agents,
                 "numDecoys":        0,
+                "fast":             True,   # farm re-scout: warehouse→garrison back-to-back
                 "queuedAt":         now,
             })
             farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now, "last_spy_at": now})

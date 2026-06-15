@@ -172,16 +172,23 @@ def _secs_until_active():
 
 
 def _get_next_spy_eta():
-    """Return the earliest upcoming spy execution ETA across waiting missions."""
+    """Earliest upcoming spy step ETA — execute AND collect states. Including the collect
+    states (report pickup) means reports are fetched promptly instead of waiting for the
+    next hourly cycle, which was stalling the spy pipeline ~1h between each step."""
     try:
         from espionage_manager import _load_missions
         etas = []
         now = time.time()
         for m in _load_missions().get("missions", []):
-            if m.get("state") == "WAITING_AT_CITY" and m.get("executeAfter", 0) > now:
+            st = m.get("state")
+            if st == "WAITING_AT_CITY" and m.get("executeAfter", 0) > now:
                 etas.append(m["executeAfter"])
-            elif m.get("state") == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter", 0) > now:
+            elif st == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter", 0) > now:
                 etas.append(m["garrisonExecuteAfter"])
+            elif st in ("EXECUTING", "EXECUTING_WAREHOUSE") and m.get("collectAfter", 0) > now:
+                etas.append(m["collectAfter"])
+            elif st == "EXECUTING_GARRISON" and m.get("garrisonCollectAfter", 0) > now:
+                etas.append(m["garrisonCollectAfter"])
         return min(etas) if etas else None
     except Exception:
         return None

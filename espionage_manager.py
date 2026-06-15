@@ -582,6 +582,7 @@ def process_dispatch_queue(session):
             island_y=item["islandY"],
             num_agents=num_agents,
             num_decoys=item.get("numDecoys", 0),
+            fast=bool(item.get("fast")),
         )
         if ok:
             # Decrementar em memória para que o pre-check funcione correctamente
@@ -637,10 +638,12 @@ def _append_failed_mission(item, error):
 
 def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                   target_player_name, target_city_name, island_x, island_y,
-                  num_agents=1, num_decoys=0):
+                  num_agents=1, num_decoys=0, fast=False):
     """
     Dispatch spies from origin_city_id to target_city_id.
-    Returns (True, mission_dict) on success, (False, error_str) on failure.
+    `fast` (farm re-scouts): execute warehouse/garrison back-to-back with second-scale
+    delays instead of the 5-15 min anti-detection wait — a human farming a known target
+    does exactly this. Returns (True, mission_dict) on success, (False, error_str).
     """
     import ikabot.config as ikabot_config
 
@@ -731,6 +734,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "islandY":           island_y,
         "numAgents":         num_agents,
         "state":             "TRAVELING",
+        "fast":              bool(fast),
         "safehousePosition": safehouse_pos,
         "spySessionId":      None,
         "dispatchedAt":      int(time.time()),
@@ -750,7 +754,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
             countdown_secs = _parse_arrival_countdown(missions_html)
             if countdown_secs is not None:
                 arrival_ts = int(time.time()) + countdown_secs
-                jitter = random.randint(5, 15) * 60
+                jitter = random.randint(30, 90) if fast else random.randint(5, 15) * 60
                 mission["executeAfter"] = arrival_ts + jitter
                 logger.info("[espionage] chegada de %s em ~%dm → executar em %dm total",
                             target_city_name, countdown_secs // 60,
@@ -1196,7 +1200,8 @@ def check_spy_arrivals(session):
             # Keep existing executeAfter if already set (from post-dispatch fetch);
             # otherwise assign a fresh random delay now
             if not execute_after:
-                missions[i]["executeAfter"] = int(now) + random.randint(5, 15) * 60
+                offset = random.randint(30, 90) if m.get("fast") else random.randint(5, 15) * 60
+                missions[i]["executeAfter"] = int(now) + offset
             logger.info("[espionage] espiões chegaram a %s (spy_id=%s) — executar em %dmin",
                         m["targetCityName"], spy_id,
                         max(0, (missions[i]["executeAfter"] - int(now)) // 60))
@@ -1211,7 +1216,7 @@ def check_spy_arrivals(session):
             countdown = _parse_arrival_countdown(html or "")
             if countdown:
                 new_eta = int(now) + countdown
-                jitter = random.randint(5, 15) * 60
+                jitter = random.randint(30, 90) if m.get("fast") else random.randint(5, 15) * 60
                 missions[i]["executeAfter"] = new_eta + jitter
                 logger.info("[espionage] %s ainda em viagem — chegada actualizada: +%dm",
                             m["targetCityName"], (new_eta + jitter - int(now)) // 60)
@@ -1261,6 +1266,8 @@ def execute_waiting_missions(session):
         if ok:
             missions[i]["state"] = "EXECUTING_WAREHOUSE"
             missions[i]["executedAt"] = now
+            missions[i]["collectAfter"] = now + (random.randint(20, 45) if m.get("fast")
+                                                 else random.randint(60, 300))
             missions[i]["missionType"] = "warehouse"
             missions[i]["spySessionId"] = spy_id
             logger.info("[espionage] missão armazém executada → %s", m["targetCityName"])
@@ -1284,7 +1291,7 @@ def collect_mission_results(session):
     for i, m in enumerate(missions):
         if m.get("state") not in ("EXECUTING", "EXECUTING_WAREHOUSE"):
             continue
-        if now - m.get("executedAt", 0) < random.randint(60, 300):
+        if now < m.get("collectAfter", m.get("executedAt", 0) + 60):
             continue
 
         origin_id = str(m["originCityId"])
@@ -1320,13 +1327,13 @@ def collect_mission_results(session):
                 settings  = _load_espionage_settings()
                 resources = report.get("resources") or {}
                 if _check_garrison_threshold(resources, settings):
-                    delay_min = random.randint(1, 5)
+                    delay = random.randint(20, 60) if m.get("fast") else random.randint(1, 5) * 60
                     missions[i]["state"] = "WAITING_FOR_GARRISON"
-                    missions[i]["garrisonExecuteAfter"] = now + delay_min * 60
+                    missions[i]["garrisonExecuteAfter"] = now + delay
                     missions[i]["garrisonExecutedAt"]   = None
                     missions[i]["garrisonResult"]       = None
-                    logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %dmin",
-                                m["targetCityName"], resources, delay_min)
+                    logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %ds",
+                                m["targetCityName"], resources, delay)
                 else:
                     missions[i]["state"] = "DONE"
                     logger.info("[espionage] armazém %s → recursos=%s — threshold não atingido, DONE",
@@ -1412,6 +1419,8 @@ def execute_garrison_missions(session):
         if ok:
             missions[i]["state"] = "EXECUTING_GARRISON"
             missions[i]["garrisonExecutedAt"] = now
+            missions[i]["garrisonCollectAfter"] = now + (random.randint(20, 45) if m.get("fast")
+                                                         else random.randint(60, 300))
             missions[i]["spySessionId"] = spy_id
             logger.info("[espionage] missão garrison executada → %s", m["targetCityName"])
         else:
@@ -1435,7 +1444,7 @@ def collect_garrison_results(session):
     for i, m in enumerate(missions):
         if m.get("state") != "EXECUTING_GARRISON":
             continue
-        if now - m.get("garrisonExecutedAt", 0) < random.randint(60, 300):
+        if now < m.get("garrisonCollectAfter", m.get("garrisonExecutedAt", 0) + 60):
             continue
 
         origin_id = str(m["originCityId"])
