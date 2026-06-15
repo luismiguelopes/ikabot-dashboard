@@ -581,8 +581,12 @@ def _calc_travel_secs(origin_x, origin_y, target_x, target_y):
     return math.ceil(1200 * math.sqrt((origin_x - target_x) ** 2 + (origin_y - target_y) ** 2))
 
 
-def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False):
-    """Closest own city with troops (and fleet if needs_fleet). Returns (name, id, x, y) or None."""
+def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False,
+                          required_units=None):
+    """Closest own city with troops (and fleet if needs_fleet). Returns (name, id, x, y) or None.
+    If required_units (a set of unit ids) is given, the city must have at least one of
+    those specific units in stock — so a fixed farm loadout isn't launched from a city
+    that can't actually field it."""
     try:
         with open(OWN_CITIES_PATH) as f:
             own_cities = json.load(f)
@@ -603,7 +607,10 @@ def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False):
         troops = mil.get("troops", {})
         fleet  = mil.get("fleet", {})
 
-        if not any(v.get("amount", 0) > 0 for v in troops.values()):
+        if required_units:
+            if not any(troops.get(uid, {}).get("amount", 0) > 0 for uid in required_units):
+                continue
+        elif not any(v.get("amount", 0) > 0 for v in troops.values()):
             continue
         if needs_fleet and not any(v.get("amount", 0) > 0 for v in fleet.values()):
             continue

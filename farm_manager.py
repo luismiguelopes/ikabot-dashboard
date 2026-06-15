@@ -18,12 +18,35 @@ State machine per target:
   ATTACKING → when troops are estimated back: → IDLE (+interval)
 """
 
+import json
 import math
+import os
 import time
 
 from empire_utils import LOGS_DIR, logger
 
 _SPY_TIMEOUT_SECS = 6 * 3600
+FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
+
+
+def get_farm_army():
+    """User-defined minimal army loadout for the farm: {unitId: qty}.
+    Farm targets are pre-scouted safe cities, so a small fixed force is enough — no
+    need to empty a city of all its troops. Empty → fall back to all troops."""
+    try:
+        with open(FARM_SETTINGS_PATH) as f:
+            army = json.load(f).get("army", {})
+        return {str(k): int(v) for k, v in army.items() if int(v) > 0}
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        return {}
+
+
+def save_farm_army(army):
+    clean = {str(k): int(v) for k, v in (army or {}).items() if int(v) > 0}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(FARM_SETTINGS_PATH, "w") as f:
+        json.dump({"army": clean}, f, indent=2)
+    return clean
 
 
 def _enabled_targets():
@@ -104,6 +127,7 @@ def process_farm_targets(session, in_active_hours=True):
     spy_counts  = _load(SPY_COUNTS_PATH, {})
     military    = _load(MILITARY_JSON_PATH, {})
     missions    = _load_missions().get("missions", [])
+    farm_army   = get_farm_army()   # {} → send all troops (legacy behaviour)
     now = int(time.time())
 
     ship_cap = 500
@@ -170,10 +194,13 @@ def process_farm_targets(session, in_active_hours=True):
                 farm_update(tid, {"state": "IDLE", "next_run_at": now + interval, "last_loot": loot})
                 continue
 
+            required = set(farm_army) if farm_army else None
             origin = _get_best_origin_city(t.get("island_x", 0), t.get("island_y", 0),
-                                           military, needs_fleet=(enemy_ships > 0))
+                                           military, needs_fleet=(enemy_ships > 0),
+                                           required_units=required)
             if not origin:
-                logger.warning("[farm] %s: sem origem com tropas — a reagendar", name)
+                logger.warning("[farm] %s: sem origem com tropas%s — a reagendar",
+                               name, " da loadout" if required else "")
                 farm_update(tid, {"state": "IDLE", "next_run_at": now + interval, "last_loot": loot})
                 continue
 
@@ -182,7 +209,14 @@ def process_farm_targets(session, in_active_hours=True):
             troop_travel = int(travel * 2 / 3)
             battle_delay = _estimate_battle_delay_mins(enemy_ships, {}) * 60
             transporters = max(1, math.ceil(loot / ship_cap))
-            troop_units  = _build_troop_units(origin_name, military)
+            if farm_army:
+                # Send the configured minimal force, capped to what the origin actually has
+                avail = military.get("byCityName", {}).get(origin_name, {}).get("troops", {})
+                troop_units = {uid: min(qty, avail.get(uid, {}).get("amount", 0))
+                               for uid, qty in farm_army.items()
+                               if avail.get(uid, {}).get("amount", 0) > 0}
+            else:
+                troop_units = _build_troop_units(origin_name, military)
 
             base = {
                 "originCityId":     str(origin_id),

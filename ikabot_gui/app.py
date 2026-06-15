@@ -960,6 +960,32 @@ def api_farm_list():
         return jsonify({"error": str(e)}), 500
 
 
+FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
+
+
+@app.route("/api/farm/army")
+def api_farm_army_get():
+    try:
+        with open(FARM_SETTINGS_PATH) as f:
+            return jsonify({"army": json.load(f).get("army", {})})
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({"army": {}})
+
+
+@app.route("/api/farm/army", methods=["POST"])
+def api_farm_army_set():
+    data = request.get_json(silent=True) or {}
+    army = data.get("army", {})
+    try:
+        clean = {str(k): int(v) for k, v in army.items() if int(v) > 0}
+    except (ValueError, TypeError):
+        return jsonify({"error": "loadout inválida"}), 400
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(FARM_SETTINGS_PATH, "w") as f:
+        json.dump({"army": clean}, f, indent=2)
+    return jsonify({"ok": True, "army": clean})
+
+
 @app.route("/api/farm/add", methods=["POST"])
 def api_farm_add():
     if not _db:

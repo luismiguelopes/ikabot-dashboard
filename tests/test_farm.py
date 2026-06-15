@@ -141,6 +141,27 @@ def test_spying_with_good_loot_enqueues_attack(monkeypatch, tmp_path):
     assert t["last_loot"] == 90000
 
 
+def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
+    """With a configured loadout, send min(loadout, available) per unit — not all troops."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    missions = [{"state": "DONE", "targetCityId": "100",
+                 "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
+                 "garrisonResult": {"troops": {}}}]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    # loadout asks 50 hoplites (city has 200) and 999 of a unit it doesn't have
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 50, "s999": 999})
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    army_items = [it for q, it in added if q == "attack" and it["missionType"] == "army"]
+    assert len(army_items) == 1
+    units = army_items[0]["units"]
+    assert units == {"s303": 50}     # capped to loadout; missing unit dropped
+
+
 def test_spying_low_loot_reschedules(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 100000})

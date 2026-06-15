@@ -44,7 +44,24 @@ tier 2). Espera o regresso estimado e repete a cada intervalHours.
 - API: `GET /api/farm`, `POST /api/farm/{add,update,remove}`.
 - Alvos em farm são excluídos do auto-attack one-shot (evita ataques duplos).
 - Respeita pausa e horas activas. Desligado por defeito (sem alvos).
+- **Tropa mínima configurável** (2026-06-15): loadout `{unitId: qty}` em
+  `farm_settings.json`, editável no cartão do farm. Em cada ataque envia min(loadout,
+  disponível na origem) — só as tropas escolhidas, não todas. A origem é a cidade mais
+  próxima que tenha pelo menos uma das unidades da loadout. Vazio → comportamento antigo
+  (todas as tropas). API: `GET/POST /api/farm/army`.
 ⚠️ Por validar in-game o ciclo completo.
+
+### F4.b — Timing de navios que fogem/dispersam (POR FAZER)
+Caso real: alguns alvos têm navios que, ao serem atacados, **fogem e dispersam**, e
+**regressam à cidade passados X minutos**. Técnica manual do jogador:
+1. lançar navios (combatem/afugentam a frota inimiga);
+2. minutos depois lançar tropas, que chegam quando o porto está limpo e pilham;
+3. quando a tropa regressa a casa, espiar pelos **movimentos de tropas/frotas** se a
+   próxima vaga de tropas chega à cidade-alvo **antes** de os navios inimigos voltarem —
+   se chegar depois, é preciso relançar navios primeiro.
+Lógica adicional necessária: ler os movimentos do alvo (ETA de regresso da frota inimiga
+dispersada), modelar a janela "porto limpo", e sincronizar o lançamento das vagas de
+tropas/navios com essa janela. Camada de timing sobre o F4 — desenho próprio.
 
 ### F5. Notificação de regresso com saque
 Destacar nos movimentos o regresso de tropas/frota e notificar via Telegram

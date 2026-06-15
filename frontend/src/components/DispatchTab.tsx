@@ -131,6 +131,8 @@ export function DispatchTab() {
   const [attackLog,      setAttackLog]      = useState<AttackLogEntry[]>([])
   const [lootStats,      setLootStats]      = useState<LootStat[]>([])
   const [farmTargets,    setFarmTargets]    = useState<FarmTarget[]>([])
+  const [farmArmy,       setFarmArmy]       = useState<Record<string, number>>({})
+  const [farmArmySaved,  setFarmArmySaved]  = useState(false)
   const [logFilter,      setLogFilter]      = useState('')
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
 
@@ -181,6 +183,10 @@ export function DispatchTab() {
 
     fetch('/api/farm').then(r => r.json()).then((data: any) => {
       if (Array.isArray(data)) setFarmTargets(data)
+    }).catch(() => {})
+
+    fetch('/api/farm/army').then(r => r.json()).then((data: any) => {
+      setFarmArmy(data?.army ?? {})
     }).catch(() => {})
   }, [originCityName])
 
@@ -380,7 +386,24 @@ export function DispatchTab() {
     loadAll()
   }
 
+  async function saveFarmArmy(next: Record<string, number>) {
+    setFarmArmy(next)
+    setFarmArmySaved(false)
+    await fetch('/api/farm/army', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ army: next }),
+    }).catch(() => {})
+    setFarmArmySaved(true)
+  }
+
   const farmIds = new Set(farmTargets.map(f => f.target_city_id))
+
+  // Union of troop unit types across all cities (for the farm loadout editor)
+  const troopTypes: Record<string, string> = {}
+  Object.values(military?.byCityName ?? {}).forEach(c => {
+    Object.entries(c.troops ?? {}).forEach(([uid, u]) => { troopTypes[uid] = u.name })
+  })
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -861,6 +884,47 @@ export function DispatchTab() {
       <Card className="mt-4">
         <CardHeader icon="fa-seedling" title={t('farm_title')} />
         <p className="px-5 pt-2 text-xs text-slate-400">{t('farm_note')}</p>
+
+        {/* Minimal army loadout — sent per raid instead of all troops */}
+        <div className="px-5 py-3 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              {t('farm_army')}
+            </span>
+            {farmArmySaved && <span className="text-xs text-emerald-600">{t('transport_saved')}</span>}
+          </div>
+          {Object.keys(troopTypes).length === 0 ? (
+            <p className="text-xs text-slate-400 italic">{t('dispatch_no_units')}</p>
+          ) : (
+            <>
+              <p className="text-xs text-slate-400 mb-2">{t('farm_army_hint')}</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {Object.entries(troopTypes).map(([uid, uname]) => (
+                  <div key={uid} className="flex items-center gap-2">
+                    <span className="flex-1 text-xs text-slate-600 truncate" title={uname}>{uname}</span>
+                    <input
+                      type="number" min={0}
+                      value={farmArmy[uid] ?? 0}
+                      onChange={e => {
+                        const v = Math.max(0, Number(e.target.value))
+                        setFarmArmy(prev => ({ ...prev, [uid]: v }))
+                        setFarmArmySaved(false)
+                      }}
+                      className="w-16 border border-slate-200 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => saveFarmArmy(Object.fromEntries(Object.entries(farmArmy).filter(([, v]) => v > 0)))}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700"
+              >
+                <i className="fa-solid fa-floppy-disk" /> {t('transport_save')}
+              </button>
+            </>
+          )}
+        </div>
+
         {farmTargets.length === 0 ? (
           <p className="px-5 py-4 text-sm text-slate-400 italic">{t('farm_empty')}</p>
         ) : (
