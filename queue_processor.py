@@ -212,8 +212,12 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         eta = min(eta, farm_eta) if eta else farm_eta
 
     if eta and _in_active_hours():
-        wake_for_queue = eta + random.randint(3, 8) * 60
-        sleep_secs = max(60, min(next_full_at, wake_for_queue) - time.time())
+        # Wake just after the ETA. The events themselves (spy executeAfter, farm
+        # next_run_at, etc.) already carry their own randomised delay, so only a small
+        # nudge is needed here — a large jitter would stack on top and make scheduled
+        # actions (e.g. a spy due in 13 min) fire 20+ min late.
+        wake_for_queue = eta + random.randint(20, 70)
+        sleep_secs = max(30, min(next_full_at, wake_for_queue) - time.time())
         if wake_for_queue < next_full_at:
             eta_str = time.strftime('%H:%M:%S', time.localtime(eta))
             logger.info(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
