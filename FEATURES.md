@@ -76,17 +76,21 @@ Lógica adicional necessária: ler os movimentos do alvo (ETA de regresso da fro
 dispersada), modelar a janela "porto limpo", e sincronizar o lançamento das vagas de
 tropas/navios com essa janela. Camada de timing sobre o F4 — desenho próprio.
 
-### F5. Notificação de regresso com saque
-Destacar nos movimentos o regresso de tropas/frota e notificar via Telegram
-("tropas regressaram de X"). O movements.json já tem direction="<-" e isOwn.
+### F5. Notificação de regresso com saque ✅ IMPLEMENTADO 2026-06-15
+Telegram quando uma frota própria regressa com saque. Reutiliza o F1.b: `log_loot`
+passou a indicar se a entrada é nova (não duplicada entre snapshots) e o
+`_collect_movements` notifica só nos regressos novos (`notify_returned_loot`).
+Ligado/desligado em `alert_settings.returnEnabled`.
 
 ## 🛡️ Defesa / vigilância
 
-### F6. Alarme de ataque recebido ⭐⭐ melhor custo/benefício
-O movements.json já tem `isHostile` — notificação Telegram imediata quando aparece
-movimento hostil, com ETA e origem. Hoje só se vê se abrires o dashboard.
-Atenção: o movements só refresca a cada ciclo (~1h) — considerar um check
-leve de movimentos no smart_sleep (ex.: a cada 10-15 min, com delay aleatório).
+### F6. Alarme de ataque recebido ✅ IMPLEMENTADO 2026-06-15
+Telegram imediato quando aparece um movimento hostil dirigido às minhas cidades, com
+origem, alvo, ETA e contagem de tropas/navios (`notify_attack_incoming`). Detecção em
+`_collect_movements`, dedup persistente em `attack_alerts.json` (com poda dos que já
+chegaram). Latência: o "attack-watch" (`alert_settings.checkMinutes`, opt-in) refresca
+os movimentos de N em N min no smart_sleep — sem ele, os alertas só disparam no ciclo
+horário. UI: cartão "Alertas de combate" nas Settings. API: `GET/POST /api/alert-settings`.
 
 ### F7. Watchlist de jogadores
 Re-scan periódico apenas das ilhas dos alvos marcados "alvo" (vs. world scan semanal
@@ -151,6 +155,8 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
 
 ## Já implementadas (referência)
 
+- ✅ F5 Notificação Telegram de regresso com saque — 2026-06-15
+- ✅ F6 Alarme Telegram de ataque recebido (+ attack-watch opcional) — 2026-06-15
 - ✅ F4 Farming de alvos (farm_manager, máquina de estados por alvo) — 2026-06-13
 - ✅ F1.b Estatísticas de saque por alvo (loot_log + /api/loot-stats) — 2026-06-13
 - ✅ F8.b Pré-posicionamento proactivo do próximo item da fila — 2026-06-13

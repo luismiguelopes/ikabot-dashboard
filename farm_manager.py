@@ -32,24 +32,31 @@ FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
 
 
+def _load_farm_settings():
+    try:
+        with open(FARM_SETTINGS_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
 def get_farm_army():
     """User-defined minimal army loadout for the farm: {unitId: qty}.
     Farm targets are pre-scouted safe cities, so a small fixed force is enough — no
     need to empty a city of all its troops. Empty → fall back to all troops."""
     try:
-        with open(FARM_SETTINGS_PATH) as f:
-            army = json.load(f).get("army", {})
+        army = _load_farm_settings().get("army", {})
         return {str(k): int(v) for k, v in army.items() if int(v) > 0}
-    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+    except (ValueError, TypeError):
         return {}
 
 
-def save_farm_army(army):
-    clean = {str(k): int(v) for k, v in (army or {}).items() if int(v) > 0}
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(FARM_SETTINGS_PATH, "w") as f:
-        json.dump({"army": clean}, f, indent=2)
-    return clean
+def get_farm_spy_agents():
+    """How many spies each farm re-scout sends (from farm settings, default 1)."""
+    try:
+        return max(1, int(_load_farm_settings().get("spyAgents", 1)))
+    except (ValueError, TypeError):
+        return 1
 
 
 def _enabled_targets():
@@ -198,6 +205,7 @@ def process_farm_targets(session, in_active_hours=True):
     military    = _load(MILITARY_JSON_PATH, {})
     missions    = _load_missions().get("missions", [])
     farm_army   = get_farm_army()   # {} → send all troops (legacy behaviour)
+    spy_agents  = get_farm_spy_agents()
     now = int(time.time())
 
     ship_cap = 500
@@ -298,12 +306,13 @@ def process_farm_targets(session, in_active_hours=True):
                 "targetCityName":   name,
                 "islandX":          t.get("island_x", 0),
                 "islandY":          t.get("island_y", 0),
-                "numAgents":        1,
+                "numAgents":        spy_agents,
                 "numDecoys":        0,
                 "queuedAt":         now,
             })
             farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now, "last_spy_at": now})
-            logger.info("[farm] %s: re-espionagem enviada de %s", name, origin.get("name"))
+            logger.info("[farm] %s: re-espionagem enviada de %s (%d espião(s))",
+                        name, origin.get("name"), spy_agents)
             continue
 
         # ── SPYING → evaluate the fresh report ──────────────────────────────

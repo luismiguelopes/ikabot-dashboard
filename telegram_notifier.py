@@ -73,6 +73,23 @@ def notify_attack_failed(target_city: str, player: str, attempts: int) -> None:
           f"removido da fila após {attempts} tentativas")
 
 
+def notify_attack_incoming(origin: str, target_city: str, eta_mins: int,
+                           troops: int, fleets: int) -> None:
+    parts = []
+    if troops:
+        parts.append(f"{troops} tropas")
+    if fleets:
+        parts.append(f"{fleets} navios")
+    detail = " · ".join(parts) if parts else "movimento hostil"
+    _send(f"🚨 <b>Ataque a chegar!</b>\n{origin} → {target_city}\n"
+          f"chega em ~{eta_mins} min · {detail}")
+
+
+def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> None:
+    _send(f"💰 <b>Tropas regressaram com saque</b>\n{to_city} ← {origin_player} · "
+          f"{loot_total:,} recursos")
+
+
 def notify_bot_offline(minutes: int) -> None:
     global _offline_notified
     if _offline_notified:

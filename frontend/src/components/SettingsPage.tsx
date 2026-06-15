@@ -348,6 +348,63 @@ function TelegramCard() {
   )
 }
 
+function CombatAlertsCard() {
+  const t = useT()
+  const [s, setS] = useState<{ incomingEnabled: boolean; returnEnabled: boolean; checkMinutes: number } | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/alert-settings').then(r => r.json()).then(setS).catch(() => {})
+  }, [])
+
+  const save = (next: typeof s) => {
+    if (!next) return
+    setS(next); setSaved(false)
+    fetch('/api/alert-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
+  }
+
+  if (!s) return null
+  const Toggle = ({ on, onClick }: { on: boolean; onClick: () => void }) => (
+    <button onClick={onClick} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? 'bg-indigo-600' : 'bg-slate-200'}`}>
+      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+    </button>
+  )
+
+  return (
+    <Card>
+      <div className="px-5 py-4">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
+          <i className="fa-solid fa-tower-observation text-red-500" /> {t('alerts_title')}
+        </p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-600">{t('alerts_incoming')}</span>
+            <Toggle on={s.incomingEnabled} onClick={() => save({ ...s, incomingEnabled: !s.incomingEnabled })} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-600">{t('alerts_return')}</span>
+            <Toggle on={s.returnEnabled} onClick={() => save({ ...s, returnEnabled: !s.returnEnabled })} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-slate-600">{t('alerts_check')}</span>
+            <input
+              type="number" min={0} max={120} value={s.checkMinutes}
+              onChange={e => setS({ ...s, checkMinutes: Math.max(0, Number(e.target.value)) })}
+              onBlur={() => save(s)}
+              className="w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          </div>
+          <p className="text-xs text-slate-400">{t('alerts_check_hint')}</p>
+          {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 function NotificacoesTab({ notifEnabled, onToggleNotif }: {
   notifEnabled: boolean
   onToggleNotif: (v: boolean) => void
@@ -422,6 +479,7 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
       </Card>
 
       <TelegramCard />
+      <CombatAlertsCard />
     </div>
   )
 }

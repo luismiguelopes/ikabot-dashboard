@@ -511,7 +511,7 @@ def log_loot(entry):
     conn = _connect()
     try:
         with conn:
-            conn.execute("""
+            cur = conn.execute("""
                 INSERT OR IGNORE INTO loot_log
                 (ts, from_city, from_player, to_city, wood, wine, marble, crystal, sulfur, return_key)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -522,6 +522,7 @@ def log_loot(entry):
                 int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]),
                 entry.get("returnKey", ""),
             ))
+            return cur.rowcount > 0   # True = newly recorded (not a duplicate return)
     finally:
         conn.close()
 

@@ -967,9 +967,10 @@ FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 def api_farm_army_get():
     try:
         with open(FARM_SETTINGS_PATH) as f:
-            return jsonify({"army": json.load(f).get("army", {})})
+            s = json.load(f)
+        return jsonify({"army": s.get("army", {}), "spyAgents": int(s.get("spyAgents", 1))})
     except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify({"army": {}})
+        return jsonify({"army": {}, "spyAgents": 1})
 
 
 @app.route("/api/farm/army", methods=["POST"])
@@ -980,10 +981,14 @@ def api_farm_army_set():
         clean = {str(k): int(v) for k, v in army.items() if int(v) > 0}
     except (ValueError, TypeError):
         return jsonify({"error": "loadout inválida"}), 400
+    try:
+        spy_agents = max(1, min(99, int(data.get("spyAgents", 1))))
+    except (ValueError, TypeError):
+        spy_agents = 1
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(FARM_SETTINGS_PATH, "w") as f:
-        json.dump({"army": clean}, f, indent=2)
-    return jsonify({"ok": True, "army": clean})
+        json.dump({"army": clean, "spyAgents": spy_agents}, f, indent=2)
+    return jsonify({"ok": True, "army": clean, "spyAgents": spy_agents})
 
 
 @app.route("/api/farm/add", methods=["POST"])
@@ -1052,6 +1057,36 @@ def api_farm_remove():
     if removed == 0:
         return jsonify({"error": "Alvo não encontrado"}), 404
     return jsonify({"ok": True})
+
+
+ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
+_DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
+
+
+@app.route("/api/alert-settings")
+def api_alert_settings_get():
+    try:
+        with open(ALERT_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_ALERT_SETTINGS.items():
+            s.setdefault(k, v)
+    except (FileNotFoundError, json.JSONDecodeError):
+        s = dict(_DEFAULT_ALERT_SETTINGS)
+    return jsonify(s)
+
+
+@app.route("/api/alert-settings", methods=["POST"])
+def api_alert_settings_post():
+    data = request.get_json(silent=True) or {}
+    s = {
+        "incomingEnabled": bool(data.get("incomingEnabled", True)),
+        "returnEnabled":   bool(data.get("returnEnabled", True)),
+        "checkMinutes":    max(0, min(120, int(data.get("checkMinutes", 0)))),
+    }
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ALERT_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return jsonify({"status": "ok", "settings": s})
 
 
 @app.route("/api/loot-log")

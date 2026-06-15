@@ -107,6 +107,20 @@ def test_idle_enqueues_spy_when_due(monkeypatch, tmp_path):
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
+def test_spy_dispatch_uses_configured_agent_count(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7"})
+    db_manager.farm_update("100", {"next_run_at": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "get_farm_spy_agents", lambda: 4)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    spy = next(it for q, it in added if q == "spy_dispatch")
+    assert spy["numAgents"] == 4
+
+
 def test_idle_waits_until_due(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo"})

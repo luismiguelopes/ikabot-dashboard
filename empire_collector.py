@@ -33,6 +33,55 @@ def _trim_history(path):
         pass
 
 
+ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
+_ATTACK_ALERTS_PATH = os.path.join(LOGS_DIR, "attack_alerts.json")
+_DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
+
+
+def _load_alert_settings():
+    try:
+        with open(ALERT_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_ALERT_SETTINGS.items():
+            s.setdefault(k, v)
+        return s
+    except (FileNotFoundError, json.JSONDecodeError):
+        return dict(_DEFAULT_ALERT_SETTINGS)
+
+
+def _alert_incoming_attacks(hostiles, time_now):
+    """Telegram on each newly-seen incoming hostile movement (F6). Deduped by a
+    persistent set of keys, pruned of arrivals already in the past."""
+    try:
+        with open(_ATTACK_ALERTS_PATH) as f:
+            seen = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        seen = {}
+    # prune past arrivals so the file stays small and keys can be reused safely
+    seen = {k: v for k, v in seen.items() if v > time_now}
+    changed = False
+    for h in hostiles:
+        if h["key"] in seen:
+            continue
+        seen[h["key"]] = h["arrivalTime"]
+        changed = True
+        eta_mins = max(0, (h["arrivalTime"] - time_now) // 60)
+        try:
+            from telegram_notifier import notify_attack_incoming
+            notify_attack_incoming(h["origin"], h["destination"], eta_mins,
+                                   h.get("troops", 0), h.get("fleets", 0))
+        except Exception:
+            pass
+        logger.warning("[alert] ataque a chegar: %s → %s em ~%dmin",
+                       h["origin"], h["destination"], eta_mins)
+    if changed or seen:
+        try:
+            with open(_ATTACK_ALERTS_PATH, "w") as f:
+                json.dump(seen, f)
+        except Exception:
+            pass
+
+
 def _collect_movements(session, city_id):
     """Fetch military/fleet movements from the military advisor endpoint."""
     try:
@@ -49,6 +98,7 @@ def _collect_movements(session, city_id):
 
         movements = []
         loot_returns = []
+        hostiles = []
         for m in movements_raw:
             time_left = int(float(m["eventTime"])) - time_now
             arrival_ts = int(float(m["eventTime"]))
@@ -87,6 +137,17 @@ def _collect_movements(session, city_id):
                 entry["troops"] = m["army"].get("amount", 0)
                 entry["fleets"] = m["fleet"].get("amount", 0)
 
+            # F6: an incoming hostile movement aimed at one of our cities
+            if entry["isHostile"] and not is_returning:
+                hostiles.append({
+                    "origin":      entry["origin"],
+                    "destination": entry["destination"],
+                    "arrivalTime": arrival_ts,
+                    "troops":      entry.get("troops", 0),
+                    "fleets":      entry.get("fleets", 0),
+                    "key":         "{}|{}|{}".format(entry["origin"], entry["destination"], arrival_ts),
+                })
+
             # F1.b: a returning own fleet carrying resources, coming from another
             # player's city, is plunder. (Returns from own-city transports are empty,
             # so the resource check already excludes internal traffic.)
@@ -113,14 +174,31 @@ def _collect_movements(session, city_id):
 
             movements.append(entry)
 
+        _settings = _load_alert_settings()
+
+        # F1.b record + F5 notify on each newly-seen loot return
         if loot_returns:
             try:
                 from db_manager import log_loot
+                new_count = 0
                 for lr in loot_returns:
-                    log_loot(lr)
-                logger.info("[loot] %d regresso(s) com saque registado(s)", len(loot_returns))
+                    is_new = log_loot(lr)
+                    if is_new:
+                        new_count += 1
+                        if _settings.get("returnEnabled", True):
+                            try:
+                                from telegram_notifier import notify_returned_loot
+                                notify_returned_loot(lr["fromPlayer"] or lr["fromCity"],
+                                                     lr["toCity"], sum(lr["resources"]))
+                            except Exception:
+                                pass
+                logger.info("[loot] %d regresso(s) com saque (%d novo(s))", len(loot_returns), new_count)
             except Exception:
                 logger.warning("[loot] falha ao registar saque", exc_info=True)
+
+        # F6: alert on newly-seen incoming hostile movements
+        if hostiles and _settings.get("incomingEnabled", True):
+            _alert_incoming_attacks(hostiles, time_now)
 
         return movements
     except Exception:

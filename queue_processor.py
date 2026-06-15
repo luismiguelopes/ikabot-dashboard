@@ -250,6 +250,30 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
             break
 
+        # F6 attack watch: periodically refresh movements so incoming-attack alerts are
+        # timely (opt-in via alert_settings.checkMinutes; refresh_movements keeps the
+        # anti-detection delay). Without it, alerts only fire on the hourly cycle.
+        if session and _in_scan_hours():
+            try:
+                import json as _json
+                from empire_collector import ALERT_SETTINGS_PATH, refresh_movements
+                from ikabot.helpers.pedirInfo import getIdsOfCities
+                check_min = 0
+                try:
+                    with open(ALERT_SETTINGS_PATH) as _f:
+                        check_min = int(_json.load(_f).get("checkMinutes", 0))
+                except Exception:
+                    check_min = 0
+                if check_min > 0:
+                    last_watch = getattr(smart_sleep, "_last_attack_watch", 0)
+                    if time.time() - last_watch >= check_min * 60:
+                        smart_sleep._last_attack_watch = time.time()
+                        _ids, _ = getIdsOfCities(session)
+                        refresh_movements(session, _ids[0])
+                        continue
+            except Exception:
+                pass
+
         # Manual military refresh triggered by Flask UI (military.json has an 8h cache)
         if session and os.path.exists(FORCE_MILITARY_FLAG):
             try:

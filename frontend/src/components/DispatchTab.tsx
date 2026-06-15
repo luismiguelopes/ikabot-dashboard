@@ -133,6 +133,7 @@ export function DispatchTab() {
   const [lootStats,      setLootStats]      = useState<LootStat[]>([])
   const [farmTargets,    setFarmTargets]    = useState<FarmTarget[]>([])
   const [farmArmy,       setFarmArmy]       = useState<Record<string, number>>({})
+  const [farmSpyAgents,  setFarmSpyAgents]  = useState(1)
   const [farmArmySaved,  setFarmArmySaved]  = useState(false)
   const [logFilter,      setLogFilter]      = useState('')
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
@@ -188,6 +189,7 @@ export function DispatchTab() {
 
     fetch('/api/farm/army').then(r => r.json()).then((data: any) => {
       setFarmArmy(data?.army ?? {})
+      setFarmSpyAgents(data?.spyAgents ?? 1)
     }).catch(() => {})
   }, [originCityName])
 
@@ -387,13 +389,13 @@ export function DispatchTab() {
     loadAll()
   }
 
-  async function saveFarmArmy(next: Record<string, number>) {
+  async function saveFarmArmy(next: Record<string, number>, spyAgents = farmSpyAgents) {
     setFarmArmy(next)
     setFarmArmySaved(false)
     await fetch('/api/farm/army', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ army: next }),
+      body:    JSON.stringify({ army: next, spyAgents }),
     }).catch(() => {})
     setFarmArmySaved(true)
   }
@@ -888,11 +890,20 @@ export function DispatchTab() {
 
         {/* Minimal army loadout — sent per raid instead of all troops */}
         <div className="px-5 py-3 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               {t('farm_army')}
             </span>
-            {farmArmySaved && <span className="text-xs text-emerald-600">{t('transport_saved')}</span>}
+            <span className="flex items-center gap-1.5 text-xs text-slate-500">
+              {t('farm_spies')}
+              <input
+                type="number" min={1} max={99} value={farmSpyAgents}
+                onChange={e => setFarmSpyAgents(Math.max(1, Number(e.target.value)))}
+                onBlur={() => saveFarmArmy(farmArmy, farmSpyAgents)}
+                className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs text-right"
+              />
+              {farmArmySaved && <span className="text-emerald-600 ml-1">{t('transport_saved')}</span>}
+            </span>
           </div>
           {Object.keys(troopTypes).length === 0 ? (
             <p className="text-xs text-slate-400 italic">{t('dispatch_no_units')}</p>
