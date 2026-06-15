@@ -81,6 +81,7 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
         json.dump({"byCityName": {"Home": {"troops": {"s303": {"name": "Hoplite", "amount": 200}},
                                             "fleet": {}}}}, f)
     monkeypatch.setattr(em, "_load_missions", lambda: {"missions": missions or []})
+    monkeypatch.setattr(fm, "MOVEMENTS_PATH", str(tmp_path / "movements.json"))  # isolate
     import empire_utils
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
     # capture queue_add into a list
@@ -186,6 +187,77 @@ def test_attacking_returns_to_idle_after_return(monkeypatch, tmp_path):
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE"
     assert t["next_run_at"] > int(time.time())
+
+
+def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
+    """A spy-based attack resets raids_since_spy to 1 and records intel for direct raids."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    missions = [{"state": "DONE", "targetCityId": "100",
+                 "result": {"resources": {"wood": 80000}, "reportedAt": 2000},
+                 "garrisonResult": {"troops": {}}}]
+    _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING"
+    assert t["raids_since_spy"] == 1
+    assert t["last_enemy_ships"] == 0
+    assert t["last_transporters"] >= 1
+
+
+def test_direct_attack_without_respy(monkeypatch, tmp_path):
+    """IDLE with next_action=attack and safe intel attacks directly, no spy enqueued."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "next_action": "attack",
+                                   "last_loot": 70000, "last_enemy_ships": 0, "raids_since_spy": 1})
+    added = _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]   # no spy_dispatch
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING"
+    assert t["raids_since_spy"] == 2              # incremented
+
+
+def test_return_triggers_respy_when_due(monkeypatch, tmp_path):
+    """After return, re-spy when raids_since_spy reached respy_every; else attack directly."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "respyEvery": 3})
+    _common_patches(monkeypatch, tmp_path)
+
+    # rss below threshold → next_action 'attack'
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": 1,
+                                   "raids_since_spy": 1, "last_enemy_ships": 0})
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "attack"
+    assert t["next_run_at"] > int(time.time())
+
+    # rss at threshold → next_action 'spy'
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": 1,
+                                   "raids_since_spy": 3, "last_enemy_ships": 0})
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["next_action"] == "spy"
+
+
+def test_has_due_farm(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo"})
+    import espionage_manager as em
+    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": []})
+
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": int(time.time()) + 9999})
+    assert fm.has_due_farm() is False
+    db_manager.farm_update("100", {"next_run_at": 0})
+    assert fm.has_due_farm() is True
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": int(time.time()) + 9999})
+    assert fm.has_due_farm() is False
 
 
 def test_paused_does_nothing(monkeypatch, tmp_path):

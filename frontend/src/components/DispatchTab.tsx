@@ -15,6 +15,7 @@ interface FarmTarget {
   interval_hours:   number
   min_loot:         number
   max_enemy_ships:  number
+  respy_every:      number
   state:            string
   next_run_at:      number
   last_loot:        number
@@ -949,9 +950,20 @@ export function DispatchTab() {
                         {t(`farm_state_${f.state}`)}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      {t('farm_interval', { n: String(f.interval_hours) })} · {t('farm_minloot')} {fmt(f.min_loot)} · {t('farm_raids')}: {f.total_raids}
-                      {f.last_loot > 0 && <> · {t('farm_lastloot')} {fmt(f.last_loot)}</>}
+                    <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span>{t('farm_minloot')} {fmt(f.min_loot)}</span>
+                      <span>·</span>
+                      <span className="flex items-center gap-1">
+                        {t('farm_respy')}
+                        <input
+                          type="number" min={1} max={50} value={f.respy_every}
+                          onChange={e => farmUpdate(f.target_city_id, { respyEvery: Math.max(1, Number(e.target.value)) })}
+                          className="w-12 border border-slate-200 rounded px-1 py-0.5 text-xs text-right"
+                        />
+                      </span>
+                      <span>·</span>
+                      <span>{t('farm_raids')}: {f.total_raids}</span>
+                      {f.last_loot > 0 && <><span>·</span><span>{t('farm_lastloot')} {fmt(f.last_loot)}</span></>}
                     </div>
                   </div>
                   <button onClick={() => farmUpdate(f.target_city_id, { runNow: true })}

@@ -49,6 +49,19 @@ tier 2). Espera o regresso estimado e repete a cada intervalHours.
   disponível na origem) — só as tropas escolhidas, não todas. A origem é a cidade mais
   próxima que tenha pelo menos uma das unidades da loadout. Vazio → comportamento antigo
   (todas as tropas). API: `GET/POST /api/farm/army`.
+- **Event-driven + cadência real** (2026-06-15, schema v8): o farm deixou de avançar só
+  no ciclo horário e de usar intervalo fixo. Agora:
+  - corre no `smart_sleep` (≤60s de latência) com `has_due_farm()` preciso (sem busy-loop);
+  - o bot **acorda no momento exacto** do regresso das tropas (`next_farm_eta()` entra no
+    cálculo de sleep), em vez de dormir até ao próximo ciclo;
+  - a cadência é o **tempo real de ida-e-volta**; ao regressar relança com delay
+    aleatório **1-15 min** (não 8h);
+  - `attack_return_at` é refinado lendo os movimentos reais (`movements.json`);
+  - **re-espia só de N em N ataques** (`respy_every`, default 3): entre scouts ataca
+    directamente com o último intel (origem/transportes/saque), poupando o ida-e-volta do
+    espião. Alvos que mostraram frota forçam re-espionagem sempre.
+  - `interval_hours` passou a ser o backoff quando uma ronda é saltada (saque baixo,
+    timeout de espião, sem origem).
 ⚠️ Por validar in-game o ciclo completo.
 
 ### F4.b — Timing de navios que fogem/dispersam (POR FAZER)

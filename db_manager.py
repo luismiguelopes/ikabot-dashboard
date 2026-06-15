@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 def _connect():
@@ -117,6 +117,20 @@ def _run_migrations(conn):
             )
         """)
         conn.execute("INSERT INTO schema_version (version) VALUES (7)")
+    if current < 8:
+        # v8 = event-driven farm: travel-based cadence + periodic (not per-raid) re-spy
+        for ddl in (
+            "ALTER TABLE farm_targets ADD COLUMN respy_every INTEGER DEFAULT 3",
+            "ALTER TABLE farm_targets ADD COLUMN raids_since_spy INTEGER DEFAULT 0",
+            "ALTER TABLE farm_targets ADD COLUMN next_action TEXT DEFAULT 'spy'",
+            "ALTER TABLE farm_targets ADD COLUMN last_transporters INTEGER DEFAULT 0",
+            "ALTER TABLE farm_targets ADD COLUMN last_enemy_ships INTEGER DEFAULT 0",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass  # column already present (fresh DB created at v8)
+        conn.execute("INSERT INTO schema_version (version) VALUES (8)")
     conn.commit()
 
 
@@ -383,6 +397,8 @@ _FARM_UPDATE_COLS = {
     "enabled", "interval_hours", "min_loot", "max_enemy_ships", "state",
     "next_run_at", "spy_dispatched_at", "attack_return_at", "last_spy_at",
     "last_attack_at", "last_loot", "total_raids", "total_loot", "note",
+    "respy_every", "raids_since_spy", "next_action", "last_transporters",
+    "last_enemy_ships",
 }
 
 
@@ -404,8 +420,8 @@ def farm_add(target):
                 INSERT INTO farm_targets
                 (target_city_id, target_city_name, target_player, island_id,
                  island_x, island_y, enabled, interval_hours, min_loot, max_enemy_ships,
-                 state, next_run_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
+                 respy_every, state, next_run_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
                 ON CONFLICT(target_city_id) DO UPDATE SET
                     target_city_name=excluded.target_city_name,
                     target_player=excluded.target_player,
@@ -415,7 +431,8 @@ def farm_add(target):
                     enabled=excluded.enabled,
                     interval_hours=excluded.interval_hours,
                     min_loot=excluded.min_loot,
-                    max_enemy_ships=excluded.max_enemy_ships
+                    max_enemy_ships=excluded.max_enemy_ships,
+                    respy_every=excluded.respy_every
             """, (
                 str(target["targetCityId"]), target.get("targetCityName", ""),
                 target.get("targetPlayer", ""), str(target.get("islandId", "")),
@@ -424,6 +441,7 @@ def farm_add(target):
                 int(target.get("intervalHours", 8)),
                 int(target.get("minLoot", 50000)),
                 int(target.get("maxEnemyShips", 0)),
+                int(target.get("respyEvery", 3)),
                 now,
             ))
     finally:

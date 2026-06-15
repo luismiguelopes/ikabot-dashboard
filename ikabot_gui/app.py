@@ -1005,6 +1005,7 @@ def api_farm_add():
             "intervalHours":  max(1, min(168, int(data.get("intervalHours", 8)))),
             "minLoot":        max(0, int(data.get("minLoot", 50000))),
             "maxEnemyShips":  max(0, int(data.get("maxEnemyShips", 0))),
+            "respyEvery":     max(1, min(50, int(data.get("respyEvery", 3)))),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1024,6 +1025,7 @@ def api_farm_update():
     if "intervalHours" in data:  fields["interval_hours"] = max(1, min(168, int(data["intervalHours"])))
     if "minLoot" in data:        fields["min_loot"] = max(0, int(data["minLoot"]))
     if "maxEnemyShips" in data:  fields["max_enemy_ships"] = max(0, int(data["maxEnemyShips"]))
+    if "respyEvery" in data:     fields["respy_every"] = max(1, min(50, int(data["respyEvery"])))
     # Manual reset back to IDLE/now so the next cycle re-runs immediately
     if data.get("runNow"):
         fields["state"] = "IDLE"

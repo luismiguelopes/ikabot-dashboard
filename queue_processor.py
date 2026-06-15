@@ -194,6 +194,12 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
     construction_eta = _get_next_construction_eta(q)
     transport_eta = _get_next_transport_eta(q)
     spy_eta = _get_next_spy_eta()
+    farm_eta = None
+    try:
+        from farm_manager import next_farm_eta
+        farm_eta = next_farm_eta()
+    except Exception:
+        pass
 
     eta = None
     if construction_eta:
@@ -202,6 +208,8 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         eta = min(eta, transport_eta) if eta else transport_eta
     if spy_eta:
         eta = min(eta, spy_eta) if eta else spy_eta
+    if farm_eta:
+        eta = min(eta, farm_eta) if eta else farm_eta
 
     if eta and _in_active_hours():
         wake_for_queue = eta + random.randint(3, 8) * 60
@@ -303,6 +311,17 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 from transport_manager import has_due_transports, process_transport_queue
                 if has_due_transports():
                     process_transport_queue(session, in_active_hours=True)
+                    continue
+            except Exception:
+                pass
+
+        # Target farm (F4) — event-driven: advance any target whose spy/attack/return
+        # is due, within ~60s instead of waiting for the next full empire cycle.
+        if session and _in_scan_hours() and not is_paused():
+            try:
+                from farm_manager import has_due_farm, process_farm_targets
+                if has_due_farm():
+                    process_farm_targets(session, in_active_hours=True)
                     continue
             except Exception:
                 pass
