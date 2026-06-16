@@ -4,7 +4,6 @@ import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
 import { MATERIALS } from '../constants'
 import { Card, CardHeader } from './ui/Card'
-import { PageHeader } from './ui/PageHeader'
 import type { OwnCity, WorldScanPlayer } from '../types'
 
 interface FarmTarget {
@@ -118,7 +117,7 @@ function travelSecs(ox: number, oy: number, tx: number, ty: number, mission: 'ar
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function DispatchTab() {
+export function DispatchTab({ view = 'dispatch' }: { view?: 'dispatch' | 'farm' | 'historico' }) {
   const t    = useT()
   const lang = useLang()
   const now  = useLiveClock()
@@ -428,8 +427,7 @@ export function DispatchTab() {
 
   return (
     <div>
-      <PageHeader icon="fa-crosshairs" title={t('dispatch_title')} />
-
+      {view === 'dispatch' && (<>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
 
         {/* ── Left panel: assets ─────────────────────────────────────────── */}
@@ -819,7 +817,9 @@ export function DispatchTab() {
           </div>
         </Card>
       )}
+      </>)}
 
+      {view === 'historico' && (<>
       {/* ── Dispatch history (attack_log) ─────────────────────────────────── */}
       <Card>
         <CardHeader icon="fa-clock-rotate-left" title={t('dispatch_history')} />
@@ -924,9 +924,11 @@ export function DispatchTab() {
           </div>
         )}
       </Card>
+      </>)}
 
+      {view === 'farm' && (<>
       {/* ── Target farm (F4) ──────────────────────────────────────────────── */}
-      <Card className="mt-4">
+      <Card>
         <CardHeader icon="fa-seedling" title={t('farm_title')} />
         <p className="px-5 pt-2 text-xs text-slate-400">{t('farm_note')}</p>
 
@@ -1033,6 +1035,7 @@ export function DispatchTab() {
           </div>
         )}
       </Card>
+      </>)}
     </div>
   )
 }

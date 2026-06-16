@@ -1582,17 +1582,20 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const ignoredCount = (scanData?.players || []).filter(p => p.mark === 'ignorar').length
 
   const TABS = [
-    { key: 'inactivos', label: t('tab_inactive'), icon: 'fa-user-slash'  },
-    { key: 'ilhas',     label: t('tab_islands'),  icon: 'fa-map'         },
+    { key: 'inactivos', label: t('tab_inactive'),  icon: 'fa-user-slash'        },
+    { key: 'ilhas',     label: t('tab_islands'),   icon: 'fa-map'               },
     { key: 'ignoradas', label: `${t('tab_ignored')}${ignoredCount > 0 ? ` (${ignoredCount})` : ''}`, icon: 'fa-ban' },
-    { key: 'ataque',    label: t('tab_dispatch'), icon: 'fa-crosshairs'  },
+    { key: 'dispatch',  label: t('tab_dispatch'),  icon: 'fa-crosshairs'        },
+    { key: 'farm',      label: t('tab_farm'),      icon: 'fa-seedling'          },
+    { key: 'historico', label: t('tab_historico'), icon: 'fa-clock-rotate-left' },
   ]
+  const isCombatTab = ['dispatch', 'farm', 'historico'].includes(tab)
 
   return (
     <div>
       <PageHeader icon="fa-crosshairs" title={t('combat_title')} />
 
-      {tab !== 'ataque' && (
+      {!isCombatTab && (
       <Card className="mb-4">
         <div className="px-5 py-4 flex flex-wrap items-start gap-4">
           <div className="flex-1 min-w-0 space-y-2">
@@ -1700,7 +1703,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
             </button>
           ))}
         </div>
-        {ownCities.length > 0 && tab !== 'ataque' && (
+        {ownCities.length > 0 && !isCombatTab && (
           <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
             <i className="fa-solid fa-user-secret text-slate-400 text-xs" />
             <select
@@ -1742,7 +1745,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       <div style={{ display: tab === 'ignoradas' ? undefined : 'none' }}>
         <IgnoradasTab scanData={scanData} onScanDataChange={setScanData} />
       </div>
-      {tab === 'ataque' && <DispatchTab />}
+      {isCombatTab && <DispatchTab view={tab as 'dispatch' | 'farm' | 'historico'} />}
     </div>
   )
 }
