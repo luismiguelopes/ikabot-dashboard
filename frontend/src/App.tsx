@@ -28,6 +28,19 @@ function PausedBanner() {
   )
 }
 
+function IncomingAttackBanner({ count, eta }: { count: number; eta: number | null }) {
+  const t = useT()
+  const now = Math.floor(Date.now() / 1000)
+  const mins = eta ? Math.max(0, Math.round((eta - now) / 60)) : null
+  return (
+    <div className="mb-4 flex items-center gap-2 text-sm text-red-800 bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 font-medium">
+      <i className="fa-solid fa-skull-crossbones shrink-0" />
+      {t('incoming_banner', { n: String(count) })}
+      {mins !== null && <span className="text-red-600">· {t('incoming_eta', { m: String(mins) })}</span>}
+    </div>
+  )
+}
+
 function LoadingScreen() {
   return (
     <div className="flex items-center justify-center h-screen bg-slate-100">
@@ -153,10 +166,15 @@ export default function App() {
   }, [fetchData])
 
   const [movCount, setMovCount] = useState(0)
+  const [incomingAttacks, setIncomingAttacks] = useState<{ count: number; eta: number | null }>({ count: 0, eta: null })
   useEffect(() => {
     fetch('/api/movements')
       .then(r => r.json())
-      .then((m: Array<{ isOwn: boolean }>) => setMovCount(m.filter(x => x.isOwn).length))
+      .then((m: Array<{ isOwn: boolean; isHostile: boolean; direction: string; arrivalTime: number }>) => {
+        setMovCount(m.filter(x => x.isOwn).length)
+        const inc = m.filter(x => x.isHostile && x.direction === '->')
+        setIncomingAttacks({ count: inc.length, eta: inc.length ? Math.min(...inc.map(x => x.arrivalTime)) : null })
+      })
       .catch(() => {})
   }, [data])
 
@@ -188,6 +206,7 @@ export default function App() {
           onTogglePause={togglePause}
         />
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
+          {incomingAttacks.count > 0 && <IncomingAttackBanner count={incomingAttacks.count} eta={incomingAttacks.eta} />}
           {paused && <PausedBanner />}
           {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
           {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}

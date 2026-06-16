@@ -6,6 +6,7 @@ import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { Td } from '../ui/TableCells'
 import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
+import { DispatchTab } from '../DispatchTab'
 import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCity } from '../../types'
 
 interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
@@ -1467,15 +1468,17 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const ignoredCount = (scanData?.players || []).filter(p => p.mark === 'ignorar').length
 
   const TABS = [
-    { key: 'inactivos', label: t('tab_inactive'), icon: 'fa-user-slash' },
-    { key: 'ilhas',     label: t('tab_islands'),  icon: 'fa-map'        },
+    { key: 'inactivos', label: t('tab_inactive'), icon: 'fa-user-slash'  },
+    { key: 'ilhas',     label: t('tab_islands'),  icon: 'fa-map'         },
     { key: 'ignoradas', label: `${t('tab_ignored')}${ignoredCount > 0 ? ` (${ignoredCount})` : ''}`, icon: 'fa-ban' },
+    { key: 'ataque',    label: t('tab_dispatch'), icon: 'fa-crosshairs'  },
   ]
 
   return (
     <div>
-      <PageHeader icon="fa-earth-europe" title={t('world_title')} />
+      <PageHeader icon="fa-crosshairs" title={t('combat_title')} />
 
+      {tab !== 'ataque' && (
       <Card className="mb-4">
         <div className="px-5 py-4 flex flex-wrap items-start gap-4">
           <div className="flex-1 min-w-0 space-y-2">
@@ -1567,6 +1570,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
           </div>
         </div>
       </Card>
+      )}
 
       <div className="flex items-center gap-3 mb-4">
         <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
@@ -1582,7 +1586,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
             </button>
           ))}
         </div>
-        {ownCities.length > 0 && (
+        {ownCities.length > 0 && tab !== 'ataque' && (
           <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
             <i className="fa-solid fa-user-secret text-slate-400 text-xs" />
             <select
@@ -1624,6 +1628,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       <div style={{ display: tab === 'ignoradas' ? undefined : 'none' }}>
         <IgnoradasTab scanData={scanData} onScanDataChange={setScanData} />
       </div>
+      {tab === 'ataque' && <DispatchTab />}
     </div>
   )
 }

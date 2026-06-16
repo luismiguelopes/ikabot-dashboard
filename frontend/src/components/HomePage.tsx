@@ -9,6 +9,67 @@ import { Th, Td } from './ui/TableCells'
 import { StatBadge } from './ui/StatBadge'
 import type { ApiData, AlertThresholds, BuildingQueue, BuildingCostsData } from '../types'
 
+function CombatSummary() {
+  const t   = useT()
+  const now = useLiveClock()
+  const [farms,    setFarms]    = useState<Array<{ enabled: boolean; state: string }>>([])
+  const [pending,  setPending]  = useState<Array<{ dispatchAfter: number }>>([])
+  const [loot24,   setLoot24]   = useState(0)
+  const [incoming, setIncoming] = useState<{ count: number; eta: number | null }>({ count: 0, eta: null })
+
+  useEffect(() => {
+    const load = () => {
+      fetch('/api/farm').then(r => r.json()).then(d => { if (Array.isArray(d)) setFarms(d) }).catch(() => {})
+      fetch('/api/espionage/attack-queue').then(r => r.json()).then(d => setPending(d?.pending ?? [])).catch(() => {})
+      fetch('/api/loot-log?limit=300').then(r => r.json()).then((d: any[]) => {
+        if (!Array.isArray(d)) return
+        const cut = Date.now() / 1000 - 86400
+        setLoot24(d.filter(e => e.ts > cut).reduce((a, e) => a + e.wood + e.wine + e.marble + e.crystal + e.sulfur, 0))
+      }).catch(() => {})
+      fetch('/api/movements').then(r => r.json()).then((m: any[]) => {
+        if (!Array.isArray(m)) return
+        const inc = m.filter(x => x.isHostile && x.direction === '->')
+        setIncoming({ count: inc.length, eta: inc.length ? Math.min(...inc.map(x => x.arrivalTime)) : null })
+      }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const enabled   = farms.filter(f => f.enabled)
+  const attacking = enabled.filter(f => f.state === 'ATTACKING').length
+  const nextAtk   = pending.map(p => p.dispatchAfter).filter(d => d > now).sort((a, b) => a - b)[0]
+  if (enabled.length === 0 && pending.length === 0 && loot24 === 0 && incoming.count === 0) return null
+
+  const Tile = ({ icon, label, value, sub, danger }: { icon: string; label: string; value: string; sub?: string; danger?: boolean }) => (
+    <div className={`flex-1 min-w-[120px] rounded-lg px-3 py-2.5 ${danger ? 'bg-red-50 border border-red-200' : 'bg-slate-50'}`}>
+      <div className="text-[11px] uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+        <i className={`fa-solid ${icon} ${danger ? 'text-red-500' : 'text-slate-400'}`} />{label}
+      </div>
+      <div className={`text-lg font-semibold ${danger ? 'text-red-600' : 'text-slate-700'}`}>{value}</div>
+      {sub && <div className="text-[11px] text-slate-400">{sub}</div>}
+    </div>
+  )
+
+  return (
+    <Card className="mb-6">
+      <CardHeader icon="fa-crosshairs" title={t('home_combat_title')} />
+      <div className="p-4 flex flex-wrap gap-2">
+        <Tile icon="fa-seedling" label={t('combat_farms')} value={String(enabled.length)}
+              sub={attacking > 0 ? t('combat_attacking', { n: String(attacking) }) : undefined} />
+        <Tile icon="fa-clock" label={t('combat_next_attack')}
+              value={nextAtk ? fmtDuration(nextAtk - now) : '—'} />
+        <Tile icon="fa-coins" label={t('combat_loot_24h')} value={fmt(loot24)} />
+        <Tile icon="fa-skull-crossbones" label={t('combat_incoming')}
+              value={incoming.count > 0 ? String(incoming.count) : '—'}
+              sub={incoming.eta ? `${fmtDuration(Math.max(0, incoming.eta - now))}` : undefined}
+              danger={incoming.count > 0} />
+      </div>
+    </Card>
+  )
+}
+
 export function HomePage({ data, thresholds }: { data: ApiData; thresholds: AlertThresholds }) {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
@@ -91,6 +152,8 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
   return (
     <div>
       <PageHeader icon="fa-crown" title={t('home_title')} />
+
+      <CombatSummary />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
         <StatBadge icon="fa-anchor"       iconColor="text-blue-500"    label={t('ships_available')}  value={fmt(s.ships.available)}    />
