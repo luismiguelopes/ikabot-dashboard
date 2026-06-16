@@ -485,6 +485,30 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       .then(d => { if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal) }).catch(() => {})
   }, [])
 
+  // Farm membership — to show "add to farm" / "in farm" on ready targets
+  const [farmIds, setFarmIds] = useState<Set<string>>(new Set())
+  const loadFarm = () => fetch('/api/farm').then(r => r.json())
+    .then((d: Array<{ target_city_id: string }>) => {
+      if (Array.isArray(d)) setFarmIds(new Set(d.map(f => String(f.target_city_id))))
+    }).catch(() => {})
+  useEffect(() => { loadFarm() }, [])
+
+  async function handleAddFarm(p: EnrichedPlayer) {
+    if (!p.cityId) return
+    const res = await fetch('/api/farm/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetCityId: p.cityId, targetCityName: p.cityName, targetPlayer: p.playerName,
+        islandId: p.islandId, islandX: p.islandX, islandY: p.islandY,
+      }),
+    }).catch(() => null)
+    if (res && res.ok) {
+      setFarmIds(prev => new Set([...prev, String(p.cityId)]))
+      setToast({ msg: `${t('farm_add')}: ${p.cityName}`, ok: true })
+      setTimeout(() => setToast(null), 4000)
+    }
+  }
+
   const latestMissionByCityId = useMemo(() => {
     const map: Record<string, SpyMission> = {}
     for (const m of missions) {
@@ -891,8 +915,23 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                               </div>
                             )}
 
-                            {/* Manual attack button */}
-                            <div className="flex justify-end pt-1">
+                            {/* Manual attack + add-to-farm (when spied and ready) */}
+                            <div className="flex justify-end items-center gap-2 pt-1">
+                              {p.priority === 6 && p.cityId && (
+                                farmIds.has(String(p.cityId)) ? (
+                                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600">
+                                    <i className="fa-solid fa-seedling" /> {t('farm_in')}
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => handleAddFarm(p)}
+                                    title={t('farm_add')}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors"
+                                  >
+                                    <i className="fa-solid fa-seedling" /> {t('farm_add')}
+                                  </button>
+                                )
+                              )}
                               <button
                                 onClick={() => setAttackTarget(p)}
                                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
