@@ -118,9 +118,10 @@ def _free_ships(session):
 
 
 def _real_return_eta(target):
-    """Read the ACTUAL return time of our troops/fleet from movements.json (a returning
-    own movement coming from the target's city/player). More accurate than the coordinate
-    estimate — accounts for the game's real speeds. Returns ts or None."""
+    """Read the ACTUAL arrival time of our returning raid from movements.json — accounts
+    for the game's real speeds and the loot-loading time. A returning plunder keeps the
+    enemy in `destination` (origin stays our launching city), so match the target there.
+    Returns the soonest arrival ts, or None if no return is in flight."""
     try:
         with open(MOVEMENTS_PATH) as f:
             movements = json.load(f)
@@ -132,12 +133,30 @@ def _real_return_eta(target):
     for m in movements:
         if not m.get("isOwn") or m.get("direction") != "<-":
             continue
-        origin = (m.get("origin") or "").lower()
-        if (city and city in origin) or (player and player in origin):
+        dest = (m.get("destination") or "").lower()   # the enemy this raid hit
+        if (city and city in dest) or (player and player in dest):
             arr = m.get("arrivalTime", 0)
             if arr and (best is None or arr < best):
                 best = arr
     return best
+
+
+def _ships_back_eta(target, now, session=None, first_city_id=None):
+    """When to retry an attack that's blocked on ships: the real return arrival from the
+    movements API (so we wake exactly when the fleet lands), or a short fallback if no
+    return is visible yet. Refreshes movements first (rate-limited across targets) so the
+    just-launched raid's return is actually in the data."""
+    if session and first_city_id and now - getattr(_ships_back_eta, "_last_refresh", 0) > 90:
+        _ships_back_eta._last_refresh = now
+        try:
+            from empire_collector import refresh_movements
+            refresh_movements(session, first_city_id)
+        except Exception:
+            pass
+    eta = _real_return_eta(target)
+    if eta and eta > now:
+        return eta + random.randint(30, 90)   # small buffer after the fleet docks
+    return now + random.randint(5, 15) * 60
 
 
 def _spy_report_ready(missions, t, now):
@@ -214,6 +233,7 @@ def process_farm_targets(session, in_active_hours=True):
     spy_counts  = _load(SPY_COUNTS_PATH, {})
     military    = _load(MILITARY_JSON_PATH, {})
     missions    = _load_missions().get("missions", [])
+    first_city_id = str(own_cities[0]["cityId"]) if own_cities else None
     farm_army   = get_farm_army()   # {} → send all troops (legacy behaviour)
     spy_agents  = get_farm_spy_agents()
     now = int(time.time())
@@ -289,9 +309,10 @@ def process_farm_targets(session, in_active_hours=True):
             if (t.get("next_action") == "attack" and int(t.get("last_loot", 0)) > 0
                     and int(t.get("last_enemy_ships", 0)) == 0):
                 if _free_ships(session) < 1:
-                    wait = random.randint(5, 15) * 60
-                    farm_update(tid, {"next_run_at": now + wait})
-                    logger.info("[farm] %s: sem navios livres — ataque adiado %dmin", name, wait // 60)
+                    eta = _ships_back_eta(t, now, session, first_city_id)
+                    farm_update(tid, {"next_run_at": eta})
+                    logger.info("[farm] %s: sem navios — ataque agendado para o regresso da frota (~%dmin)",
+                                name, max(0, (eta - now) // 60))
                     continue
                 res = _enqueue_attack(t, int(t["last_loot"]), 0)
                 if res:
@@ -375,12 +396,12 @@ def process_farm_targets(session, in_active_hours=True):
             # Don't launch while the previous raid's ships are still returning — keep
             # the fresh intel and retry directly in a few minutes once they're back.
             if enemy_ships == 0 and _free_ships(session) < 1:
-                wait = random.randint(5, 15) * 60
-                farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                eta = _ships_back_eta(t, now, session, first_city_id)
+                farm_update(tid, {"state": "IDLE", "next_run_at": eta,
                                   "last_loot": loot, "last_enemy_ships": enemy_ships,
                                   "next_action": "attack"})
-                logger.info("[farm] %s: relatório pronto mas 0 navios — ataque adiado %dmin",
-                            name, wait // 60)
+                logger.info("[farm] %s: relatório pronto mas 0 navios — ataque agendado para o regresso (~%dmin)",
+                            name, max(0, (eta - now) // 60))
                 continue
 
             res = _enqueue_attack(t, loot, enemy_ships)

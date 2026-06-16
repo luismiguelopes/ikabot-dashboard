@@ -318,6 +318,34 @@ def test_farm_reuses_stationed_spy_instead_of_dispatch(monkeypatch, tmp_path):
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
+def test_no_ships_schedules_for_real_return(monkeypatch, tmp_path):
+    """With 0 free ships, the next attempt is scheduled for the fleet's real return time
+    (from movements), not a blind random delay."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Δ The Rock Δ",
+                         "targetPlayer": "Cap Almighty", "islandX": 40, "islandY": 50, "islandId": "7"})
+    now = int(time.time())
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "next_action": "attack",
+                                   "last_loot": 80000, "last_enemy_ships": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 0)               # ships out
+    import empire_collector as ec
+    monkeypatch.setattr(ec, "refresh_movements", lambda *a, **k: None)  # no real HTTP
+    arrival = now + 3600
+    with open(tmp_path / "movements.json", "w") as f:
+        json.dump([{"isOwn": True, "direction": "<-", "arrivalTime": arrival,
+                    "origin": "Baphomet (Vempire)",
+                    "destination": "Δ The Rock Δ (Cap Almighty)"}], f)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == []     # no attack enqueued
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE"
+    # scheduled around the real arrival (+ up to 90s buffer), not a 5-15min guess
+    assert arrival <= t["next_run_at"] <= arrival + 120
+
+
 def test_paused_does_nothing(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo"})
