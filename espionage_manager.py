@@ -1537,6 +1537,56 @@ def force_warehouse_mission(target_city_id):
         logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
+def reexecute_stationed_spy(target_city_id, fast=True):
+    """Reuse spies already stationed at the target instead of sending fresh ones: a real
+    player re-runs the warehouse mission on the spies sitting in the safehouse. Returns
+    True if a stationed spy was found (re-executed, or already mid-mission → caller waits),
+    False if none exists (caller should dispatch new spies)."""
+    data = _load_missions()
+    missions = data.get("missions", [])
+    now = int(time.time())
+    _ACTIVE = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
+               "WAITING_FOR_GARRISON", "EXECUTING_GARRISON")
+    for i, m in enumerate(missions):
+        if str(m.get("targetCityId", "")) != str(target_city_id):
+            continue
+        if not m.get("originCityId"):   # synthetic/imported — no real spy stationed
+            continue
+        origin_id = str(m.get("originCityId"))
+        if not (m.get("safehousePosition") or _get_city_safehouse_position(origin_id)):
+            continue
+        st = m.get("state")
+        if st in _ACTIVE:
+            return True   # a spy op is already running for this target — don't dispatch
+        if st == "DONE":
+            offset = random.randint(30, 90) if fast else random.randint(5, 15) * 60
+            missions[i]["state"] = "WAITING_AT_CITY"
+            missions[i]["executeAfter"] = now + offset
+            missions[i]["dispatchedAt"] = now   # treat the re-run as a fresh attempt
+            missions[i]["fast"] = bool(fast)
+            missions[i]["missionType"] = None
+            for k in ("result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
+                      "garrisonCollectAfter", "collectAfter", "executedAt"):
+                missions[i][k] = None
+            data["missions"] = missions
+            _save_missions(data)
+            logger.info("[espionage] re-execução nos espiões estacionados → %s",
+                        m.get("targetCityName"))
+            return True
+    return False
+
+
+def latest_failed_after(target_city_id, since):
+    """True if the newest spy mission for the target FAILED after `since` (spy detected
+    or gone) — the farm uses this to give up waiting and dispatch fresh spies."""
+    for m in _load_missions().get("missions", []):
+        if str(m.get("targetCityId", "")) != str(target_city_id):
+            continue
+        if m.get("state") == "FAILED" and m.get("dispatchedAt", 0) >= since - 120:
+            return True
+    return False
+
+
 def recall_spy_mission(target_city_id):
     """Queue a recall for a spy stationed at target_city_id.
     Looks up origin city and safehouse position from the active mission.

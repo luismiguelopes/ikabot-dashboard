@@ -81,7 +81,9 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
         json.dump({"byCityName": {"Home": {"troops": {"s303": {"name": "Hoplite", "amount": 200}},
                                             "fleet": {}}}}, f)
     monkeypatch.setattr(em, "_load_missions", lambda: {"missions": missions or []})
+    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "missions.json"))  # isolate saves
     monkeypatch.setattr(fm, "MOVEMENTS_PATH", str(tmp_path / "movements.json"))  # isolate
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 50)  # ships available by default
     import empire_utils
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
     # capture queue_add into a list
@@ -272,6 +274,48 @@ def test_has_due_farm(monkeypatch, tmp_path):
     assert fm.has_due_farm() is True
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": int(time.time()) + 9999})
     assert fm.has_due_farm() is False
+
+
+def test_reexecute_stationed_spy_resets_done(monkeypatch, tmp_path):
+    import espionage_manager as em
+    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
+    em._save_missions({"missions": [{
+        "targetCityId": "100", "originCityId": "1", "safehousePosition": 3, "state": "DONE",
+        "result": {"resources": {"wood": 1}}, "garrisonResult": {"troops": {}}, "targetCityName": "Alvo",
+    }]})
+    assert em.reexecute_stationed_spy("100", fast=True) is True
+    m = em._load_missions()["missions"][0]
+    assert m["state"] == "WAITING_AT_CITY" and m["fast"] is True and m["result"] is None
+
+
+def test_reexecute_stationed_spy_skips_synthetic(monkeypatch, tmp_path):
+    import espionage_manager as em
+    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
+    em._save_missions({"missions": [{"targetCityId": "100", "originCityId": None, "state": "DONE"}]})
+    assert em.reexecute_stationed_spy("100") is False   # imported report → no real spy
+
+
+def test_reexecute_stationed_spy_active_no_dispatch(monkeypatch, tmp_path):
+    import espionage_manager as em
+    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
+    em._save_missions({"missions": [{"targetCityId": "100", "originCityId": "1",
+                                     "safehousePosition": 3, "state": "WAITING_FOR_GARRISON"}]})
+    assert em.reexecute_stationed_spy("100") is True    # mid-mission → caller waits, no dispatch
+
+
+def test_farm_reuses_stationed_spy_instead_of_dispatch(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40,
+                         "islandY": 50, "islandId": "7"})
+    db_manager.farm_update("100", {"next_run_at": 0, "next_action": "spy"})
+    stationed = [{"targetCityId": "100", "originCityId": "1", "safehousePosition": 3,
+                  "state": "DONE", "targetCityName": "Alvo"}]
+    added = _common_patches(monkeypatch, tmp_path, missions=stationed)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == []   # no spy_dispatch — reused the stationed spy
+    assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
 def test_paused_does_nothing(monkeypatch, tmp_path):

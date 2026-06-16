@@ -308,6 +308,14 @@ def process_farm_targets(session, in_active_hours=True):
                     farm_update(tid, {"next_action": "spy"})  # can't attack → spy next tick
                 continue
 
+            # Reuse spies already stationed at the target (re-run the warehouse mission)
+            # instead of dispatching fresh ones — far faster and doesn't burn spies.
+            from espionage_manager import reexecute_stationed_spy
+            if reexecute_stationed_spy(tid, fast=True):
+                farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now, "last_spy_at": now})
+                logger.info("[farm] %s: re-execução nos espiões já estacionados", name)
+                continue
+
             origin = _pick_spy_origin(own_cities, spy_counts, t)
             if not origin:
                 logger.info("[farm] %s: sem cidade com espiões — nova tentativa em 1h", name)
@@ -335,7 +343,13 @@ def process_farm_targets(session, in_active_hours=True):
         if state == "SPYING":
             m = _latest_done_report(missions, tid, int(t.get("spy_dispatched_at", 0)) - 120)
             if not m:
-                if now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS:
+                from espionage_manager import latest_failed_after
+                if latest_failed_after(tid, int(t.get("spy_dispatched_at", 0))):
+                    # the (reused or fresh) spy was detected/gone — retry soon with a dispatch
+                    wait = random.randint(5, 15) * 60
+                    logger.info("[farm] %s: espião falhou — nova espionagem em %dmin", name, wait // 60)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait, "next_action": "spy"})
+                elif now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS:
                     logger.info("[farm] %s: sem relatório após 6h — a reagendar", name)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
                                       "next_action": "spy"})
