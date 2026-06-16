@@ -372,7 +372,12 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             except Exception:
                 pass
 
-        time.sleep(min(60, end_time - time.time()))
+        # The loop body (spy/farm/attack processing, HTTP) can run past end_time, making
+        # the remaining time negative — clamp so time.sleep never gets a negative value.
+        remaining = end_time - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(60, remaining))
 
 
 # ── Cost helpers ──────────────────────────────────────────────────────────────
