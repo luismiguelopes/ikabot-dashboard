@@ -176,6 +176,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     collect_building_costs(session, ids)
                 elif should_start_scan():
                     collect_shallow_scan(session)
+                else:
+                    try:
+                        from scan_collector import process_watchlist
+                        process_watchlist(session, in_active_hours=True)
+                    except Exception:
+                        logger.warning("[watchlist] falhou", exc_info=True)
 
             smart_sleep(last_full_cycle_time, next_full_jitter, session)
 

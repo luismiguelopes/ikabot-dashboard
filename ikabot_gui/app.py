@@ -1089,6 +1089,33 @@ def api_alert_settings_post():
     return jsonify({"status": "ok", "settings": s})
 
 
+WATCHLIST_SETTINGS_PATH = os.path.join(LOGS_DIR, "watchlist_settings.json")
+_DEFAULT_WATCHLIST = {"enabled": False, "intervalHours": 12}
+
+
+@app.route("/api/watchlist")
+def api_watchlist_get():
+    try:
+        with open(WATCHLIST_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_WATCHLIST.items():
+            s.setdefault(k, v)
+    except (FileNotFoundError, json.JSONDecodeError):
+        s = dict(_DEFAULT_WATCHLIST)
+    return jsonify(s)
+
+
+@app.route("/api/watchlist", methods=["POST"])
+def api_watchlist_post():
+    data = request.get_json(silent=True) or {}
+    s = {"enabled": bool(data.get("enabled", False)),
+         "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WATCHLIST_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return jsonify({"status": "ok", "settings": s})
+
+
 @app.route("/api/loot-log")
 def api_loot_log():
     if not _db:

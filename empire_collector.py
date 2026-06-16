@@ -485,6 +485,15 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
     if _mil_age > 8 * 3600:
         _collect_military_data(session)
 
+    # Per-ship transport capacity — lets the UI check ships vs known loot (F3)
+    try:
+        from ikabot.helpers.pedirInfo import getShipCapacity
+        ship_cap, _ = getShipCapacity(session)
+        if ship_cap and ship_cap > 0:
+            status_summary["shipCapacity"] = int(ship_cap)
+    except Exception:
+        pass
+
     with open(os.path.join(LOGS_DIR, "statusSummary.json"), "w") as f:
         json.dump(status_summary, f, indent=4)
 

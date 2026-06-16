@@ -350,3 +350,178 @@ def scan_next_island(session):
         return False
 
     return True
+
+
+# ── Watchlist: periodic re-scan of "alvo"-marked players' islands (F7) ─────────
+
+WATCHLIST_SETTINGS_PATH = os.path.join(LOGS_DIR, "watchlist_settings.json")
+WATCHLIST_STATE_PATH    = os.path.join(LOGS_DIR, "watchlist_state.json")
+_WORLD_SCAN_PATH        = os.path.join(LOGS_DIR, "world_scan.json")
+_DEFAULT_WATCHLIST = {"enabled": False, "intervalHours": 12}
+
+
+def get_watchlist_settings():
+    try:
+        with open(WATCHLIST_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_WATCHLIST.items():
+            s.setdefault(k, v)
+        return s
+    except (FileNotFoundError, json.JSONDecodeError):
+        return dict(_DEFAULT_WATCHLIST)
+
+
+def save_watchlist_settings(data):
+    s = {"enabled": bool(data.get("enabled", False)),
+         "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WATCHLIST_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return s
+
+
+def _scan_one_island(session, island_id, x, y, own_cities, resource_type=0):
+    """Scan a single island and return (island_entry, [player_entries]) or None.
+    Mirrors the per-island parse used by the full deep scan."""
+    try:
+        html = session.get("view=island&islandId=" + str(island_id))
+        island_data = getIsland(html)
+    except Exception as e:
+        logger.warning(lm("scan_island_error", id=island_id, err=e))
+        return None
+
+    nearest = min(own_cities, key=lambda c: _dist(x, y, c["x"], c["y"])) if own_cities else None
+    nearest_dist = _dist(x, y, nearest["x"], nearest["y"]) if nearest else 0
+    nearest_name = nearest["name"] if nearest else ""
+    cities_list = island_data.get("cities", [])
+    free_slots = sum(1 for c in cities_list if c.get("type") == "empty")
+    island_entry = {
+        "islandId":       str(island_id),
+        "islandName":     island_data.get("name", ""),
+        "x":              x, "y": y,
+        "resourceType":   resource_type,
+        "woodLevel":      island_data.get("resourceLevel", ""),
+        "luxuryLevel":    island_data.get("tradegoodLevel", ""),
+        "wonder":         island_data.get("wonderName", ""),
+        "wonderLevel":    island_data.get("wonderLevel", ""),
+        "freeSlots":      free_slots,
+        "totalSlots":     len(cities_list),
+        "hasOwnCity":     bool(island_data.get("isOwnCityOnIsland", False)),
+        "nearestOwnCity": nearest_name,
+        "distance":       round(nearest_dist, 1),
+    }
+    avatar_scores = island_data.get("avatarScores", {})
+    players = []
+    for city_slot in cities_list:
+        if city_slot.get("type") == "empty":
+            continue
+        state = city_slot.get("state", "")
+        if state not in ("inactive", "vacation"):
+            continue
+        owner_name = city_slot.get("ownerName", "")
+        if not owner_name:
+            continue
+        owner_id = str(city_slot.get("ownerId", city_slot.get("Id", "")))
+        sc = avatar_scores.get(owner_id, {})
+        players.append({
+            "playerId":   owner_id, "cityId": str(city_slot.get("id", "")),
+            "playerName": owner_name,
+            "allyTag":    city_slot.get("ownerAllyTag", city_slot.get("AllyTag", "")),
+            "state":      state, "cityName": city_slot.get("name", ""),
+            "islandId":   str(island_id), "islandName": island_data.get("name", ""),
+            "islandX":    x, "islandY": y,
+            "nearestOwnCity": nearest_name, "distance": round(nearest_dist, 1),
+            "scores": {
+                "building": sc.get("building_score_main", "0"),
+                "research": sc.get("research_score_main", "0"),
+                "army":     sc.get("army_score_main", "0"),
+                "trader":   sc.get("trader_score_secondary", "0"),
+                "rank":     sc.get("place", ""),
+            },
+        })
+    return island_entry, players
+
+
+def process_watchlist(session, in_active_hours=True):
+    """Every intervalHours, re-scan only the islands of players marked 'alvo' and refresh
+    their entries in world_scan.json — so reactivations / defence changes are caught
+    without the full weekly scan. Skips while a full scan is in progress."""
+    if not in_active_hours:
+        return
+    from empire_utils import is_paused
+    if is_paused():
+        return
+    settings = get_watchlist_settings()
+    if not settings.get("enabled"):
+        return
+    if os.path.exists(SCAN_CHECKPOINT_PATH):
+        return  # a full scan is running — don't interfere
+
+    interval = max(1, int(settings.get("intervalHours", 12))) * 3600
+    now = int(time.time())
+    try:
+        with open(WATCHLIST_STATE_PATH) as f:
+            last_run = int(json.load(f).get("lastRun", 0))
+    except (FileNotFoundError, json.JSONDecodeError):
+        last_run = 0
+    if now < last_run + interval:
+        return
+
+    def _save_state():
+        try:
+            with open(WATCHLIST_STATE_PATH, "w") as f:
+                json.dump({"lastRun": now}, f)
+        except Exception:
+            pass
+
+    try:
+        with open(_WORLD_SCAN_PATH) as f:
+            scan = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+
+    try:
+        from db_manager import get_all_marks
+        marks = get_all_marks()
+    except Exception:
+        marks = {}
+    alvo_coords = {(str(m.get("island_x")), str(m.get("island_y")))
+                   for m in marks.values() if m.get("status") == "alvo" and m.get("island_x")}
+    if not alvo_coords:
+        _save_state()
+        return
+
+    islands = scan.get("islands", [])
+    targets = [isl for isl in islands if (str(isl.get("x")), str(isl.get("y"))) in alvo_coords]
+    if not targets:
+        _save_state()
+        return
+
+    own_cities = scan.get("ownCities", [])
+    players    = scan.get("players", [])
+    updated = 0
+    first = True
+    for isl in targets:
+        if not first:
+            time.sleep(random.randint(15, 30))
+        first = False
+        res = _scan_one_island(session, isl["islandId"], isl["x"], isl["y"],
+                               own_cities, isl.get("resourceType", 0))
+        if not res:
+            continue
+        island_entry, isl_players = res
+        iid = str(isl["islandId"])
+        players  = [p for p in players if str(p.get("islandId")) != iid] + isl_players
+        islands  = [i for i in islands if str(i.get("islandId")) != iid] + [island_entry]
+        updated += 1
+
+    scan["players"] = players
+    scan["islands"] = islands
+    scan["lastUpdated"] = now
+    try:
+        with open(_WORLD_SCAN_PATH, "w") as f:
+            json.dump(scan, f, indent=2)
+    except Exception:
+        logger.warning("[watchlist] falha ao gravar world_scan.json", exc_info=True)
+    _save_state()
+    logger.info("[watchlist] %d ilha(s) de alvos re-escaneada(s)", updated)

@@ -137,6 +137,8 @@ export function DispatchTab() {
   const [farmArmySaved,  setFarmArmySaved]  = useState(false)
   const [logFilter,      setLogFilter]      = useState('')
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
+  const [shipCapacity,   setShipCapacity]   = useState<number | null>(null)
+  const [lootByCity,     setLootByCity]     = useState<Record<string, number>>({})
 
   // Form state
   const [originCityName, setOriginCityName] = useState('')
@@ -173,6 +175,20 @@ export function DispatchTab() {
     fetch('/api/data').then(r => r.json()).then((data: any) => {
       setAvailableShips(data?.statusSummary?.ships?.available ?? null)
       setTotalShips(data?.statusSummary?.ships?.total ?? null)
+      setShipCapacity(data?.statusSummary?.shipCapacity ?? null)
+    }).catch(() => {})
+
+    // Known warehouse loot per target city, from the latest DONE spy report (F3)
+    fetch('/api/espionage/missions').then(r => r.json()).then((d: any) => {
+      const map: Record<string, { ts: number; loot: number }> = {}
+      for (const m of d?.missions ?? []) {
+        if (m.state !== 'DONE' || !m.targetCityId || !m.result?.resources) continue
+        const loot = Object.values(m.result.resources as Record<string, number>).reduce((a, b) => a + b, 0)
+        const ts = m.result.reportedAt ?? m.executedAt ?? 0
+        const cur = map[String(m.targetCityId)]
+        if (!cur || ts >= cur.ts) map[String(m.targetCityId)] = { ts, loot }
+      }
+      setLootByCity(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v.loot])))
     }).catch(() => {})
 
     fetch('/api/attack-log?limit=100').then(r => r.json()).then((data: any) => {
@@ -537,6 +553,32 @@ export function DispatchTab() {
                     {t('dispatch_ships_over')}
                   </div>
                 )}
+                {/* F3: capacity vs the target's known warehouse loot */}
+                {(() => {
+                  if (!target || target.type !== 'enemy' || !shipCapacity) return null
+                  const loot = lootByCity[target.cityId] ?? 0
+                  if (loot <= 0) return null
+                  const capacity = transporters * shipCapacity
+                  const needed = Math.ceil(loot / shipCapacity)
+                  const ok = capacity >= loot
+                  return (
+                    <div className={`mt-1.5 flex items-center gap-2 text-xs rounded-lg px-2 py-1.5 ${ok ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-orange-700 bg-orange-50 border border-orange-200'}`}>
+                      <i className={`fa-solid ${ok ? 'fa-circle-check' : 'fa-triangle-exclamation'}`} />
+                      <span className="flex-1">
+                        {t('dispatch_cap_loot', { cap: fmt(capacity), loot: fmt(loot) })}
+                        {!ok && ` · ${t('dispatch_cap_need', { n: String(needed) })}`}
+                      </span>
+                      {!ok && (
+                        <button
+                          className="text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap"
+                          onClick={() => setTransporters(Math.min(totalShips ?? needed, needed))}
+                        >
+                          {t('dispatch_cap_fill')}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </div>

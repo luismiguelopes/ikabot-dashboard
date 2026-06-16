@@ -28,10 +28,11 @@ partida calculada já tiver passado.
 ⚠️ Estimativa — não considera bónus de velocidade (Poseidon, etc.); calibrar com
 os tempos reais do jogo se divergir.
 
-### F3. Validação de capacidade de saque
-Cruzar transporters seleccionados com o último relatório de espionagem do alvo:
-"50 navios = 25.000 de capacidade, mas o armazém tem 180.000 — faltam navios".
-Os dados já existem (spy_missions.json result.resources + capacidade por navio).
+### F3. Validação de capacidade de saque ✅ IMPLEMENTADO 2026-06-16
+No dispatch manual (army), painel que compara a capacidade dos transportes escolhidos
+com o saque conhecido do alvo (último relatório de espionagem): verde se chega, laranja
++ nº de navios necessário + botão "navios p/ saque" se ficar curto. ship_cap adicionado
+ao statusSummary; saque do alvo das missões DONE.
 
 ### F4. Farming de alvos (ciclo completo) ✅ IMPLEMENTADO 2026-06-13
 `farm_manager.py`: máquina de estados por alvo (SQLite `farm_targets`, schema v7)
@@ -92,10 +93,11 @@ chegaram). Latência: o "attack-watch" (`alert_settings.checkMinutes`, opt-in) r
 os movimentos de N em N min no smart_sleep — sem ele, os alertas só disparam no ciclo
 horário. UI: cartão "Alertas de combate" nas Settings. API: `GET/POST /api/alert-settings`.
 
-### F7. Watchlist de jogadores
-Re-scan periódico apenas das ilhas dos alvos marcados "alvo" (vs. world scan semanal
-completo): detectar reactivação de inactivos e mudanças de defesa. Reutiliza o
-scan_collector incremental com uma fila de ilhas restrita.
+### F7. Watchlist de jogadores ✅ IMPLEMENTADO 2026-06-16
+process_watchlist: a cada intervalHours re-escaneia só as ilhas dos alvos marcados
+"alvo" e refresca essas entradas no world_scan.json (reactivações/defesas), sem o scan
+semanal completo. Salta se um scan completo estiver a decorrer. Settings em
+Espionagem; API GET/POST /api/watchlist. Desligado por defeito.
 
 ## 💰 Economia
 

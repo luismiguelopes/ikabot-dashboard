@@ -592,7 +592,54 @@ function EspionagemTab() {
       </div>
 
       <AutoAttackSettingsCard />
+      <WatchlistCard />
     </div>
+  )
+}
+
+function WatchlistCard() {
+  const t = useT()
+  const [s, setS] = useState<{ enabled: boolean; intervalHours: number } | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { fetch('/api/watchlist').then(r => r.json()).then(setS).catch(() => {}) }, [])
+
+  const save = (next: typeof s) => {
+    if (!next) return
+    setS(next); setSaved(false)
+    fetch('/api/watchlist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
+  }
+
+  if (!s) return null
+  return (
+    <Card>
+      <div className="px-5 py-4">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+          <i className="fa-solid fa-binoculars text-indigo-500" /> {t('watchlist_title')}
+        </p>
+        <p className="text-xs text-slate-400 mb-3">{t('watchlist_hint')}</p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-600">{t('transport_enabled')}</span>
+            <button onClick={() => save({ ...s, enabled: !s.enabled })}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${s.enabled ? 'bg-indigo-600' : 'bg-slate-200'}`}>
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${s.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-slate-600">{t('watchlist_interval')}</span>
+            <input type="number" min={1} max={168} value={s.intervalHours}
+              onChange={e => setS({ ...s, intervalHours: Math.max(1, Number(e.target.value)) })}
+              onBlur={() => save(s)}
+              className="w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          {saved && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+        </div>
+      </div>
+    </Card>
   )
 }
 

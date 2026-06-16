@@ -17,6 +17,7 @@ export interface StatusSummary {
   housing: { space: number; citizens: number }
   gold: { total: number; production: number }
   wine_consumption: number
+  shipCapacity?: number
 }
 
 export type CityBuildings = Record<string, string | number>
