@@ -163,11 +163,15 @@ def _collect_movements(session, city_id):
                         except ValueError:
                             pass
                 if sum(loot) > 0:
+                    # On a returning plunder the game keeps origin = the launching (own)
+                    # city and target = the enemy for the whole round trip, only flipping
+                    # the direction. So the loot SOURCE is the target (enemy) and it is
+                    # arriving at origin (home) — not the other way around.
                     loot_returns.append({
                         "ts":         arrival_ts,
-                        "fromCity":   m["origin"].get("name", ""),
-                        "fromPlayer": m["origin"].get("avatarName", ""),
-                        "toCity":     m["target"].get("name", ""),
+                        "fromCity":   m["target"].get("name", ""),
+                        "fromPlayer": m["target"].get("avatarName", ""),
+                        "toCity":     m["origin"].get("name", ""),
                         "resources":  loot,
                         "returnKey":  "{}|{}|{}".format(entry["origin"], entry["destination"], arrival_ts),
                     })

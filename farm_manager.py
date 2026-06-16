@@ -107,6 +107,16 @@ def _latest_done_report(missions, target_city_id, since):
     return best
 
 
+def _free_ships(session):
+    """Live count of free transport ships — the farm must not launch a sea raid while
+    the previous raid's ships are still returning (would fail with type=11)."""
+    try:
+        from ikabot.helpers.naval import getAvailableShips
+        return int(getAvailableShips(session))
+    except Exception:
+        return 0
+
+
 def _real_return_eta(target):
     """Read the ACTUAL return time of our troops/fleet from movements.json (a returning
     own movement coming from the target's city/player). More accurate than the coordinate
@@ -278,6 +288,11 @@ def process_farm_targets(session, in_active_hours=True):
             # Direct attack (skip re-spy) for a known-safe target between scout rounds
             if (t.get("next_action") == "attack" and int(t.get("last_loot", 0)) > 0
                     and int(t.get("last_enemy_ships", 0)) == 0):
+                if _free_ships(session) < 1:
+                    wait = random.randint(5, 15) * 60
+                    farm_update(tid, {"next_run_at": now + wait})
+                    logger.info("[farm] %s: sem navios livres — ataque adiado %dmin", name, wait // 60)
+                    continue
                 res = _enqueue_attack(t, int(t["last_loot"]), 0)
                 if res:
                     return_at, transporters = res
@@ -341,6 +356,17 @@ def process_farm_targets(session, in_active_hours=True):
                 logger.info("[farm] %s: frota inimiga %d > máx %d — a reagendar", name, enemy_ships, max_ships)
                 farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
                                   "last_loot": loot, "next_action": "spy"})
+                continue
+
+            # Don't launch while the previous raid's ships are still returning — keep
+            # the fresh intel and retry directly in a few minutes once they're back.
+            if enemy_ships == 0 and _free_ships(session) < 1:
+                wait = random.randint(5, 15) * 60
+                farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                                  "last_loot": loot, "last_enemy_ships": enemy_ships,
+                                  "next_action": "attack"})
+                logger.info("[farm] %s: relatório pronto mas 0 navios — ataque adiado %dmin",
+                            name, wait // 60)
                 continue
 
             res = _enqueue_attack(t, loot, enemy_ships)

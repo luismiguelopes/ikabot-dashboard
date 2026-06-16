@@ -22,6 +22,10 @@ OWN_CITIES_PATH = os.path.join(LOGS_DIR, "own_cities.json")
 
 ATTACK_QUEUE = "attack"
 
+# _dispatch_attack outcome when the attack can't go out yet (no free ships) — not a
+# failure, so the queue reschedules it instead of counting a retry.
+_DEFER = "defer"
+
 
 def _attack_queue_items():
     try:
@@ -209,16 +213,23 @@ def _send_army_plunder(session, origin_id, target_id, island_id, units, transpor
     """Player pillage via sendArmyPlunderSea. deployArmy does NOT work here — it only
     stations troops in own/allied cities. Accepts unit IDs with or without the CSS
     's' prefix (military.json stores 's303', the game API expects '303').
-    Returns True on success (provideFeedback type=10)."""
+    Returns True on success, False on rejection, or _DEFER when there are no free ships
+    (the previous raid's transporters haven't returned yet)."""
     import ikabot.config as ikabot_config
 
     origin_id = str(origin_id)
+
+    # Sea pillage needs transporters; with none free the POST is doomed (type=11). Bail
+    # out before the form fetch so it can be retried once the ships are back.
+    capped = _cap_to_available_ships(transporters, session)
+    if int(transporters) > 0 and capped <= 0:
+        logger.info("[attack] sendArmyPlunderSea adiado — 0 navios livres (a regressar)")
+        return _DEFER
+
     _change_to_origin_city(session, ikabot_config, origin_id)
 
     # Upkeep values are mandatory — the server rejects the POST without them
     upkeep_map = _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id)
-
-    capped = _cap_to_available_ships(transporters, session)
 
     units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
                  for uid, cnt in units.items()}
@@ -443,6 +454,23 @@ def process_attack_queue(session, in_active_hours=True):
 
         ok = _dispatch_attack(session, item)
         dispatched += 1
+
+        # No free ships yet — not a failure; reschedule (no attack_log, no retry count).
+        # Capped so a permanently grounded fleet doesn't keep an item forever.
+        if ok is _DEFER:
+            deferrals = item.get("deferrals", 0) + 1
+            if deferrals > 12:
+                queue_remove(ATTACK_QUEUE, [item.get("id")])
+                logger.warning("[attack] %s adiado %d vezes (sem navios) — removido da fila",
+                               item.get("targetPlayerName"), deferrals)
+            else:
+                wait_min = random.randint(5, 15)
+                queue_add(ATTACK_QUEUE, dict(item, deferrals=deferrals,
+                          dispatchAfter=int(time.time()) + wait_min * 60))
+                logger.info("[attack] %s adiado (sem navios) — nova tentativa em %d min",
+                            item.get("targetPlayerName"), wait_min)
+            continue
+
         _log_attack_attempt(item, ok)
         if ok:
             queue_remove(ATTACK_QUEUE, [item.get("id")])
