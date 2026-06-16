@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useT, useLang, getLocale } from '../../i18n'
-import { exportCsv } from '../../utils'
+import { exportCsv, fmt } from '../../utils'
 import { RESOURCE_ICONS, RESOURCE_COLORS } from '../../constants'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
@@ -10,6 +10,15 @@ import { DispatchTab } from '../DispatchTab'
 import type { WorldScanData, WorldScanPlayer, WorldScanIsland, ScanStatus, OwnCity } from '../../types'
 
 interface CitySpyCounts { available: number | null; inDefense: number | null; inTraining: number | null; deployed: number | null }
+
+interface FarmTarget {
+  target_city_id: string; enabled: boolean; state: string; next_run_at: number
+  interval_hours: number; total_raids: number; last_loot: number; respy_every: number
+}
+interface LootStat {
+  from_player: string; raids: number; last_ts: number; total: number
+  wood: number; wine: number; marble: number; crystal: number; sulfur: number
+}
 
 interface SpyMissionResult { success: boolean; targetCityName: string | null; resources: Record<string, number> | null; troops?: Record<string, number> | null; reportedAt: number }
 interface SpyGarrisonResult { success?: boolean; targetCityName?: string | null; troops: Record<string, number> | null; reportedAt?: number; error?: string }
@@ -486,13 +495,26 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       .then(d => { if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal) }).catch(() => {})
   }, [])
 
-  // Farm membership — to show "add to farm" / "in farm" on ready targets
-  const [farmIds, setFarmIds] = useState<Set<string>>(new Set())
+  // Farm membership + per-target loot brought — for the unified target row (Phase 3)
+  const [farmIds,     setFarmIds]     = useState<Set<string>>(new Set())
+  const [farmByCity,  setFarmByCity]  = useState<Record<string, FarmTarget>>({})
+  const [lootByPlayer, setLootByPlayer] = useState<Record<string, LootStat>>({})
   const loadFarm = () => fetch('/api/farm').then(r => r.json())
-    .then((d: Array<{ target_city_id: string }>) => {
-      if (Array.isArray(d)) setFarmIds(new Set(d.map(f => String(f.target_city_id))))
+    .then((d: FarmTarget[]) => {
+      if (!Array.isArray(d)) return
+      setFarmIds(new Set(d.map(f => String(f.target_city_id))))
+      setFarmByCity(Object.fromEntries(d.map(f => [String(f.target_city_id), f])))
     }).catch(() => {})
-  useEffect(() => { loadFarm() }, [])
+  useEffect(() => {
+    loadFarm()
+    const loadLoot = () => fetch('/api/loot-stats').then(r => r.json())
+      .then((d: LootStat[]) => {
+        if (Array.isArray(d)) setLootByPlayer(Object.fromEntries(d.map(s => [(s.from_player || '').toLowerCase(), s])))
+      }).catch(() => {})
+    loadLoot()
+    const id = setInterval(() => { loadFarm(); loadLoot() }, 30000)
+    return () => clearInterval(id)
+  }, [])
 
   async function handleAddFarm(p: EnrichedPlayer) {
     if (!p.cityId) return
@@ -508,6 +530,15 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       setToast({ msg: `${t('farm_add')}: ${p.cityName}`, ok: true })
       setTimeout(() => setToast(null), 4000)
     }
+    loadFarm()
+  }
+
+  async function farmAction(cityId: string, body: Record<string, unknown>, remove = false) {
+    await fetch(remove ? '/api/farm/remove' : '/api/farm/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetCityId: cityId, ...body }),
+    }).catch(() => {})
+    loadFarm()
   }
 
   const latestMissionByCityId = useMemo(() => {
@@ -690,7 +721,21 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                       isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100 hover:bg-slate-50'
                     } ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}>
                       <Td>
-                        <MissionStatePill priority={p.priority} mission={p.mission} wave={p.wave} />
+                        <div className="flex flex-col gap-1 items-start">
+                          <MissionStatePill priority={p.priority} mission={p.mission} wave={p.wave} />
+                          {(() => {
+                            const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
+                            if (!f || !f.enabled) return null
+                            const fc = f.state === 'ATTACKING' ? 'bg-red-100 text-red-600'
+                              : f.state === 'SPYING' ? 'bg-blue-100 text-blue-600' : 'bg-amber-100 text-amber-700'
+                            return (
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${fc}`}>
+                                <i className="fa-solid fa-seedling text-[8px]" />
+                                {t(`farm_state_${f.state}`)}
+                              </span>
+                            )
+                          })()}
+                        </div>
                       </Td>
                       <Td>
                         <div className="font-medium text-slate-700 text-sm">
@@ -709,6 +754,15 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                         {p.allyTag && (
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
                         )}
+                        {(() => {
+                          const ls = lootByPlayer[(p.playerName || '').toLowerCase()]
+                          if (!ls || ls.total <= 0) return null
+                          return (
+                            <div className="text-[10px] text-amber-600 mt-0.5" title={t('farm_loot_brought')}>
+                              <i className="fa-solid fa-coins mr-1" />{fmt(ls.total)} · {ls.raids} {t('loot_raids')}
+                            </div>
+                          )
+                        })()}
                       </Td>
                       <Td className="text-center">
                         {p.hasTroops === null
@@ -915,6 +969,66 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                                 })()}
                               </div>
                             )}
+
+                            {/* Real loot brought from this player (F1.b) */}
+                            {(() => {
+                              const ls = lootByPlayer[(p.playerName || '').toLowerCase()]
+                              if (!ls || ls.total <= 0) return null
+                              const vals = [ls.wood, ls.wine, ls.marble, ls.crystal, ls.sulfur]
+                              const icons = ['fa-tree', 'fa-wine-bottle', 'fa-mountain', 'fa-gem', 'fa-flask']
+                              const colors = ['text-green-500', 'text-red-400', 'text-slate-400', 'text-cyan-400', 'text-yellow-400']
+                              return (
+                                <div className="bg-white rounded-lg border border-amber-200 px-4 py-3">
+                                  <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
+                                    <i className="fa-solid fa-coins" /> {t('farm_loot_brought')}
+                                  </p>
+                                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                                    {vals.map((v, i) => v > 0 && (
+                                      <span key={i}><i className={`fa-solid ${icons[i]} ${colors[i]} mr-1`} />{fmt(v)}</span>
+                                    ))}
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 mt-1.5">
+                                    {t('loot_total')}: <span className="font-semibold text-amber-600">{fmt(ls.total)}</span>
+                                    {' · '}{ls.raids} {t('loot_raids')}
+                                    {' · '}{t('loot_last')} {new Date(ls.last_ts * 1000).toLocaleString()}
+                                  </p>
+                                </div>
+                              )
+                            })()}
+
+                            {/* Farm status & controls (if this target is farmed) */}
+                            {(() => {
+                              const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
+                              if (!f) return null
+                              const fc = f.state === 'ATTACKING' ? 'text-red-600'
+                                : f.state === 'SPYING' ? 'text-blue-600' : 'text-amber-700'
+                              return (
+                                <div className="bg-white rounded-lg border border-indigo-200 px-4 py-3 flex items-center gap-3 flex-wrap">
+                                  <span className="text-xs font-semibold text-indigo-700 flex items-center gap-1.5">
+                                    <i className="fa-solid fa-seedling" /> {t('farm_title')}
+                                  </span>
+                                  <span className={`text-xs font-medium ${fc}`}>{t(`farm_state_${f.state}`)}</span>
+                                  <span className="text-[11px] text-slate-400">
+                                    {t('farm_interval', { n: String(f.interval_hours) })} · {t('farm_raids')}: {f.total_raids}
+                                  </span>
+                                  <div className="ml-auto flex items-center gap-3">
+                                    <button onClick={() => farmAction(String(p.cityId), { runNow: true })}
+                                            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium" title={t('farm_runnow')}>
+                                      <i className="fa-solid fa-bolt mr-1" />{t('farm_runnow')}
+                                    </button>
+                                    <button onClick={() => farmAction(String(p.cityId), { enabled: !f.enabled })}
+                                            className="text-xs text-slate-500 hover:text-slate-700"
+                                            title={f.enabled ? t('pause_pause') : t('pause_resume')}>
+                                      <i className={`fa-solid ${f.enabled ? 'fa-pause' : 'fa-play'}`} />
+                                    </button>
+                                    <button onClick={() => farmAction(String(p.cityId), {}, true)}
+                                            className="text-xs text-red-400 hover:text-red-600" title={t('farm_remove')}>
+                                      <i className="fa-solid fa-trash" />
+                                    </button>
+                                  </div>
+                                </div>
+                              )
+                            })()}
 
                             {/* Manual attack + add-to-farm (when spied and ready) */}
                             <div className="flex justify-end items-center gap-2 pt-1">
