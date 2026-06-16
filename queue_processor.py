@@ -479,8 +479,6 @@ def _calc_city_reserved(city_name, queues, empire, costs_cache):
 
 # ── Transport dispatch ────────────────────────────────────────────────────────
 
-_FREIGHTER_THRESHOLD_WAVES = 8  # use freighters only when total need exceeds this many transporter ship-loads
-
 
 def _dispatch_transport(session, origin_city_id, dest_city_id, island_id, ships, send_list, use_freighters=False):
     """Fire one transport dispatch. Returns True on server success (type=10), False otherwise."""
@@ -574,8 +572,8 @@ def _build_send_list(surplus, remaining, ship_cap, ships_available):
 def _try_transport(session, city_name, city_id, city_data, next_item, target_b, queues, name_to_id, transport_errors=None):
     """Dispatch missing resources from surplus cities toward city_name.
     One bundled fleet per source city (all resources in one dispatch).
-    Freighters used as a fallback only when total need is very large.
-    Returns True if at least one transport was successfully dispatched."""
+    Trade ships go first (faster); freighters then carry any remaining need — including
+    when no trade ships are free. Returns True if at least one transport was dispatched."""
     from ikabot.helpers.naval import getAvailableShips, getAvailableFreighters
     from ikabot.helpers.pedirInfo import getShipCapacity
 
@@ -623,13 +621,9 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         logger.info(lm("queue_transport_waiting", city=city_name))
         return False
 
+    # No early bail when trade ships are 0 — freighters can still carry the load below.
     ships_available = getAvailableShips(session)
-    if ships_available == 0:
-        logger.warning(lm("queue_no_ships", city=city_name))
-        return False
-
     ship_cap, freighter_cap = getShipCapacity(session)
-    total_need = sum(net_missing)
 
     all_resources = _load_resources_json()
     empire = _load_empire_json()
@@ -702,9 +696,10 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                 pass
             logger.warning(lm("queue_transport_failed", city=city_name, origin=src_name))
 
-    # ── Freighter pass: only when total need is very large ────────────────────
-    # Skip if total need is small — transporter waves are faster (8 min vs 2h40m)
-    if total_need > ship_cap * _FREIGHTER_THRESHOLD_WAVES and sum(remaining) > 0:
+    # ── Freighter pass: fill whatever the (fast) trade ships couldn't carry ────
+    # Trade ships go first (faster); freighters then pick up the remaining need —
+    # including when no trade ships were free at all, instead of waiting a whole cycle.
+    if sum(remaining) > 0:
         try:
             freighters_available = getAvailableFreighters(session)
         except Exception:
