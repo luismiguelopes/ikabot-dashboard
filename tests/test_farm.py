@@ -95,6 +95,76 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     return added
 
 
+# ── pure queue (prioritise by loot/hour, drain one, then disable) ───────────────
+
+def test_round_trip_and_priority():
+    # real troop time known → round trip = ×2; loot/sec ranks targets
+    rich_near = {"last_loot": 400000, "last_troop_journey": 2000}   # 400k / 4000s
+    poor_far  = {"last_loot": 400000, "last_troop_journey": 8000}   # 400k / 16000s
+    assert fm._round_trip_secs(rich_near) == 4000
+    assert fm._priority_score(rich_near) > fm._priority_score(poor_far)
+    # no journey yet → default round trip; no loot → score 0
+    assert fm._round_trip_secs({}) == fm._DEFAULT_ROUND_TRIP
+    assert fm._priority_score({"last_loot": 0}) == 0
+
+
+def test_queue_head_picks_best_loot_per_hour():
+    a = {"target_city_id": "1", "state": "IDLE", "last_loot": 100000, "last_troop_journey": 2000}
+    b = {"target_city_id": "2", "state": "IDLE", "last_loot": 500000, "last_troop_journey": 2000}
+    c = {"target_city_id": "3", "state": "IDLE", "last_loot": 90000,  "last_troop_journey": 2000}
+    assert fm._queue_head([a, b, c])["target_city_id"] == "2"
+
+
+def test_queue_head_prefers_active_target():
+    a = {"target_city_id": "1", "state": "IDLE", "last_loot": 999999, "last_troop_journey": 2000}
+    b = {"target_city_id": "2", "state": "ATTACKING", "last_loot": 1, "last_troop_journey": 2000}
+    # b is mid-cycle (ships committed) → it stays the head even with lower priority
+    assert fm._queue_head([a, b])["target_city_id"] == "2"
+
+
+def test_queue_processes_only_head(monkeypatch, tmp_path):
+    """Two IDLE targets due now: only the higher loot/hour one is worked this round."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pobre", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_add({"targetCityId": "200", "targetCityName": "Rico", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("100", {"next_run_at": 0, "last_loot": 100000, "last_troop_journey": 2000})
+    db_manager.farm_update("200", {"next_run_at": 0, "last_loot": 500000, "last_troop_journey": 2000})
+    added = _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    # only the rich target was scouted; the poor one stays IDLE, untouched
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["targetCityId"] == "200"
+    assert db_manager.farm_get("200")["state"] == "SPYING"
+    assert db_manager.farm_get("100")["state"] == "IDLE"
+
+
+def test_drained_target_is_disabled(monkeypatch, tmp_path):
+    """A ready report below min_loot disables the target for good (and would alert)."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 50000})
+    now = int(time.time())
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - 60})
+    report = [{"state": "DONE", "targetCityId": "100", "targetCityName": "Alvo",
+               "result": {"resources": {"wood": 10000}}, "garrisonResult": {"troops": {}},
+               "executedAt": now}]
+    added = _common_patches(monkeypatch, tmp_path, missions=report)
+    drained = []
+    import telegram_notifier as tg
+    tg.notify_farm_drained = lambda *a, **k: drained.append(a)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["enabled"] is False          # disabled for good
+    assert [q for q, _ in added] == []    # no attack
+    assert len(drained) == 1              # alerted
+
+
 def test_idle_enqueues_spy_when_due(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
@@ -224,8 +294,9 @@ def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
     assert t["last_transporters"] >= 1
 
 
-def test_direct_attack_without_respy(monkeypatch, tmp_path):
-    """IDLE with next_action=attack and safe intel attacks directly, no spy enqueued."""
+def test_attack_state_respies_not_direct(monkeypatch, tmp_path):
+    """No 'direct attack with last intel' shortcut anymore: an IDLE target due to attack
+    re-spies first, so it never commits troops on stale intel (e.g. a fleet that returned)."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000})
@@ -235,10 +306,8 @@ def test_direct_attack_without_respy(monkeypatch, tmp_path):
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
-    assert [q for q, _ in added] == ["attack"]   # no spy_dispatch
-    t = db_manager.farm_get("100")
-    assert t["state"] == "ATTACKING"
-    assert t["raids_since_spy"] == 2              # incremented
+    assert [q for q, _ in added] == ["spy_dispatch"]   # re-spied, did NOT attack directly
+    assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
 def test_return_triggers_respy_when_due(monkeypatch, tmp_path):
@@ -319,15 +388,17 @@ def test_farm_reuses_stationed_spy_instead_of_dispatch(monkeypatch, tmp_path):
 
 
 def test_no_ships_schedules_for_real_return(monkeypatch, tmp_path):
-    """With 0 free ships, the next attempt is scheduled for the fleet's real return time
-    (from movements), not a blind random delay."""
+    """A ready report with 0 free ships schedules the next attempt for the fleet's real
+    return (from movements), not a blind random delay (SPYING-eval path)."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Δ The Rock Δ",
                          "targetPlayer": "Cap Almighty", "islandX": 40, "islandY": 50, "islandId": "7"})
     now = int(time.time())
-    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "next_action": "attack",
-                                   "last_loot": 80000, "last_enemy_ships": 0})
-    added = _common_patches(monkeypatch, tmp_path)
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - 60})
+    report = [{"state": "DONE", "targetCityId": "100", "targetCityName": "Δ The Rock Δ",
+               "result": {"resources": {"wood": 80000}}, "garrisonResult": {"troops": {}},
+               "executedAt": now}]
+    added = _common_patches(monkeypatch, tmp_path, missions=report)
     monkeypatch.setattr(fm, "_free_ships", lambda s: 0)               # ships out
     import empire_collector as ec
     monkeypatch.setattr(ec, "refresh_movements", lambda *a, **k: None)  # no real HTTP
@@ -339,7 +410,7 @@ def test_no_ships_schedules_for_real_return(monkeypatch, tmp_path):
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
-    assert [q for q, _ in added] == []     # no attack enqueued
+    assert [q for q, _ in added] == []     # no attack enqueued (no ships)
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE"
     # scheduled around the real arrival (+ up to 90s buffer), not a 5-15min guess

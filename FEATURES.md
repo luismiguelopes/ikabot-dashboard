@@ -65,17 +65,99 @@ tier 2). Espera o regresso estimado e repete a cada intervalHours.
     timeout de espião, sem origem).
 ⚠️ Por validar in-game o ciclo completo.
 
-### F4.b — Timing de navios que fogem/dispersam (POR FAZER)
-Caso real: alguns alvos têm navios que, ao serem atacados, **fogem e dispersam**, e
-**regressam à cidade passados X minutos**. Técnica manual do jogador:
-1. lançar navios (combatem/afugentam a frota inimiga);
-2. minutos depois lançar tropas, que chegam quando o porto está limpo e pilham;
-3. quando a tropa regressa a casa, espiar pelos **movimentos de tropas/frotas** se a
-   próxima vaga de tropas chega à cidade-alvo **antes** de os navios inimigos voltarem —
-   se chegar depois, é preciso relançar navios primeiro.
-Lógica adicional necessária: ler os movimentos do alvo (ETA de regresso da frota inimiga
-dispersada), modelar a janela "porto limpo", e sincronizar o lançamento das vagas de
-tropas/navios com essa janela. Camada de timing sobre o F4 — desenho próprio.
+### F4.c Prioridade do farm sobre a logística interna ✅ IMPLEMENTADO 2026-06-17
+Os barcos de comércio são o MESMO pool usado para pilhar e para mover recursos entre
+cidades próprias. A logística interna (consolidação, vinho, transportes de construção)
+varria a frota e esfomeava o farm — que é quem gera recursos e cujos ataques são
+time-sensitive. Solução em duas camadas:
+- **Reserva de navios** (`farm_manager.farm_ship_reserve`): conta os ataques de pilhagem
+  já em fila + os alvos em farm cujo próximo ataque fica due dentro do horizonte
+  (`reserveHorizonMin`, default 45 min; alvos já em ATTACKING não contam — os navios já
+  saíram). A logística interna só pode usar `disponíveis − reserva` barcos de comércio e
+  recorre a **cargueiros** para o resto (`apply_ship_reserve`). Aplicada em
+  `_try_transport` (construção), `process_consolidation` e `process_wine_balancer`
+  (este último com **bypass** quando uma cidade está com vinho crítico <6h). Garante que
+  o farm nunca fica sem navios, independentemente da ordem dos ciclos.
+- **Reordenação**: no ciclo completo (`empireFunction`) e no `smart_sleep`, a receita
+  (espionagem → ataques → farm) corre ANTES da logística interna.
+- UI: toggle "Reservar navios para o farm" + horizonte no separador Farm. Settings em
+  `farm_settings.json` (`shipReserveEnabled`, `reserveHorizonMin`); o POST `/api/farm/army`
+  passou a fazer merge (não apaga as chaves da reserva). Testes em `test_farm_reserve.py`.
+
+### F4.d Fila pura: drenar um alvo de cada vez ✅ IMPLEMENTADO 2026-06-18
+Os logs mostraram o farm a tentar pilhar vários alvos em paralelo a partir de uma só
+cidade (Baphomet, 337 barcos): um alvo saturava a frota toda e os outros ficavam em loop
+"relatório pronto mas 0 navios" a re-espiar de 5-15min sem nunca atacar (desperdício +
+padrão robótico). Substituído por uma **fila pura** (`farm_manager`):
+- **Um alvo activo de cada vez** (`_queue_head`): o que está a meio (SPYING/ATTACKING) ou,
+  se todos IDLE, o de maior **saque/hora** (`_priority_score = last_loot / round_trip`;
+  `round_trip` = `last_troop_journey×2` real quando conhecido, senão 4h). Os restantes
+  esperam — não espiam nem atacam → acaba o loop e a competição por navios.
+- **Prioridade dinâmica**: re-ordena à medida que novas espionagens actualizam `last_loot`;
+  não espera por espiar todos (alvos sem intel entram por ordem e são espiados quando chegam
+  à cabeça — a state machine espia sempre antes de comprometer tropas).
+- **Drenar até `min_loot`**: quando o saque espiado cai abaixo do mínimo, o alvo é
+  **desactivado de vez** (`enabled=0`) + alerta Telegram (`notify_farm_drained`), e a fila
+  avança para o próximo. `has_due_farm`/`next_farm_eta` passaram a olhar só a cabeça da fila.
+⚠️ Por validar in-game.
+
+### F4.b.2 Frota que foge: bloqueio→tropas com tempos reais ✅ IMPLEMENTADO 2026-06-17
+Para alvos cuja frota foge ao ser bloqueada (lanchas, reparadores — não combatem) e volta
+horas depois. Validado com dados reais in-game (dev tools) do The Rock:
+- **Reconhecimento de frota** refeito (`_NAVAL_UNIT_NAMES`) com os 11 navios PT, chaves
+  sem colisão com tropas terrestres (Aríete vs Aríete a vapor, Catapulta vs Barco Catapulta,
+  Gigante a Vapor vs …), match insensível a acentos. Tabela em `test_naval_units.py`.
+- **Tempos de viagem reais** lidos dos formulários (que já buscamos): `fetch_fleet_journey`
+  (max `unitJourneyTime` dos navios enviados, do form de bloqueio) e `fetch_troop_journey`
+  (`transportJourneyTime` do form de pilhagem). Substitui a estimativa ⅔. Parser
+  `_parse_journey_times` em `test_f4b_parsers.py`. Ex. real: frota 12616s vs tropas 6729s.
+- **Decisão por TIPO de navio** (`_classify_enemy_fleet`): 0 navios → só tropas; só navios
+  que fogem (lancha rápida / reparador) → bloqueio+tropas; qualquer navio de **combate**
+  (acima de `max_enemy_ships`, def. 0) → **salta o alvo + alerta Telegram** (`notify_farm_blocked`).
+  Substitui a antiga porta por contagem.
+- **Loadout de frota de combate** configurável (`get_farm_fleet`, farm_settings "fleet"):
+  ex. 10 arietes a vapor enviados no bloqueio em vez da frota toda; vazio → frota inteira.
+  Editor na UI a par do loadout de tropas.
+- **Cronometragem das 2 vagas**: bloqueio sai já, tropas atrasadas (tempos reais) para
+  aterrarem `fleet_lead_min` (def. 5) depois da frota — porto limpo.
+- **Decisão da 2ª vaga sem desperdício**: o bot guarda quando a frota afugentada volta
+  (`enemy_return_at = chegada do bloqueio + disperse_min`, def. 240 min). Enquanto o porto
+  está limpo, as rondas seguintes vão **só com tropas**; quando a frota estiver de volta,
+  manda bloqueio primeiro outra vez. Alvos de frota (`is_fleet_target`) re-espiam **sempre**
+  (garrison fresco a cada ronda decide). Schema v11.
+- **Parser do relatório de movimentos** (mission 7 = espiar movimentos): `parse_fleet_movements`
+  + `enemy_fleet_clean_window_secs` (linha com "Voltar" → janela de porto limpo, TZ-safe).
+  Pronto para auto-calibrar o `disperse_min` no futuro; por agora o valor é configurável.
+- UI: chip "frota" + campos `tropas após frota` e `porto limpo` por alvo; API `disperseMin`.
+⚠️ Lógica nova por validar in-game (servidor estava em manutenção). Requer `max enemy ships`
+≥ tamanho da frota no alvo para o farm engajar em vez de saltar.
+
+### F4.b Timing de duas vagas (navios → tropas no porto limpo) ✅ IMPLEMENTADO 2026-06-17
+Caso real: alguns alvos têm navios que, ao serem atacados, fogem e dispersam, regressando
+passados X minutos. Técnica manual: 1) lançar a frota (afugenta a inimiga); 2) minutos
+depois lançar tropas, que chegam com o porto limpo. Implementado em `_enqueue_attack`
+(schema v9, `fleet_lead_min`):
+- A frota de bloqueio parte **já** e chega a `now + fleet_travel`. As tropas (transportes,
+  ~⅔ do tempo da frota — mais rápidas) são atrasadas de forma **dependente da distância**
+  para **aterrarem `fleet_lead_min` depois da frota** (janela de porto limpo), nunca antes.
+  Substitui o antigo `battle_delay` fixo (30-120 min) que ignorava a distância e podia
+  fazer as tropas chegarem primeiro (porto defendido) ou tarde demais.
+- A decisão "preciso de relançar navios?" em cada ronda resolve-se por **re-espionagem**:
+  alvos que mostraram frota forçam sempre re-scout (`last_enemy_ships > 0`), pelo que a
+  vaga seguinte só vai com tropas se o intel fresco confirmar o porto vazio. Não dependemos
+  de ver os movimentos da frota inimiga (a API não os expõe) — usamos intel observado.
+- `fleet_lead_min` editável por alvo na UI (default 5). API: `fleetLeadMin` em add/update.
+
+### F4.c Re-espionagem em pipeline (espiar durante o regresso) ✅ IMPLEMENTADO 2026-06-17
+Antes, uma ronda de re-espionagem era sequencial: tropas regressam → espera → despacha
+espião → espera relatório → ataca. Agora (schema v10, `respy_launched_at`): quando a ronda
+seguinte precisa de re-scout, o espião é lançado **enquanto as tropas ainda regressam** —
+os espiões usam o esconderijo, não navios, por isso não há conflito com a reserva. Disparado
+~5 min antes do desembarque (`_EARLY_RESPY_LEAD`) para o relatório refletir o armazém
+re-acumulado; ao chegarem as tropas o estado passa directo para SPYING (avalia e ataca),
+saltando o backoff IDLE e um segundo scout. `next_farm_eta`/`has_due_farm` acordam a tempo.
+Reutiliza espiões estacionados primeiro (`reexecute_stationed_spy`). Kill switch
+`earlyRespyEnabled` (default on) + toggle na UI. Testes em `test_farm_respy.py`.
 
 ### F5. Notificação de regresso com saque ✅ IMPLEMENTADO 2026-06-15
 Telegram quando uma frota própria regressa com saque. Reutiliza o F1.b: `log_loot`

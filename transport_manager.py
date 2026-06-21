@@ -35,6 +35,8 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "shipType":      "transporters",  # transporters | freighters | both
 }
 
+_WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserve
+
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
 _DEFAULT_WINE_SETTINGS = {
     "enabled":        False,
@@ -302,6 +304,15 @@ def process_consolidation(session, in_active_hours=True):
         logger.warning("[consolidate] não foi possível obter navios — a saltar")
         return
 
+    # Consolidation is pure housekeeping — yield trade ships to any imminent farm raid.
+    # (shipType "freighters"/"both" is unaffected; the freighter pass still runs.)
+    if use_trans:
+        try:
+            from farm_manager import apply_ship_reserve
+            trans_avail = apply_ship_reserve(trans_avail, "consolidate")
+        except Exception:
+            pass
+
     min_send = int(settings.get("minSendTotal", 1000))
     try:
         with open(OWN_CITIES_PATH) as f:
@@ -456,6 +467,18 @@ def process_wine_balancer(session, in_active_hours=True):
         return
     if ships_available <= 0 or ship_cap <= 0:
         return
+
+    # Yield trade ships to the farm — EXCEPT when a city is critically low on wine, since
+    # losing population to a wine-out is worse than a delayed raid.
+    critical = any(0 < ro < _WINE_CRITICAL_SECS for _, ro, _ in needy)
+    if not critical:
+        try:
+            from farm_manager import apply_ship_reserve
+            ships_available = apply_ship_reserve(ships_available, "wine")
+        except Exception:
+            pass
+        if ships_available <= 0:
+            return
 
     first = True
     for dest_name, runs_out, deficit in needy:

@@ -141,19 +141,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     logger.info(lm("queue_movements_refresh"))
                     refresh_movements(session, ids[0])
 
-            # ── Scheduled transports + consolidation (only during active hours) ──
-            if in_scan_hours:
-                try:
-                    from transport_manager import (
-                        process_transport_queue, process_consolidation, process_wine_balancer,
-                    )
-                    process_transport_queue(session, in_active_hours=True)
-                    process_consolidation(session, in_active_hours=True)
-                    process_wine_balancer(session, in_active_hours=True)
-                except Exception:
-                    logger.warning("[transport] ciclo de transportes falhou", exc_info=True)
-
-            # ── Espionage cycle (only during active hours) ───────────────────
+            # ── Espionage / attacks / farm (income — first claim on trade ships) ──
+            # Runs BEFORE internal logistics so the farm reserves its ships before
+            # consolidation/wine/transports get a turn (which now yield to the reserve).
             if in_scan_hours:
                 try:
                     from espionage_manager import fetch_spy_counts, process_spy_cycle
@@ -169,6 +159,18 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     process_farm_targets(session, in_active_hours=in_scan_hours)
                 except Exception:
                     logger.warning("[espionage] spy cycle falhou", exc_info=True)
+
+            # ── Scheduled transports + consolidation (yield trade ships to the farm) ──
+            if in_scan_hours:
+                try:
+                    from transport_manager import (
+                        process_transport_queue, process_consolidation, process_wine_balancer,
+                    )
+                    process_transport_queue(session, in_active_hours=True)
+                    process_consolidation(session, in_active_hours=True)
+                    process_wine_balancer(session, in_active_hours=True)
+                except Exception:
+                    logger.warning("[transport] ciclo de transportes falhou", exc_info=True)
 
             # ── Background scans (only during active hours) ───────────────────
             if in_scan_hours:

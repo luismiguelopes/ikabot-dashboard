@@ -14,6 +14,7 @@ import math
 import os
 import random
 import time
+import unicodedata
 import uuid
 
 from empire_utils import LOGS_DIR, logger
@@ -52,6 +53,67 @@ def has_due_attacks():
         return False
 
 
+
+
+def _parse_journey_times(form_raw):
+    """Parse real travel times out of a blockade/plunder form response (F4.b).
+
+    The form's JS exposes `new missionController(freeTrans, capacity, transportJourneyTime, …)`
+    and, per unit, `…sliders["slider_<id>"] … s.unitJourneyTime = <secs>`. All values are
+    one-way seconds. Returns (transport_journey_secs|None, {unit_id: journey_secs}).
+    Robust to the AJAX escaping (\\" and \\n) since it keys off digits, not quotes."""
+    import re
+    transport = None
+    m = re.search(r'missionController\((?:\D*?\d+){2}\D*?(\d+)', form_raw)
+    if m:
+        transport = int(m.group(1))
+    units = {}
+    for blk in re.split(r'create_slider', form_raw)[1:]:
+        sid = re.search(r'slider_(\d+)', blk)
+        jt  = re.search(r'unitJourneyTime\s*=\s*(\d+)', blk)
+        if sid and jt:
+            units[sid.group(1)] = int(jt.group(1))
+    return transport, units
+
+
+def _fetch_form_raw(session, ikabot_config, view, origin_id, target_id):
+    """POST a mission form (plunder/blockade) and return the raw response, or '' on error."""
+    try:
+        raw = session.post(params={
+            "view":              view,
+            "isMission":         "1",
+            "destinationCityId": str(target_id),
+            "backgroundView":    "city",
+            "currentCityId":     str(origin_id),
+            "actionRequest":     ikabot_config.actionRequest,
+            "ajax":              1,
+        })
+        time.sleep(random.randint(2, 5))
+        return raw or ""
+    except Exception as e:
+        logger.warning("[attack] fetch form view=%s falhou: %s", view, e)
+        return ""
+
+
+def fetch_fleet_journey(session, ikabot_config, origin_id, target_id, fleet_unit_ids=None):
+    """Real one-way travel time (secs) of a blockade fleet from origin to target, read from
+    the blockade form. With fleet_unit_ids, returns the max journey among those ships (the
+    slowest one sets the pace); else the max over all ships. None if it can't be read."""
+    _t, units = _parse_journey_times(_fetch_form_raw(session, ikabot_config, "blockade", origin_id, target_id))
+    if not units:
+        return None
+    ids = [str(u[1:] if str(u).startswith("s") else u) for u in (fleet_unit_ids or [])]
+    relevant = [units[i] for i in ids if i in units] or list(units.values())
+    return max(relevant) if relevant else None
+
+
+def fetch_troop_journey(session, ikabot_config, origin_id, target_id):
+    """Real one-way travel time (secs) of a sea pillage (troops on trade ships) from origin
+    to target, read from the plunder form's transportJourneyTime. None if unreadable."""
+    transport, units = _parse_journey_times(_fetch_form_raw(session, ikabot_config, "plunder", origin_id, target_id))
+    if transport:
+        return transport
+    return max(units.values()) if units else None
 
 
 def _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id):
@@ -511,11 +573,33 @@ AUTO_ATTACK_WAVES_PATH    = os.path.join(LOGS_DIR, "auto_attack_waves.json")
 AUTO_ATTACK_SETTINGS_PATH = os.path.join(LOGS_DIR, "auto_attack_settings.json")
 MILITARY_JSON_PATH        = os.path.join(LOGS_DIR, "military.json")
 
+# Naval (fleet) unit name keywords, accent-stripped lowercase. A garrison spy report
+# returns ARMY and FLEET units in one flat dict, and several names collide between the
+# two arms (land Aríete vs naval Aríete a vapor; land Catapulta/Morteiro vs naval Barco
+# Catapulta/Morteiro; land Gigante a Vapor vs naval Aríete a vapor; land Balão-bombardeiro
+# vs naval Porta-balões). Each keyword below is chosen to match ONLY its naval unit and
+# never a land unit — e.g. "ariete a vapor" (not "ariete"), "barco catapulta" (not
+# "catapulta"), "porta-bal" (not "balao"). Matching is substring over the accent-stripped
+# name (see _strip_accents), so these stay robust to accent/encoding differences.
 _NAVAL_UNIT_NAMES = {
-    "navio de guerra", "steam giant", "navio a vapor", "ram ship", "galley",
-    "trireme", "mortar ship", "balloon ship", "catapult ship",
-    "náu de guerra", "navios de guerra",
+    "chamas",          # Lança-Chamas
+    "ariete a vapor",  # Aríete a vapor   (NOT "ariete" → land Aríete)
+    "trirreme",        # Trirreme
+    "balista",         # Barco Balista
+    "barco catapulta", # Barco Catapulta  (NOT "catapulta" → land Catapulta)
+    "barco morteiro",  # Barco Morteiro   (NOT "morteiro" → land Morteiro)
+    "foguetes",        # Lança-foguetes
+    "submergivel",     # Submergível
+    "lancha",          # Lancha rápida    (flees — non-combat front line)
+    "porta-bal",       # Porta-balões     (NOT "balao" → land Balão-bombardeiro)
+    "reparador",       # Reparador        (flees — support)
 }
+
+
+def _strip_accents(s):
+    """Lowercase and drop diacritics so naval-name matching is accent/encoding robust."""
+    return ''.join(c for c in unicodedata.normalize('NFD', s.lower())
+                   if unicodedata.category(c) != 'Mn')
 
 _DEFAULT_AUTO_ATTACK_SETTINGS = {
     "enabled":                False,
@@ -572,14 +656,40 @@ def save_auto_attack_settings(data):
 
 
 def _enemy_fleet_count(garrison_troops):
-    """Count naval units in enemy garrison troops dict {unit_name: count}."""
+    """Count naval units in an enemy garrison dict {unit_name: count}. The dict mixes army
+    and fleet; only true naval units (collision-safe keywords) are counted."""
     if not garrison_troops:
         return 0
     total = 0
     for name, count in garrison_troops.items():
-        if any(nav in name.lower() for nav in _NAVAL_UNIT_NAMES):
+        norm = _strip_accents(name)
+        if any(nav in norm for nav in _NAVAL_UNIT_NAMES):
             total += count
     return total
+
+
+# Naval units that do NOT fight a blockade — they flee and disperse (then return hours
+# later). A small combat fleet drives them off; everything else naval actually fights.
+_FLEE_SHIP_NAMES = {"lancha", "reparador"}
+
+
+def _classify_enemy_fleet(garrison_troops):
+    """Split an enemy garrison's NAVAL units into (combat_ships, flee_ships) counts.
+    flee_ships = lancha rápida / reparador (run from a blockade); combat_ships = every other
+    warship (fights). Land units are ignored. Drives the F4.b decision:
+      combat_ships > 0  → too dangerous, skip + alert
+      else flee_ships>0 → blockade (drive them off) then pillage
+      else              → troops only."""
+    combat = flee = 0
+    for name, count in (garrison_troops or {}).items():
+        norm = _strip_accents(name)
+        if not any(nav in norm for nav in _NAVAL_UNIT_NAMES):
+            continue  # land unit
+        if any(f in norm for f in _FLEE_SHIP_NAMES):
+            flee += count
+        else:
+            combat += count
+    return combat, flee
 
 
 def _estimate_battle_delay_mins(enemy_ships, settings):

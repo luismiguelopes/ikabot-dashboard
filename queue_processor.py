@@ -340,23 +340,25 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             except Exception:
                 pass
 
+        # Target farm (F4) — event-driven: advance any target whose spy/attack/return
+        # is due, within ~60s instead of waiting for the next full empire cycle.
+        # Runs BEFORE scheduled transports so the income side claims a wake-up first;
+        # internal transports below also yield trade ships via the farm reserve.
+        if session and _in_scan_hours() and not is_paused():
+            try:
+                from farm_manager import has_due_farm, process_farm_targets
+                if has_due_farm():
+                    process_farm_targets(session, in_active_hours=True)
+                    continue
+            except Exception:
+                pass
+
         # Pending scheduled resource transports (same due-gating as attacks)
         if session and _in_scan_hours() and not is_paused():
             try:
                 from transport_manager import has_due_transports, process_transport_queue
                 if has_due_transports():
                     process_transport_queue(session, in_active_hours=True)
-                    continue
-            except Exception:
-                pass
-
-        # Target farm (F4) — event-driven: advance any target whose spy/attack/return
-        # is due, within ~60s instead of waiting for the next full empire cycle.
-        if session and _in_scan_hours() and not is_paused():
-            try:
-                from farm_manager import has_due_farm, process_farm_targets
-                if has_due_farm():
-                    process_farm_targets(session, in_active_hours=True)
                     continue
             except Exception:
                 pass
@@ -625,6 +627,14 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
     ships_available = getAvailableShips(session)
     ship_cap, freighter_cap = getShipCapacity(session)
 
+    # Leave trade ships for imminent farm raids; the freighter pass below picks up the
+    # slack, so construction is delayed (at worst) but the farm is never starved.
+    try:
+        from farm_manager import apply_ship_reserve
+        ships_available = apply_ship_reserve(ships_available, "queue")
+    except Exception:
+        pass
+
     all_resources = _load_resources_json()
     empire = _load_empire_json()
 
@@ -708,8 +718,10 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
         if freighters_available > 0 and freighter_cap > 0:
             # Prefer source cities that haven't dispatched transporters this cycle (avoid port queue)
             freighter_sources = [s for s in sources if s[0] not in used_sources]
+            # One bundled freighter fleet per source city — fill the need from as many
+            # cities as it takes (highest-surplus first), instead of dribbling one fleet.
             for src_name, src_id, surplus in freighter_sources:
-                if all(r == 0 for r in remaining):
+                if freighters_available <= 0 or all(r == 0 for r in remaining):
                     break
 
                 send_list, freighters_to_use = _build_send_list(
@@ -726,6 +738,7 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                                               freighters_to_use, send_list, use_freighters=True)
                 if success:
                     dispatched = True
+                    freighters_available -= freighters_to_use
                     for i in range(5):
                         remaining[i] = max(0, remaining[i] - send_list[i])
                     sent_desc = ", ".join(
@@ -736,7 +749,6 @@ def _try_transport(session, city_name, city_id, city_data, next_item, target_b, 
                                    origin=src_name, ships=freighters_to_use))
                 else:
                     logger.warning(lm("queue_freighter_failed", city=city_name, origin=src_name))
-                break  # one freighter fleet per cycle
 
     return dispatched
 

@@ -9,7 +9,7 @@ import time
 DB_PATH = "/tmp/ikalogs/ikabot.db"
 _LOGS_DIR = "/tmp/ikalogs/"
 _DB_INIT_DONE = False
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 11
 
 
 def _connect():
@@ -131,6 +131,37 @@ def _run_migrations(conn):
             except Exception:
                 pass  # column already present (fresh DB created at v8)
         conn.execute("INSERT INTO schema_version (version) VALUES (8)")
+    if current < 9:
+        # v9 = F4.b two-wave timing: minutes the troop wave should LAND after the
+        # blockade fleet (the "clean port" window while the enemy fleet is dispersed).
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN fleet_lead_min INTEGER DEFAULT 5")
+        except Exception:
+            pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+    if current < 10:
+        # v10 = pipelined re-spy: timestamp of a scout launched WHILE the troops are
+        # returning (0 = none this cycle), so a re-spy round skips the post-return wait.
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN respy_launched_at INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (10)")
+    if current < 11:
+        # v11 = F4.b fleet-flee handling: blockade first, then time troops into the clean
+        # port; track when the driven-off enemy fleet returns so the next wave can skip the
+        # blockade while the port is still clean.
+        for ddl in (
+            "ALTER TABLE farm_targets ADD COLUMN is_fleet_target INTEGER DEFAULT 0",
+            "ALTER TABLE farm_targets ADD COLUMN disperse_min INTEGER DEFAULT 240",
+            "ALTER TABLE farm_targets ADD COLUMN enemy_return_at INTEGER DEFAULT 0",
+            "ALTER TABLE farm_targets ADD COLUMN last_troop_journey INTEGER DEFAULT 0",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (11)")
     conn.commit()
 
 
@@ -398,7 +429,8 @@ _FARM_UPDATE_COLS = {
     "next_run_at", "spy_dispatched_at", "attack_return_at", "last_spy_at",
     "last_attack_at", "last_loot", "total_raids", "total_loot", "note",
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
-    "last_enemy_ships",
+    "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
+    "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
 }
 
 
@@ -420,8 +452,8 @@ def farm_add(target):
                 INSERT INTO farm_targets
                 (target_city_id, target_city_name, target_player, island_id,
                  island_x, island_y, enabled, interval_hours, min_loot, max_enemy_ships,
-                 respy_every, state, next_run_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
+                 respy_every, fleet_lead_min, disperse_min, state, next_run_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
                 ON CONFLICT(target_city_id) DO UPDATE SET
                     target_city_name=excluded.target_city_name,
                     target_player=excluded.target_player,
@@ -432,7 +464,9 @@ def farm_add(target):
                     interval_hours=excluded.interval_hours,
                     min_loot=excluded.min_loot,
                     max_enemy_ships=excluded.max_enemy_ships,
-                    respy_every=excluded.respy_every
+                    respy_every=excluded.respy_every,
+                    fleet_lead_min=excluded.fleet_lead_min,
+                    disperse_min=excluded.disperse_min
             """, (
                 str(target["targetCityId"]), target.get("targetCityName", ""),
                 target.get("targetPlayer", ""), str(target.get("islandId", "")),
@@ -442,6 +476,8 @@ def farm_add(target):
                 int(target.get("minLoot", 50000)),
                 int(target.get("maxEnemyShips", 0)),
                 int(target.get("respyEvery", 3)),
+                int(target.get("fleetLeadMin", 5)),
+                int(target.get("disperseMin", 240)),
                 now,
             ))
     finally:

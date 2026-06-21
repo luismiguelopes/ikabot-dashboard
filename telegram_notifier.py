@@ -85,6 +85,16 @@ def notify_attack_incoming(origin: str, target_city: str, eta_mins: int,
           f"chega em ~{eta_mins} min · {detail}")
 
 
+def notify_farm_blocked(target_city: str, player: str, combat_ships: int) -> None:
+    _send(f"⚠️ <b>Farm bloqueado</b>\n{target_city} ({player}) tem {combat_ships} navios de "
+          f"combate (não fogem ao bloqueio) — alvo saltado, verifica manualmente")
+
+
+def notify_farm_drained(target_city: str, player: str, loot: int) -> None:
+    _send(f"🏁 <b>Alvo drenado</b>\n{target_city} ({player}) — saque caiu para {loot:,} "
+          f"abaixo do mínimo. Desactivado do farm; a passar ao próximo da fila.")
+
+
 def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> None:
     _send(f"💰 <b>Tropas regressaram com saque</b>\n{to_city} ← {origin_player} · "
           f"{loot_total:,} recursos")

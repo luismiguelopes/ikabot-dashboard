@@ -963,14 +963,25 @@ def api_farm_list():
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 
 
-@app.route("/api/farm/army")
-def api_farm_army_get():
+def _load_farm_settings():
     try:
         with open(FARM_SETTINGS_PATH) as f:
-            s = json.load(f)
-        return jsonify({"army": s.get("army", {}), "spyAgents": int(s.get("spyAgents", 1))})
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify({"army": {}, "spyAgents": 1})
+        return {}
+
+
+@app.route("/api/farm/army")
+def api_farm_army_get():
+    s = _load_farm_settings()
+    return jsonify({
+        "army": s.get("army", {}),
+        "fleet": s.get("fleet", {}),
+        "spyAgents": int(s.get("spyAgents", 1)),
+        "shipReserveEnabled": bool(s.get("shipReserveEnabled", True)),
+        "reserveHorizonMin": int(s.get("reserveHorizonMin", 45)),
+        "earlyRespyEnabled": bool(s.get("earlyRespyEnabled", True)),
+    })
 
 
 @app.route("/api/farm/army", methods=["POST"])
@@ -985,10 +996,30 @@ def api_farm_army_set():
         spy_agents = max(1, min(99, int(data.get("spyAgents", 1))))
     except (ValueError, TypeError):
         spy_agents = 1
+    # Merge so the ship-reserve keys (and any future settings) survive an army save.
+    s = _load_farm_settings()
+    s["army"] = clean
+    s["spyAgents"] = spy_agents
+    if "fleet" in data:
+        try:
+            s["fleet"] = {str(k): int(v) for k, v in (data.get("fleet") or {}).items() if int(v) > 0}
+        except (ValueError, TypeError):
+            return jsonify({"error": "loadout de frota inválida"}), 400
+    if "shipReserveEnabled" in data:
+        s["shipReserveEnabled"] = bool(data.get("shipReserveEnabled"))
+    if "reserveHorizonMin" in data:
+        try:
+            s["reserveHorizonMin"] = max(0, min(720, int(data.get("reserveHorizonMin"))))
+        except (ValueError, TypeError):
+            pass
+    if "earlyRespyEnabled" in data:
+        s["earlyRespyEnabled"] = bool(data.get("earlyRespyEnabled"))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(FARM_SETTINGS_PATH, "w") as f:
-        json.dump({"army": clean, "spyAgents": spy_agents}, f, indent=2)
-    return jsonify({"ok": True, "army": clean, "spyAgents": spy_agents})
+        json.dump(s, f, indent=2)
+    return jsonify({"ok": True, **{k: s[k] for k in
+                    ("army", "fleet", "spyAgents", "shipReserveEnabled", "reserveHorizonMin",
+                     "earlyRespyEnabled") if k in s}})
 
 
 @app.route("/api/farm/add", methods=["POST"])
@@ -1011,6 +1042,8 @@ def api_farm_add():
             "minLoot":        max(0, int(data.get("minLoot", 50000))),
             "maxEnemyShips":  max(0, int(data.get("maxEnemyShips", 0))),
             "respyEvery":     max(1, min(50, int(data.get("respyEvery", 3)))),
+            "fleetLeadMin":   max(1, min(120, int(data.get("fleetLeadMin", 5)))),
+            "disperseMin":    max(1, min(1440, int(data.get("disperseMin", 240)))),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1031,6 +1064,8 @@ def api_farm_update():
     if "minLoot" in data:        fields["min_loot"] = max(0, int(data["minLoot"]))
     if "maxEnemyShips" in data:  fields["max_enemy_ships"] = max(0, int(data["maxEnemyShips"]))
     if "respyEvery" in data:     fields["respy_every"] = max(1, min(50, int(data["respyEvery"])))
+    if "fleetLeadMin" in data:   fields["fleet_lead_min"] = max(1, min(120, int(data["fleetLeadMin"])))
+    if "disperseMin" in data:    fields["disperse_min"] = max(1, min(1440, int(data["disperseMin"])))
     # Manual reset back to IDLE/now so the next cycle re-runs immediately
     if data.get("runNow"):
         fields["state"] = "IDLE"

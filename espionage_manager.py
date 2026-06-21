@@ -17,6 +17,7 @@ ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 
 MISSION_WAREHOUSE = 5
 MISSION_GARRISON  = 6
+MISSION_MOVEMENTS = 7   # spy on troop/fleet movements (F4.b — enemy fleet return ETA)
 
 _DEFAULT_GARRISON_THRESHOLD_TOTAL = 50000
 
@@ -1151,6 +1152,64 @@ def _parse_garrison_troops(html):
                 except ValueError:
                     pass
     return troops
+
+
+def _parse_movement_datetime(s):
+    """Parse the movement report's 'DD.MM.YYYY H:MM:SS' → epoch secs (local), or None.
+    Only used for DURATIONS (arrival − departure), so the local-TZ assumption cancels out."""
+    s = (s or "").strip()
+    for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
+        try:
+            return int(time.mktime(time.strptime(s, fmt)))
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+def parse_fleet_movements(html):
+    """Parse a spy-on-movements report (MISSION_MOVEMENTS) into a list of movements.
+    Table columns: Cidade alvo | Tempo de partida | Tempo de chegada | Acção | Quantidade.
+    Returns [{'target','departure','arrival','action','qty'}] (departure/arrival = epoch).
+    Empty report ('Neste momento não existem movimentos de frotas!') → []."""
+    import re
+    movements = []
+    for row in re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE):
+        cells = []
+        for c in re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL | re.IGNORECASE):
+            text = re.sub(r'<[^>]+>', '', c).replace('\xa0', ' ')
+            cells.append(re.sub(r'\s+', ' ', text).strip())
+        if len(cells) < 5:
+            continue
+        dep = _parse_movement_datetime(cells[1])
+        arr = _parse_movement_datetime(cells[2])
+        if dep is None or arr is None:
+            continue   # header or non-data row
+        try:
+            qty = int(re.sub(r'[^0-9]', '', cells[4]) or 0)
+        except ValueError:
+            qty = 0
+        movements.append({"target": cells[0], "departure": dep, "arrival": arr,
+                          "action": cells[3], "qty": qty})
+    return movements
+
+
+def enemy_fleet_clean_window_secs(html, city_name=None):
+    """From a spy-on-movements report, how long the port stays clean after an enemy fleet
+    is driven off: the (arrival − departure) of the enemy fleet RETURNING to defend (action
+    contains 'Voltar', e.g. 'Defender porto(Voltar)'). The fleet flees at `departure` (when
+    our blockade lands) and is back at `arrival`. TZ-safe (it's a duration). Our own waves
+    ('Pilhar', …) are excluded by the action filter. Returns secs, or None."""
+    cn = (city_name or "").lower()
+    best = None
+    for m in parse_fleet_movements(html):
+        if "voltar" not in m["action"].lower():
+            continue
+        if cn and cn not in m["target"].lower():
+            continue
+        window = m["arrival"] - m["departure"]
+        if window > 0 and (best is None or window < best):
+            best = window
+    return best
 
 
 
