@@ -294,20 +294,120 @@ def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
     assert t["last_transporters"] >= 1
 
 
-def test_attack_state_respies_not_direct(monkeypatch, tmp_path):
-    """No 'direct attack with last intel' shortcut anymore: an IDLE target due to attack
-    re-spies first, so it never commits troops on stale intel (e.g. a fleet that returned)."""
+def test_fleet_target_respies_not_direct(monkeypatch, tmp_path):
+    """A fleet target (is_fleet_target=1, e.g. The Rock) NEVER direct-attacks: even when due,
+    it re-spies first so troops are never sent into a fleet that flew off and returned."""
     _setup_db(tmp_path)
-    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "The Rock", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "next_action": "attack",
-                                   "last_loot": 70000, "last_enemy_ships": 0, "raids_since_spy": 1})
+                                   "last_loot": 70000, "last_enemy_ships": 0, "raids_since_spy": 1,
+                                   "last_spy_at": 1000, "is_fleet_target": 1})
     added = _common_patches(monkeypatch, tmp_path)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
     assert [q for q, _ in added] == ["spy_dispatch"]   # re-spied, did NOT attack directly
+    spy = added[0][1]
+    assert spy["needGarrison"] is True                 # fleet target → full scout
     assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_first_contact_always_full_scout(monkeypatch, tmp_path):
+    """A never-scouted target (last_spy_at=0) does a FULL scout — never a blind direct raid,
+    never warehouse-only — so the first contact always learns the fleet/garrison state."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("100", {"next_run_at": 0, "last_loot": 70000})  # loot but never spied
+    added = _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needGarrison"] is True
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_safe_target_attacks_directly(monkeypatch, tmp_path):
+    """A safe target (is_fleet_target=0, already scouted, rss below respy_every) raids directly
+    without spending a scout, advancing raids_since_spy."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]            # direct raid, no scout
+    assert added[0][1]["missionType"] == "army"
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING"
+    assert t["raids_since_spy"] == 2                       # advanced toward the next periodic scout
+    assert t["total_raids"] == 1
+
+
+def test_safe_periodic_respy_is_warehouse_only(monkeypatch, tmp_path):
+    """When raids_since_spy reaches respy_every, a safe target re-scouts — but warehouse-only
+    (needGarrison=False), and re-confirms the owner is still inactive."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needGarrison"] is False           # warehouse-only re-scout
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
+    """The pipelined re-scout fired while troops return is warehouse-only for a safe target."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    now = int(time.time())
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 60,
+                                   "respy_launched_at": 0, "raids_since_spy": 3, "last_spy_at": 1000,
+                                   "last_enemy_ships": 0, "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needGarrison"] is False
+    assert db_manager.farm_get("100")["respy_launched_at"] > 0
+
+
+def test_reactivated_target_is_disabled(monkeypatch, tmp_path):
+    """If the inactivity re-check finds the owner active again, the target is disabled (no raid,
+    no scout) and an alert fires — a safe target can only turn unsafe by reactivating."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
+    alerted = []
+    import telegram_notifier as tg
+    monkeypatch.setattr(tg, "notify_farm_active", lambda *a, **k: alerted.append(a), raising=False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                    # no scout, no attack
+    assert db_manager.farm_get("100")["enabled"] is False
+    assert len(alerted) == 1
 
 
 def test_return_triggers_respy_when_due(monkeypatch, tmp_path):

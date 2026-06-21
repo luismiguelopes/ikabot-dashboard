@@ -101,6 +101,54 @@ def has_active_farm():
     return bool(_enabled_targets())
 
 
+# ── Inactivity confirmation ─────────────────────────────────────────────────────
+# A "safe" target (is_fleet_target=0) is raided directly between scouts. The ONLY thing
+# that can make it unsafe is the owner stopping being inactive — an inactive player can't
+# garrison troops nor receive a deployed fleet (game rule), so no fleet/army can appear.
+# So instead of re-spying the garrison we just re-confirm the owner is still inactive.
+_SCAN_FRESH_SECS = 48 * 3600
+
+
+def _scan_says_inactive(target_city_id):
+    """Cheap pre-check from world_scan.json (only lists inactive/vacation players). True if
+    the target is there in a recent scan; None if unknown/stale (caller confirms live)."""
+    try:
+        with open(os.path.join(LOGS_DIR, "world_scan.json")) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if int(time.time()) - int(data.get("lastUpdated", 0) or 0) > _SCAN_FRESH_SECS:
+        return None
+    for p in data.get("players", []):
+        if str(p.get("cityId", "")) == str(target_city_id):
+            return p.get("state") in ("inactive", "vacation")
+    return None   # absent → ambiguous (active, or just not scanned)
+
+
+def _confirm_inactive(session, t):
+    """Confirm a safe target's owner is still inactive before a direct-raid round. Tries the
+    cached world scan first; if that can't tell, fetches the island live and reads the city's
+    state. Returns True (inactive), False (active again → unsafe), or None (couldn't tell →
+    don't block, keep farming)."""
+    tid = str(t["target_city_id"])
+    if _scan_says_inactive(tid) is True:
+        return True
+    island_id = str(t.get("island_id", ""))
+    if not island_id:
+        return None
+    try:
+        from ikabot.helpers.getJson import getIsland
+        time.sleep(random.randint(3, 8))
+        island = getIsland(session.get("view=island&islandId=" + island_id))
+        for c in island.get("cities", []):
+            if str(c.get("id", "")) == tid:
+                return c.get("state") in ("inactive", "vacation")
+    except Exception:
+        logger.warning("[farm] %s: confirmação de inactividade falhou — a prosseguir",
+                       t.get("target_city_name", tid))
+    return None
+
+
 # ── Ship reservation ───────────────────────────────────────────────────────────
 # Trade ships ("transporters") are the SAME pool used to pillage and to move resources
 # between own cities. Internal logistics (consolidation, wine top-ups, construction
@@ -515,13 +563,14 @@ def process_farm_targets(session, in_active_hours=True):
                 "enemy_return_at": new_enemy_return, "troop_journey": troop_travel,
                 "is_fleet_target": 1 if (is_fleet_target or enemy_ships > 0) else 0}
 
-    def _launch_respy(t):
+    def _launch_respy(t, need_garrison=True):
         """Re-scout a target: reuse spies already stationed there (fast, no travel, no
-        spies burned), else dispatch fresh ones. Returns 'stationed'/'dispatched' on
-        success, or None when no spy origin is available."""
+        spies burned), else dispatch fresh ones. `need_garrison=False` → warehouse-only
+        re-scout (safe target). Returns 'stationed'/'dispatched' on success, or None when
+        no spy origin is available."""
         tid = t["target_city_id"]
         from espionage_manager import reexecute_stationed_spy
-        if reexecute_stationed_spy(tid, fast=True):
+        if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison):
             return "stationed"
         origin = _pick_spy_origin(own_cities, spy_counts, t)
         if not origin:
@@ -537,9 +586,30 @@ def process_farm_targets(session, in_active_hours=True):
             "numAgents":        spy_agents,
             "numDecoys":        0,
             "fast":             True,   # warehouse→garrison back-to-back
+            "needGarrison":     bool(need_garrison),
             "queuedAt":         now,
         })
         return "dispatched"
+
+    def _disable_if_reactivated(t):
+        """Before a warehouse-only re-scout of a safe target, re-confirm the owner is still
+        inactive (the only thing that can turn it unsafe). Self-gates: returns False for first
+        contacts and fleet targets (their full scout reads the garrison anyway) and when the
+        owner is still inactive. Returns True (disabled + alerted) only when a previously safe
+        target's owner is active again."""
+        if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
+            return False
+        if _confirm_inactive(session, t) is not False:
+            return False
+        nm = t.get("target_city_name", t["target_city_id"])
+        logger.warning("[farm] %s: jogador já não está inactivo — alvo desactivado", nm)
+        try:
+            from telegram_notifier import notify_farm_active
+            notify_farm_active(nm, t.get("target_player", ""))
+        except Exception:
+            pass
+        farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
+        return True
 
     # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
     # Iterating over a 1-item list keeps the existing `continue`-based body intact.
@@ -550,29 +620,61 @@ def process_farm_targets(session, in_active_hours=True):
         interval = max(1, int(t.get("interval_hours", 8))) * 3600
         name     = t.get("target_city_name", tid)
 
-        # ── IDLE → next raid: always re-spy first ───────────────────────────
-        # No "direct attack with last intel" shortcut: it assumed 0 enemy ships and could
-        # send troops into a fleet that returned/appeared between scouts (e.g. a flee-fleet
-        # target like The Rock whose lanchas come back). The pipelined re-spy (F4.c) launches
-        # the scout WHILE the troops return, so re-spying every round costs ~nothing and
-        # guarantees we know the port state before committing troops.
+        # ── IDLE → next raid ────────────────────────────────────────────────
+        # Two regimes:
+        #  • SAFE target (is_fleet_target=0, set by a FULL scout that confirmed no fleet):
+        #    raid directly with troops, no scout. An inactive owner can't gain a fleet/army
+        #    (game rule), so the only risk is the owner reactivating — re-confirmed below
+        #    every `respy_every` rounds, not every round.
+        #  • FLEET target (is_fleet_target=1, e.g. The Rock): never direct-attack — always a
+        #    full re-scout (garrison + movements) because its fleet flees and returns.
+        # The danger from the old blind shortcut (sending troops into a returning fleet) is
+        # gone: the gate is is_fleet_target, which only a full scout can set to 0.
         if state == "IDLE":
             if now < int(t.get("next_run_at", 0)):
                 continue
 
-            # Re-scout (unless an early pipelined re-spy was already launched during the
-            # troops' return — then we'd already be in SPYING, not here).
-            spy = _launch_respy(t)
+            min_loot   = int(t.get("min_loot", 50000))
+            first_scout = int(t.get("last_spy_at", 0)) == 0
+
+            # ── Direct raid on a safe target (no scout) ─────────────────────
+            if (not first_scout and not _next_round_needs_spy(t)
+                    and int(t.get("is_fleet_target", 0)) == 0
+                    and int(t.get("last_loot", 0)) >= min_loot):
+                res = _enqueue_attack(t, int(t.get("last_loot", 0)), 0)
+                if res:
+                    farm_update(tid, {
+                        "state": "ATTACKING", "attack_return_at": res["return_at"],
+                        "last_attack_at": now, "last_transporters": res["transporters"],
+                        "raids_since_spy": int(t.get("raids_since_spy", 0)) + 1,
+                        "total_raids": int(t.get("total_raids", 0)) + 1,
+                        "enemy_return_at": res["enemy_return_at"],
+                        "last_troop_journey": res["troop_journey"],
+                    })
+                    logger.info("[farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
+                    continue
+                # no usable origin → fall through to a scout
+
+            # ── Periodic / first scout ──────────────────────────────────────
+            # First contact and fleet targets need the full garrison; a safe target's periodic
+            # re-scout is warehouse-only (loot + drained check) and instead re-confirms the
+            # owner is still inactive — the only thing that can turn it unsafe.
+            need_garrison = first_scout or int(t.get("is_fleet_target", 0)) == 1
+            if _disable_if_reactivated(t):
+                continue
+
+            spy = _launch_respy(t, need_garrison=need_garrison)
             if spy is None:
                 logger.info("[farm] %s: sem cidade com espiões — nova tentativa em 1h", name)
                 farm_update(tid, {"next_run_at": now + 3600})
                 continue
             farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now,
                               "last_spy_at": now, "respy_launched_at": 0})
+            tag = "" if need_garrison else " (só armazém)"
             if spy == "stationed":
-                logger.info("[farm] %s: re-execução nos espiões já estacionados", name)
+                logger.info("[farm] %s: re-execução nos espiões já estacionados%s", name, tag)
             else:
-                logger.info("[farm] %s: re-espionagem enviada (%d espião(s))", name, spy_agents)
+                logger.info("[farm] %s: re-espionagem enviada (%d espião(s))%s", name, spy_agents, tag)
             continue
 
         # ── SPYING → evaluate the fresh report ──────────────────────────────
@@ -677,12 +779,17 @@ def process_farm_targets(session, in_active_hours=True):
                     and int(t.get("respy_launched_at", 0)) == 0
                     and _next_round_needs_spy(t)
                     and now >= return_at - _EARLY_RESPY_LEAD):
-                spy = _launch_respy(t)
+                # Safe targets pipeline a warehouse-only re-scout (+inactivity re-check); fleet
+                # targets pipeline the full garrison scout.
+                need_garrison = int(t.get("is_fleet_target", 0)) == 1
+                if _disable_if_reactivated(t):
+                    continue
+                spy = _launch_respy(t, need_garrison=need_garrison)
                 if spy:
                     farm_update(tid, {"respy_launched_at": now,
                                       "spy_dispatched_at": now, "last_spy_at": now})
-                    logger.info("[farm] %s: re-espionagem antecipada enquanto as tropas regressam (%s)",
-                                name, spy)
+                    logger.info("[farm] %s: re-espionagem antecipada enquanto as tropas regressam (%s%s)",
+                                name, spy, "" if need_garrison else ", só armazém")
                 continue
 
             if now >= return_at:

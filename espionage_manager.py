@@ -584,6 +584,7 @@ def process_dispatch_queue(session):
             num_agents=num_agents,
             num_decoys=item.get("numDecoys", 0),
             fast=bool(item.get("fast")),
+            need_garrison=bool(item.get("needGarrison", True)),
         )
         if ok:
             # Decrementar em memória para que o pre-check funcione correctamente
@@ -639,12 +640,14 @@ def _append_failed_mission(item, error):
 
 def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                   target_player_name, target_city_name, island_x, island_y,
-                  num_agents=1, num_decoys=0, fast=False):
+                  num_agents=1, num_decoys=0, fast=False, need_garrison=True):
     """
     Dispatch spies from origin_city_id to target_city_id.
     `fast` (farm re-scouts): execute warehouse/garrison back-to-back with second-scale
     delays instead of the 5-15 min anti-detection wait — a human farming a known target
-    does exactly this. Returns (True, mission_dict) on success, (False, error_str).
+    does exactly this. `need_garrison=False` stops after the warehouse inspection (farm
+    re-scout of a safe target: an inactive owner can't garrison troops/fleet, so only the
+    loot matters). Returns (True, mission_dict) on success, (False, error_str).
     """
     import ikabot.config as ikabot_config
 
@@ -736,6 +739,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "numAgents":         num_agents,
         "state":             "TRAVELING",
         "fast":              bool(fast),
+        "needGarrison":      bool(need_garrison),
         "safehousePosition": safehouse_pos,
         "spySessionId":      None,
         "dispatchedAt":      int(time.time()),
@@ -1386,13 +1390,20 @@ def collect_mission_results(session):
                 settings  = _load_espionage_settings()
                 resources = report.get("resources") or {}
                 if _check_garrison_threshold(resources, settings):
-                    delay = random.randint(20, 60) if m.get("fast") else random.randint(1, 5) * 60
-                    missions[i]["state"] = "WAITING_FOR_GARRISON"
-                    missions[i]["garrisonExecuteAfter"] = now + delay
-                    missions[i]["garrisonExecutedAt"]   = None
-                    missions[i]["garrisonResult"]       = None
-                    logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %ds",
-                                m["targetCityName"], resources, delay)
+                    if not m.get("needGarrison", True):
+                        # Farm re-scout of a safe (inactive, no-fleet) target: the loot is all
+                        # we need — skip the garrison mission entirely.
+                        missions[i]["state"] = "DONE"
+                        logger.info("[espionage] armazém %s → recursos=%s — só-armazém (alvo seguro), DONE",
+                                    m["targetCityName"], resources)
+                    else:
+                        delay = random.randint(20, 60) if m.get("fast") else random.randint(1, 5) * 60
+                        missions[i]["state"] = "WAITING_FOR_GARRISON"
+                        missions[i]["garrisonExecuteAfter"] = now + delay
+                        missions[i]["garrisonExecutedAt"]   = None
+                        missions[i]["garrisonResult"]       = None
+                        logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %ds",
+                                    m["targetCityName"], resources, delay)
                 else:
                     missions[i]["state"] = "DONE"
                     logger.info("[espionage] armazém %s → recursos=%s — threshold não atingido, DONE",
@@ -1596,11 +1607,12 @@ def force_warehouse_mission(target_city_id):
         logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
-def reexecute_stationed_spy(target_city_id, fast=True):
+def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
     """Reuse spies already stationed at the target instead of sending fresh ones: a real
     player re-runs the warehouse mission on the spies sitting in the safehouse. Returns
     True if a stationed spy was found (re-executed, or already mid-mission → caller waits),
-    False if none exists (caller should dispatch new spies)."""
+    False if none exists (caller should dispatch new spies). `need_garrison=False` re-runs
+    only the warehouse inspection (safe-target farm re-scout)."""
     data = _load_missions()
     missions = data.get("missions", [])
     now = int(time.time())
@@ -1623,6 +1635,7 @@ def reexecute_stationed_spy(target_city_id, fast=True):
             missions[i]["executeAfter"] = now + offset
             missions[i]["dispatchedAt"] = now   # treat the re-run as a fresh attempt
             missions[i]["fast"] = bool(fast)
+            missions[i]["needGarrison"] = bool(need_garrison)
             missions[i]["missionType"] = None
             for k in ("result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
                       "garrisonCollectAfter", "collectAfter", "executedAt"):

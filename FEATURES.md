@@ -159,6 +159,23 @@ saltando o backoff IDLE e um segundo scout. `next_farm_eta`/`has_due_farm` acord
 Reutiliza espiões estacionados primeiro (`reexecute_stationed_spy`). Kill switch
 `earlyRespyEnabled` (default on) + toggle na UI. Testes em `test_farm_respy.py`.
 
+### F4.e Alvos seguros: ataque directo + scout só-armazém ✅ IMPLEMENTADO 2026-06-21
+Distingue dois regimes por `is_fleet_target` (definido pela 1ª espionagem completa):
+- **SEGURO** (`is_fleet_target=0`: inactivo, com recursos, sem frota): entre rondas **ataca
+  directamente com tropas, sem espiar** — um jogador inactivo não pode guarnecer tropas nem
+  receber frota destacada (regra do jogo), logo nenhuma frota/exército pode aparecer. De N em
+  N rondas (`respy_every`) re-espia **só o armazém** (`needGarrison=False`) para confirmar que
+  o saque ainda lá está / não foi drenado por outro jogador, e **re-confirma a inactividade**
+  pelo world scan (cache) ou um fetch da ilha (`_confirm_inactive`). Se o dono já não estiver
+  inactivo → desactiva + alerta Telegram (`notify_farm_active`). Saque < `min_loot` → drenado.
+- **FROTA** (`is_fleet_target=1`, ex.: The Rock): **nunca** ataca directo — sempre scout
+  completo (armazém+guarnição+movimentos), F4.b inalterado.
+O 1º contacto de qualquer alvo é sempre scout completo (lê frota/guarnição antes de comprometer
+tropas). O gate do ataque-directo é `is_fleet_target`, que só uma espionagem completa põe a 0 —
+elimina o risco do antigo atalho às cegas. Plumbing `needGarrison` no `spy_dispatch` e na
+máquina de estados (`_dispatch_spy`/`reexecute_stationed_spy`/gate armazém→guarnição), default
+`True` (auto-attack e página Mundo inalterados). Testes em `test_farm.py`.
+
 ### F5. Notificação de regresso com saque ✅ IMPLEMENTADO 2026-06-15
 Telegram quando uma frota própria regressa com saque. Reutiliza o F1.b: `log_loot`
 passou a indicar se a entrada é nova (não duplicada entre snapshots) e o

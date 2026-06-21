@@ -95,6 +95,11 @@ def notify_farm_drained(target_city: str, player: str, loot: int) -> None:
           f"abaixo do mínimo. Desactivado do farm; a passar ao próximo da fila.")
 
 
+def notify_farm_active(target_city: str, player: str) -> None:
+    _send(f"🟢 <b>Alvo já não inactivo</b>\n{target_city} ({player}) deixou de estar inactivo "
+          f"— desactivado do farm (já não é seguro atacar às cegas).")
+
+
 def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> None:
     _send(f"💰 <b>Tropas regressaram com saque</b>\n{to_city} ← {origin_player} · "
           f"{loot_total:,} recursos")
