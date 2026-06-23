@@ -105,6 +105,11 @@ def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> N
           f"{loot_total:,} recursos")
 
 
+def notify_bot_fatal() -> None:
+    _send("💥 <b>Bot terminou (fatal)</b> — a sessão do jogo desistiu (re-login/rede esgotados). "
+          "O container deve reiniciar sozinho (healthcheck + autoheal); confirma se persiste.")
+
+
 def notify_bot_offline(minutes: int) -> None:
     global _offline_notified
     if _offline_notified:

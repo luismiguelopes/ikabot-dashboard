@@ -1604,7 +1604,7 @@ def _offline_watch_loop():
         try:
             import telegram_notifier as _tg
             offline_min = int((time.time() - last_alive) / 60)
-            if offline_min > 90:
+            if offline_min > 30:
                 _tg.notify_bot_offline(offline_min)
             else:
                 _tg.clear_bot_offline()

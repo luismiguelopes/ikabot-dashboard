@@ -250,6 +250,14 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         pass
     end_time = time.time() + sleep_secs
     while time.time() < end_time:
+        # Heartbeat for the container healthcheck + Flask offline watchdog. The per-cycle
+        # write in empireFunction can be hours apart at night, so refresh it here (≤60s) so
+        # liveness reflects the bot actually running, not the full-cycle cadence.
+        try:
+            with open(os.path.join(LOGS_DIR, "last_alive.json"), "w") as f:
+                json.dump({"lastAlive": int(time.time())}, f)
+        except Exception:
+            pass
         if os.path.exists(FORCE_EMPIRE_FLAG):
             break
         if os.path.exists(FORCE_QUEUE_FLAG):

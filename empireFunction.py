@@ -187,6 +187,17 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
             smart_sleep(last_full_cycle_time, next_full_jitter, session)
 
+        except (SystemExit, KeyboardInterrupt):
+            # Fatal: the game session gave up (re-login/network exhausted → sys.exit) or a
+            # manual stop. Alert loudly before dying so it's attributed immediately, not 30 min
+            # later via the offline watchdog. With the container healthcheck + autoheal, the
+            # worker's death restarts the whole container, recovering automatically.
+            try:
+                from telegram_notifier import notify_bot_fatal
+                notify_bot_fatal()
+            except Exception:
+                pass
+            raise
         except Exception:
             logger.error(lm("cycle_error"), exc_info=True)
             time.sleep(random.randint(120, 300))

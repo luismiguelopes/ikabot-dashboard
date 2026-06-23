@@ -36,6 +36,31 @@ services:
     ports:
       - "43357:43357"
       - "43573:43573"
+    # Self-healing: the worker writes last_alive.json every ≤60s (smart_sleep). If it goes
+    # stale > 30 min the container is unhealthy and the autoheal sidecar restarts it — covers
+    # the case where the spy/empire worker dies (sys.exit) while the ikabot parent PID 1
+    # survives, which restart:unless-stopped alone would NOT recover.
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time,sys; sys.exit(0 if time.time()-json.load(open('/tmp/ikalogs/last_alive.json'))['lastAlive'] < 1800 else 1)\""]
+      interval: 2m
+      timeout: 20s
+      retries: 3
+      start_period: 15m
+
+  # Watchdog: restarts any container marked unhealthy that carries the label autoheal=true.
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: ikabot-autoheal
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Lisbon
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 60
+      AUTOHEAL_START_PERIOD: 300
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   ikabot-gui:
     image: python:3.12-slim
