@@ -109,6 +109,68 @@ Próximas recomendadas: F6 (alarme de ataque recebido) → F1 (histórico de ata
 
 ---
 
+## P5 — Robustez / observabilidade (auditoria 2026-06-23)
+
+Fase de robustez antes de novas features. Auditoria a frio do projecto.
+
+**Concluído nesta fase:**
+
+### P5.0 ✅ Testes de comportamento da máquina de estados de espiões — 2026-06-23
+`tests/test_espionage_state_machine.py` (19 testes de caracterização): fixa todas as
+transições (TRAVELING→WAITING_AT_CITY→EXECUTING_WAREHOUSE→WAITING_FOR_GARRISON→
+EXECUTING_GARRISON→DONE + caminhos FAILED + isolamento de falhas no `process_spy_cycle`).
+Rede de segurança para o split (P5.6). O `espionage_manager` (2078 linhas) já não está sem
+testes de comportamento — só tinha testes de parsers.
+
+### P5.1 ✅ Self-healing do bot — 2026-06-23
+A sessão base do ikabot já é robusta (re-login automático, timeout 300s, espera manutenção).
+Gap era a recuperação quando o *worker* morre: um `sys.exit` da sessão (re-login/rede
+esgotados) levanta `SystemExit`, não apanhado pelo `except Exception` do loop → worker morre
+mas o pai ikabot (PID 1) sobrevive → `restart:unless-stopped` não dispara.
+- `smart_sleep` escreve `last_alive.json` a cada ≤60s (era 1×/ciclo, horas à noite).
+- `docker-compose`: healthcheck sobre a idade do heartbeat (>30 min = unhealthy) + sidecar
+  `willfarrell/autoheal` que reinicia o `ikabot` unhealthy (label `autoheal=true`).
+- `empireFunction` apanha `SystemExit`/`KeyboardInterrupt` → alerta Telegram
+  (`notify_bot_fatal`) e re-levanta. Limiar offline do Flask 90→30 min.
+- ⚠️ **Infra requer `docker compose up -d`** para activar (recria `ikabot` com healthcheck +
+  arranca `ikabot-autoheal`; o sidecar precisa de `/var/run/docker.sock`).
+
+**Pendente (por implementar):**
+
+### P5.2 Observabilidade de falhas silenciosas
+~150 `except Exception` (29 só no `queue_processor`) engolem erros — o bot pode estar "vivo
+mas inútil" (dispatch a falhar sempre, parser a devolver `{}` por mudança de HTML). Contador
+de falhas consecutivas por subsistema (espionagem/ataque/transporte/scan) exposto na UI +
+alerta Telegram ao passar N. **Próximo a implementar.**
+
+### P5.3 Anti-detecção centralizada
+A regra nº1 ("todo o pedido leva sleep") depende de revisão manual. Encaminhar TODO o I/O do
+jogo por um wrapper de sessão com rate-limiter único, em vez de espalhar `time.sleep`. Teste
+que apanha `session.get/post` sem sleep antes.
+
+### P5.4 Migrar `auto_attack_waves.json` para SQLite
+Última race JSON Flask↔bot (o bot escreve durante sleeps longos, o Flask lê/cancela). Mover
+para a tabela `shared_queue` como as outras filas (fecha a race do P0.3 que falta).
+
+### P5.5 Endurecer o fail-open da F4.e
+Hoje, se não der para confirmar inactividade (world scan velho + fetch da ilha falha),
+`_confirm_inactive` devolve None e continua a atacar directo. Cair antes para um scout de
+guarnição completo, em vez de atacar às cegas — única fenda de segurança reintroduzida na F4.e.
+
+### P5.6 Split físico do `espionage_manager.py` (2078 linhas)
+Já seguro com P5.0. Extrair parsers puros para `espionage_parsers.py` (manter re-export para
+não partir os imports nos 5 ficheiros que dependem dele). Sobretudo manutenção, não corrige nada.
+
+### P5.7 Golden-file tests dos payloads que gastam tropas
+Plunder/blockade/deploy: testar o POST exacto (upkeep, strip do `s`, cap de transporters) a
+partir de formulários capturados — apanha regressões antes de custarem um exército in-game.
+
+### P5.8 Validação de schema das configs
+`farm_settings`/`world_scan_settings`/`telegram_settings`/env: um typo cai em silêncio para
+defaults (o `except: return {}`). Validar e avisar.
+
+---
+
 ## Pendências de verificação (não são trabalho novo)
 
 - [x] Confirmar in-game que `sendArmyPlunderSea` lança ataques — ✅ validado 2026-06-11.
@@ -122,3 +184,8 @@ Próximas recomendadas: F6 (alarme de ataque recebido) → F1 (histórico de ata
 - [ ] Validar a primeira vaga do auto-attack (agora usa sendArmyPlunderSea).
 - [ ] Validar deploy para cidade própria (após 1 ciclo do império, para o islandId
       aparecer no own_cities.json): dispatch com destino "própria" → deployArmy type=10.
+- [ ] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
+      flee-fleet bloqueio→tropas (F4.b), ataque-directo + confirmação de inactividade (F4.e).
+      Nunca correu live — código completo e testado, validação real em dívida.
+- [ ] Validar o self-healing (P5.1): `docker compose up -d`, confirmar o `ikabot` a ficar
+      `healthy` e o container `ikabot-autoheal` a correr com acesso ao docker.sock.
