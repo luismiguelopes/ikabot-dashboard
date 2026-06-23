@@ -22,6 +22,7 @@ services:
       - ./db_manager.py:/ikabot/ikabot/function/db_manager.py
       - ./telegram_notifier.py:/ikabot/ikabot/function/telegram_notifier.py
       - ./espionage_manager.py:/ikabot/ikabot/function/espionage_manager.py
+      - ./espionage_parsers.py:/ikabot/ikabot/function/espionage_parsers.py
       - ./attack_manager.py:/ikabot/ikabot/function/attack_manager.py
       - ./transport_manager.py:/ikabot/ikabot/function/transport_manager.py
       - ./farm_manager.py:/ikabot/ikabot/function/farm_manager.py

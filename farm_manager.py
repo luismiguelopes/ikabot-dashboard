@@ -591,25 +591,28 @@ def process_farm_targets(session, in_active_hours=True):
         })
         return "dispatched"
 
-    def _disable_if_reactivated(t):
-        """Before a warehouse-only re-scout of a safe target, re-confirm the owner is still
-        inactive (the only thing that can turn it unsafe). Self-gates: returns False for first
-        contacts and fleet targets (their full scout reads the garrison anyway) and when the
-        owner is still inactive. Returns True (disabled + alerted) only when a previously safe
-        target's owner is active again."""
+    def _safe_target_verdict(t):
+        """Decide a target's next re-scout. Returns:
+          - "disable": a previously safe target's owner is active again → disabled + alerted.
+          - "garrison": needs a FULL scout — first contact, a fleet target, OR (P5.5) a safe
+            target whose inactivity could NOT be confirmed (stale scan + island fetch failed).
+            Escalating to a garrison scout instead of attacking blind closes the fail-open hole.
+          - "warehouse": safe target confirmed still inactive → a warehouse-only re-scout is safe.
+        Self-gates on first contacts / fleet targets without burning an island fetch."""
         if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
-            return False
-        if _confirm_inactive(session, t) is not False:
-            return False
-        nm = t.get("target_city_name", t["target_city_id"])
-        logger.warning("[farm] %s: jogador já não está inactivo — alvo desactivado", nm)
-        try:
-            from telegram_notifier import notify_farm_active
-            notify_farm_active(nm, t.get("target_player", ""))
-        except Exception:
-            pass
-        farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
-        return True
+            return "garrison"
+        confirmed = _confirm_inactive(session, t)
+        if confirmed is False:
+            nm = t.get("target_city_name", t["target_city_id"])
+            logger.warning("[farm] %s: jogador já não está inactivo — alvo desactivado", nm)
+            try:
+                from telegram_notifier import notify_farm_active
+                notify_farm_active(nm, t.get("target_player", ""))
+            except Exception:
+                pass
+            farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
+            return "disable"
+        return "warehouse" if confirmed is True else "garrison"
 
     # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
     # Iterating over a 1-item list keeps the existing `continue`-based body intact.
@@ -659,9 +662,10 @@ def process_farm_targets(session, in_active_hours=True):
             # First contact and fleet targets need the full garrison; a safe target's periodic
             # re-scout is warehouse-only (loot + drained check) and instead re-confirms the
             # owner is still inactive — the only thing that can turn it unsafe.
-            need_garrison = first_scout or int(t.get("is_fleet_target", 0)) == 1
-            if _disable_if_reactivated(t):
+            verdict = _safe_target_verdict(t)
+            if verdict == "disable":
                 continue
+            need_garrison = (verdict == "garrison")
 
             spy = _launch_respy(t, need_garrison=need_garrison)
             if spy is None:
@@ -780,10 +784,11 @@ def process_farm_targets(session, in_active_hours=True):
                     and _next_round_needs_spy(t)
                     and now >= return_at - _EARLY_RESPY_LEAD):
                 # Safe targets pipeline a warehouse-only re-scout (+inactivity re-check); fleet
-                # targets pipeline the full garrison scout.
-                need_garrison = int(t.get("is_fleet_target", 0)) == 1
-                if _disable_if_reactivated(t):
+                # targets and unconfirmed-inactivity (P5.5) pipeline the full garrison scout.
+                verdict = _safe_target_verdict(t)
+                if verdict == "disable":
                     continue
+                need_garrison = (verdict == "garrison")
                 spy = _launch_respy(t, need_garrison=need_garrison)
                 if spy:
                     farm_update(tid, {"respy_launched_at": now,

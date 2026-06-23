@@ -629,18 +629,46 @@ def _save_auto_attack_settings(data):
         json.dump(data, f, indent=2)
 
 
+# P5.4: auto-attack wave plans live in the SQLite shared_queue (queue "auto_attack_waves"),
+# not a JSON file. The bot used to load → process (minutes of anti-detection sleeps) → save the
+# whole file, clobbering any wave the UI cancelled meanwhile. Now each plan is one queue item:
+# the bot upserts/removes per plan and re-reads live ids before persisting, so a UI cancel mid
+# cycle is never resurrected. The UI reads/cancels via db_manager.queue_items/queue_remove.
+WAVES_QUEUE = "auto_attack_waves"
+
+
+def _migrate_waves_json_once():
+    """One-time: seed the queue from the legacy auto_attack_waves.json, then retire the file."""
+    if not os.path.exists(AUTO_ATTACK_WAVES_PATH):
+        return
+    try:
+        from db_manager import queue_items, queue_add
+        if not queue_items(WAVES_QUEUE):
+            with open(AUTO_ATTACK_WAVES_PATH) as f:
+                for w in json.load(f).get("waves", []):
+                    queue_add(WAVES_QUEUE, w)
+            logger.info("[auto-attack] waves migradas de JSON para SQLite")
+        os.rename(AUTO_ATTACK_WAVES_PATH, AUTO_ATTACK_WAVES_PATH + ".migrated")
+    except Exception:
+        logger.warning("[auto-attack] migração de waves falhou", exc_info=True)
+
+
 def _load_auto_attack_waves():
     try:
-        with open(AUTO_ATTACK_WAVES_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        from db_manager import queue_items
+        _migrate_waves_json_once()
+        return {"waves": queue_items(WAVES_QUEUE)}
+    except Exception:
         return {"waves": []}
 
 
-def _save_auto_attack_waves(data):
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(AUTO_ATTACK_WAVES_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+def _wave_upsert(plan):
+    """Persist a single wave plan (insert or replace by its id)."""
+    try:
+        from db_manager import queue_add
+        queue_add(WAVES_QUEUE, plan)
+    except Exception:
+        logger.warning("[auto-attack] gravação de wave falhou", exc_info=True)
 
 
 def get_auto_attack_waves():
@@ -777,8 +805,8 @@ def _calc_transporters(loot_amount, ship_capacity):
     return math.ceil(loot_amount / ship_capacity)
 
 
-def _record_skipped(waves_data, mission_key, mission, reason):
-    waves_data["waves"].append({
+def _record_skipped(mission_key, mission, reason):
+    _wave_upsert({
         "id":               uuid.uuid4().hex[:8],
         "sourceMissionKey": mission_key,
         "targetPlayerName": mission.get("targetPlayerName"),
@@ -805,8 +833,7 @@ def evaluate_auto_attacks(session):
 
     from espionage_manager import _load_missions
     missions_data = _load_missions()
-    waves_data    = _load_auto_attack_waves()
-    existing_keys = {w.get("sourceMissionKey") for w in waves_data.get("waves", [])}
+    existing_keys = {w.get("sourceMissionKey") for w in _load_auto_attack_waves()["waves"]}
 
     # Targets handled by the continuous farm (F4) are off-limits to the one-shot
     # auto-attack, otherwise the same DONE report triggers both.
@@ -834,7 +861,6 @@ def evaluate_auto_attacks(session):
         logger.warning("[auto-attack] military.json não disponível — a saltar evaluate")
         return
 
-    changed = False
     for m in missions_data.get("missions", []):
         if m.get("state") != "DONE":
             continue
@@ -856,9 +882,8 @@ def evaluate_auto_attacks(session):
         if total_loot < min_loot:
             reason = f"Botim insuficiente: {total_loot} < {min_loot}"
             logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
-            _record_skipped(waves_data, mission_key, m, reason)
+            _record_skipped(mission_key, m, reason)
             existing_keys.add(mission_key)
-            changed = True
             continue
 
         tier        = _determine_attack_tier(garrison)
@@ -868,9 +893,8 @@ def evaluate_auto_attacks(session):
         if enemy_ships > max_engage:
             reason = f"Frota inimiga demasiado grande: {enemy_ships} > máximo {max_engage}"
             logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
-            _record_skipped(waves_data, mission_key, m, reason)
+            _record_skipped(mission_key, m, reason)
             existing_keys.add(mission_key)
-            changed = True
             continue
 
         target_x = m.get("islandX", 0)
@@ -880,9 +904,8 @@ def evaluate_auto_attacks(session):
         if not origin:
             reason = "Sem cidade de origem com tropas" + (" e frota" if tier == 2 else "")
             logger.warning("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
-            _record_skipped(waves_data, mission_key, m, reason)
+            _record_skipped(mission_key, m, reason)
             existing_keys.add(mission_key)
-            changed = True
             continue
 
         origin_name, origin_id, origin_x, origin_y = origin
@@ -934,7 +957,7 @@ def evaluate_auto_attacks(session):
             })
             prev_return = return_ts
 
-        waves_data["waves"].append({
+        _wave_upsert({
             "id":               uuid.uuid4().hex[:8],
             "sourceMissionKey": mission_key,
             "targetPlayerName": m.get("targetPlayerName"),
@@ -950,12 +973,8 @@ def evaluate_auto_attacks(session):
             "skippedReason":    None,
         })
         existing_keys.add(mission_key)
-        changed = True
         logger.info("[auto-attack] plano criado para %s: tier=%d, %d vaga(s), botim total=%d",
                     m["targetPlayerName"], tier, num_waves, total_loot)
-
-    if changed:
-        _save_auto_attack_waves(waves_data)
 
 
 def _dispatch_fleet_attack(session, origin_id, target_id, island_id, fleet_units):
@@ -1092,4 +1111,13 @@ def process_auto_attack_waves(session, in_active_hours=True):
             changed = True
 
     if changed:
-        _save_auto_attack_waves(waves_data)
+        # Persist per-plan, re-reading live ids so a wave cancelled via the UI mid-cycle isn't
+        # resurrected (closes the Flask↔bot race the whole-file save had).
+        try:
+            from db_manager import queue_items
+            live_ids = {w.get("id") for w in queue_items(WAVES_QUEUE)}
+        except Exception:
+            live_ids = {w.get("id") for w in waves_data.get("waves", [])}
+        for plan in waves_data["waves"]:
+            if plan.get("id") in live_ids:
+                _wave_upsert(plan)

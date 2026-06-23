@@ -369,6 +369,25 @@ def test_safe_periodic_respy_is_warehouse_only(monkeypatch, tmp_path):
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
+def test_uncertain_inactivity_forces_full_scout(monkeypatch, tmp_path):
+    """P5.5: if inactivity can't be confirmed (stale scan + island fetch failed → None),
+    escalate to a full garrison scout instead of a blind warehouse-only re-scout."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: None)   # can't tell
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needGarrison"] is True       # escalated to full scout, not warehouse-only
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
 def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
     """The pipelined re-scout fired while troops return is warehouse-only for a safe target."""
     _setup_db(tmp_path)

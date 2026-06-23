@@ -154,20 +154,27 @@ módulo contorna via `session.s.get`. Nota: o "teste que apanha get/post sem sle
 grep) foi superado pela garantia em runtime — testámos antes o comportamento do wrapper
 (`test_throttle.py`, 6).
 
+### P5.4 ✅ Migrar `auto_attack_waves.json` para SQLite — 2026-06-23
+Última race JSON Flask↔bot: o bot fazia load→processar (minutos de sleeps)→gravar o ficheiro
+todo, esmagando waves que a UI tivesse cancelado. Agora cada plano é um item da `shared_queue`
+(queue `auto_attack_waves`): `evaluate` faz `_wave_upsert` por plano novo; `process` regrava por
+plano **re-lendo os ids vivos** no fim (não ressuscita um cancelado a meio); a UI lê/cancela via
+`queue_items`/`queue_remove`. Migração one-shot do JSON legado (`_migrate_waves_json_once` →
+`.migrated`). MundoPage faz poll 60s → liveness mantida. Teste em `test_attack_queue.py`.
+
+### P5.5 ✅ Endurecer o fail-open da F4.e — 2026-06-23
+`_confirm_inactive` devolvia None (incerto: scan velho + fetch da ilha falha) e continuava em
+warehouse-only → ataque directo às cegas. Agora `_safe_target_verdict` devolve
+`disable`/`warehouse`/`garrison`: incerteza → **garrison** (scout completo que lê o porto antes
+de comprometer tropas). Fecha a única fenda reintroduzida na F4.e. Teste em `test_farm.py`.
+
+### P5.6 ✅ Split físico do `espionage_manager.py` — 2026-06-23
+2078→1674 linhas; parsers puros (safehouse, missões activas, countdown, session-id, relatórios,
+guarnição, movimentos de frota) movidos para `espionage_parsers.py` (444) por extracção AST.
+Re-export em `espionage_manager` → call sites e testes não mudam. Novo mount no
+`docker-compose.yml` (⚠️ requer `docker compose up -d`, não chega `restart`). 206 testes passam.
+
 **Pendente (por implementar):**
-
-### P5.4 Migrar `auto_attack_waves.json` para SQLite
-Última race JSON Flask↔bot (o bot escreve durante sleeps longos, o Flask lê/cancela). Mover
-para a tabela `shared_queue` como as outras filas (fecha a race do P0.3 que falta).
-
-### P5.5 Endurecer o fail-open da F4.e
-Hoje, se não der para confirmar inactividade (world scan velho + fetch da ilha falha),
-`_confirm_inactive` devolve None e continua a atacar directo. Cair antes para um scout de
-guarnição completo, em vez de atacar às cegas — única fenda de segurança reintroduzida na F4.e.
-
-### P5.6 Split físico do `espionage_manager.py` (2078 linhas)
-Já seguro com P5.0. Extrair parsers puros para `espionage_parsers.py` (manter re-export para
-não partir os imports nos 5 ficheiros que dependem dele). Sobretudo manutenção, não corrige nada.
 
 ### P5.7 Golden-file tests dos payloads que gastam tropas
 Plunder/blockade/deploy: testar o POST exacto (upkeep, strip do `s`, cap de transporters) a

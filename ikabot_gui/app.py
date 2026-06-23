@@ -1339,11 +1339,13 @@ def api_dispatch_combat():
 
 @app.route("/api/espionage/attack-waves")
 def api_attack_waves_get():
-    try:
-        with open(AUTO_ATTACK_WAVES_PATH) as f:
-            return jsonify(json.load(f))
-    except FileNotFoundError:
-        return jsonify({"waves": []})
+    # P5.4: wave plans live in the SQLite shared_queue, not a JSON file.
+    if _db:
+        try:
+            return jsonify({"waves": _db.queue_items("auto_attack_waves")})
+        except Exception:
+            pass
+    return jsonify({"waves": []})
 
 
 @app.route("/api/espionage/attack-waves/cancel", methods=["POST"])
@@ -1352,17 +1354,11 @@ def api_attack_waves_cancel():
     wave_id = data.get("id")
     if not wave_id:
         return jsonify({"error": "id obrigatório"}), 400
-    try:
-        with open(AUTO_ATTACK_WAVES_PATH) as f:
-            waves_data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify({"error": "Sem planos de ataque"}), 404
-    original = len(waves_data.get("waves", []))
-    waves_data["waves"] = [w for w in waves_data.get("waves", []) if w.get("id") != wave_id]
-    if len(waves_data["waves"]) == original:
+    if not _db:
+        return jsonify({"error": "DB indisponível"}), 503
+    removed = _db.queue_remove("auto_attack_waves", [wave_id])
+    if not removed:
         return jsonify({"error": "Plano não encontrado"}), 404
-    with open(AUTO_ATTACK_WAVES_PATH, "w") as f:
-        json.dump(waves_data, f, indent=2)
     return jsonify({"status": "cancelled"})
 
 

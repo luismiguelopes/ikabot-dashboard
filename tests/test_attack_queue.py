@@ -280,3 +280,23 @@ def test_has_due_recalls_false_when_waiting_retry(tmp_path):
 def test_has_due_recalls_false_when_empty(tmp_path):
     _setup_db(tmp_path)
     assert em.has_due_recalls() is False
+
+
+# ── P5.4: auto-attack wave plans in the SQLite shared_queue (no more JSON race) ──
+
+def test_auto_attack_waves_sqlite_roundtrip(tmp_path, monkeypatch):
+    _setup_db(tmp_path)
+    monkeypatch.setattr(am, "AUTO_ATTACK_WAVES_PATH", str(tmp_path / "nope.json"))  # no legacy file
+    am._wave_upsert({"id": "w1", "state": "PENDING", "targetCityName": "X"})
+    am._wave_upsert({"id": "w2", "state": "PENDING", "targetCityName": "Y"})
+    assert {w["id"] for w in am._load_auto_attack_waves()["waves"]} == {"w1", "w2"}
+
+    # upsert same id → replace, not duplicate
+    am._wave_upsert({"id": "w1", "state": "DONE", "targetCityName": "X"})
+    waves = am._load_auto_attack_waves()["waves"]
+    assert len(waves) == 2
+    assert next(w for w in waves if w["id"] == "w1")["state"] == "DONE"
+
+    # cancel via the same primitive the UI uses → per-item removal
+    db_manager.queue_remove("auto_attack_waves", ["w1"])
+    assert {w["id"] for w in am._load_auto_attack_waves()["waves"]} == {"w2"}
