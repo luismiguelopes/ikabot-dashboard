@@ -28,6 +28,34 @@ function PausedBanner() {
   )
 }
 
+function SubsystemHealthBanner() {
+  const t = useT()
+  const [down, setDown] = useState<string[]>([])
+  useEffect(() => {
+    let stop = false
+    const check = () => {
+      fetch('/api/health')
+        .then(r => r.json())
+        .then((d: { subsystems?: Record<string, { consecutiveFailures?: number }> }) => {
+          if (stop) return
+          const subs = d.subsystems || {}
+          setDown(Object.keys(subs).filter(k => (subs[k]?.consecutiveFailures ?? 0) >= 3))
+        })
+        .catch(() => {})
+    }
+    check()
+    const id = setInterval(check, 60000)
+    return () => { stop = true; clearInterval(id) }
+  }, [])
+  if (down.length === 0) return null
+  return (
+    <div className="mb-4 flex items-center gap-2 text-sm text-red-800 bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 font-medium">
+      <i className="fa-solid fa-heart-crack shrink-0" />
+      {t('health_banner')}: <span className="font-mono">{down.join(', ')}</span>
+    </div>
+  )
+}
+
 function IncomingAttackBanner({ count, eta }: { count: number; eta: number | null }) {
   const t = useT()
   const now = Math.floor(Date.now() / 1000)
@@ -208,6 +236,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
           {incomingAttacks.count > 0 && <IncomingAttackBanner count={incomingAttacks.count} eta={incomingAttacks.eta} />}
           {paused && <PausedBanner />}
+          <SubsystemHealthBanner />
           {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
           {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
           {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}

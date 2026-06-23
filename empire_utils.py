@@ -1,11 +1,14 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import contextlib
 import json
 import logging
 import logging.handlers
 import os
+import random
 import re
+import time
 
 LOGS_DIR = "/tmp/ikalogs/"
 LOG_FILE_PATH = os.path.join(LOGS_DIR, "bot.log")
@@ -379,4 +382,140 @@ def with_retry(fn, attempts=3, delay=30, label="", retryable=None):
                                label, exc, delay, i + 1, attempts - 1)
                 _time.sleep(delay)
     raise last_exc
+
+
+# ── Subsystem health (P5.2): make silent failures visible ───────────────────────
+# ~150 `except Exception` swallow errors across the bot, so it can be "alive but useless"
+# (a dispatch failing every cycle, a parser returning {} after a game HTML change). Each
+# subsystem records success/failure here; N consecutive failures raise a Telegram alert
+# (once), cleared on recovery. Flask reads health.json to surface it in the UI.
+HEALTH_JSON_PATH = os.path.join(LOGS_DIR, "health.json")
+_HEALTH_ALERT_THRESHOLD = 3
+
+
+def _load_health():
+    try:
+        with open(HEALTH_JSON_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_health(data):
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(HEALTH_JSON_PATH, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def record_success(subsystem):
+    """Mark a subsystem's cycle successful: reset its failure streak and, if it had alerted
+    as down, send a recovery notification."""
+    data = _load_health()
+    rec = data.get(subsystem, {})
+    was_alerted = bool(rec.get("alerted"))
+    rec.update({"consecutiveFailures": 0, "lastSuccessAt": int(time.time()),
+                "lastError": None, "alerted": False})
+    data[subsystem] = rec
+    _save_health(data)
+    if was_alerted:
+        try:
+            from telegram_notifier import notify_subsystem_recovered
+            notify_subsystem_recovered(subsystem)
+        except Exception:
+            pass
+
+
+def record_failure(subsystem, error):
+    """Increment a subsystem's failure streak; alert once when it reaches the threshold."""
+    data = _load_health()
+    rec = data.get(subsystem, {})
+    streak = int(rec.get("consecutiveFailures", 0)) + 1
+    rec.update({"consecutiveFailures": streak, "lastError": str(error)[:300],
+                "lastFailureAt": int(time.time()),
+                "totalFailures": int(rec.get("totalFailures", 0)) + 1})
+    should_alert = streak >= _HEALTH_ALERT_THRESHOLD and not rec.get("alerted")
+    if should_alert:
+        rec["alerted"] = True
+    data[subsystem] = rec
+    _save_health(data)
+    if should_alert:
+        try:
+            from telegram_notifier import notify_subsystem_down
+            notify_subsystem_down(subsystem, streak, str(error)[:200])
+        except Exception:
+            pass
+
+
+@contextlib.contextmanager
+def health_guard(subsystem, swallow=True):
+    """Wrap a subsystem's work and record success/failure for observability. Swallows the
+    exception by default (so the other subsystems still run); `swallow=False` re-raises after
+    recording (the full empire cycle, where failure must abort the iteration). Never swallows
+    SystemExit/KeyboardInterrupt — those are fatal and handled by the main loop (P5.1)."""
+    try:
+        yield
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        logger.warning("[%s] falhou", subsystem, exc_info=True)
+        record_failure(subsystem, f"{type(exc).__name__}: {exc}")
+        if not swallow:
+            raise
+    else:
+        record_success(subsystem)
+
+
+# ── Central anti-detection throttle (P5.3) ──────────────────────────────────────
+# Rule #1: every game request needs a delay. That was enforced by scattered time.sleep()
+# calls — easy to forget on a new code path. ThrottledSession wraps the game session so
+# EVERY get/post is guaranteed a minimum spacing from the previous one: a floor, not an
+# additive sleep. Where local code already slept (5-15s) the elapsed time already exceeds the
+# floor → no extra wait; where a path forgot, the floor (≈1.5-3.5s) still applies. Set
+# IKABOT_NO_THROTTLE=1 to disable (escape hatch if it ever interferes in-game).
+_THROTTLE_MIN_INTERVAL = 1.5   # seconds; minimum gap between any two game requests
+_THROTTLE_JITTER = 2.0         # random 0..this added on top of the minimum
+
+
+class ThrottledSession:
+    """Transparent proxy over an ikabot Session enforcing a minimum spacing between game
+    requests. Every non-get/post attribute is delegated to the wrapped session."""
+
+    def __init__(self, inner, min_interval=_THROTTLE_MIN_INTERVAL, jitter=_THROTTLE_JITTER):
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_min_interval", min_interval)
+        object.__setattr__(self, "_jitter", jitter)
+        object.__setattr__(self, "_last_request", 0.0)
+
+    def _throttle(self):
+        floor = self._min_interval + random.uniform(0, self._jitter)
+        elapsed = time.time() - self._last_request
+        if elapsed < floor:
+            time.sleep(floor - elapsed)
+        object.__setattr__(self, "_last_request", time.time())
+
+    def get(self, *args, **kwargs):
+        self._throttle()
+        return self._inner.get(*args, **kwargs)
+
+    def post(self, *args, **kwargs):
+        self._throttle()
+        return self._inner.post(*args, **kwargs)
+
+    def __getattr__(self, name):
+        # only reached when `name` isn't found normally → delegate to the wrapped session
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+
+def throttle_session(session):
+    """Wrap a session so all downstream game I/O is rate-limited. Idempotent; honours the
+    IKABOT_NO_THROTTLE escape hatch."""
+    if os.getenv("IKABOT_NO_THROTTLE") == "1" or isinstance(session, ThrottledSession):
+        return session
+    return ThrottledSession(session)
 

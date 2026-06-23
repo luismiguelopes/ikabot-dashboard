@@ -135,18 +135,26 @@ mas o pai ikabot (PID 1) sobrevive → `restart:unless-stopped` não dispara.
 - ⚠️ **Infra requer `docker compose up -d`** para activar (recria `ikabot` com healthcheck +
   arranca `ikabot-autoheal`; o sidecar precisa de `/var/run/docker.sock`).
 
+### P5.2 ✅ Observabilidade de falhas silenciosas — 2026-06-23
+~150 `except Exception` engoliam erros — o bot podia estar "vivo mas inútil". Cada subsistema
+(empire/building/espionage/attack/farm/transport/scan) regista sucesso/falha em `health.json`
+via `health_guard(...)` no `empireFunction` (substitui os `try/except` que só logavam). N
+falhas consecutivas (3) → alerta Telegram uma vez (`notify_subsystem_down`), recuperação
+limpa-o (`notify_subsystem_recovered`). Exposto na UI: `/api/health` traz `subsystems`, e o
+`SubsystemHealthBanner` (App.tsx) mostra um banner vermelho quando há módulos em falha.
+Testes: `test_health.py` (7).
+
+### P5.3 ✅ Anti-detecção centralizada — 2026-06-23
+A regra nº1 dependia de `time.sleep` espalhado (fácil de esquecer num caminho novo).
+`ThrottledSession` (empire_utils) embrulha a sessão no arranque do `empireFunction` e garante
+um **piso de espaçamento** entre QUALQUER get/post (≈1.5-3.5s) — onde já havia sleep local
+(5-15s) não acrescenta nada; onde faltava, protege. Proxy transparente (`__getattr__`/
+`__setattr__` delegam tudo o resto). Escape hatch `IKABOT_NO_THROTTLE=1`. Confirmado que nenhum
+módulo contorna via `session.s.get`. Nota: o "teste que apanha get/post sem sleep" (estático,
+grep) foi superado pela garantia em runtime — testámos antes o comportamento do wrapper
+(`test_throttle.py`, 6).
+
 **Pendente (por implementar):**
-
-### P5.2 Observabilidade de falhas silenciosas
-~150 `except Exception` (29 só no `queue_processor`) engolem erros — o bot pode estar "vivo
-mas inútil" (dispatch a falhar sempre, parser a devolver `{}` por mudança de HTML). Contador
-de falhas consecutivas por subsistema (espionagem/ataque/transporte/scan) exposto na UI +
-alerta Telegram ao passar N. **Próximo a implementar.**
-
-### P5.3 Anti-detecção centralizada
-A regra nº1 ("todo o pedido leva sleep") depende de revisão manual. Encaminhar TODO o I/O do
-jogo por um wrapper de sessão com rate-limiter único, em vez de espalhar `time.sleep`. Teste
-que apanha `session.get/post` sem sleep antes.
 
 ### P5.4 Migrar `auto_attack_waves.json` para SQLite
 Última race JSON Flask↔bot (o bot escreve durante sleeps longos, o Flask lê/cancela). Mover

@@ -1553,7 +1553,15 @@ def api_health():
             db_ok = True
         except Exception:
             pass
-    return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok})
+    # Per-subsystem health (P5.2): consecutive failures, last error/success per module.
+    subsystems = {}
+    try:
+        with open(os.path.join(LOGS_DIR, "health.json")) as f:
+            subsystems = json.load(f)
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok,
+                    "subsystems": subsystems})
 
 
 @app.route("/api/stream")

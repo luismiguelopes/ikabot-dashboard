@@ -105,6 +105,16 @@ def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> N
           f"{loot_total:,} recursos")
 
 
+def notify_subsystem_down(subsystem: str, consecutive: int, error: str) -> None:
+    _send(f"🟠 <b>Subsistema em falha</b>\n<code>{subsystem}</code> falhou {consecutive}× "
+          f"seguidas — o bot está vivo mas este módulo não está a fazer nada.\n"
+          f"Último erro: {error}")
+
+
+def notify_subsystem_recovered(subsystem: str) -> None:
+    _send(f"🟢 <b>Subsistema recuperado</b>\n<code>{subsystem}</code> voltou a funcionar.")
+
+
 def notify_bot_fatal() -> None:
     _send("💥 <b>Bot terminou (fatal)</b> — a sessão do jogo desistiu (re-login/rede esgotados). "
           "O container deve reiniciar sozinho (healthcheck + autoheal); confirma se persiste.")

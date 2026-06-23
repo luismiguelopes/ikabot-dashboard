@@ -16,6 +16,7 @@ from empire_utils import (
     LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
     FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm, logger,
+    health_guard, throttle_session, record_success, record_failure,
 )
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
@@ -36,6 +37,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     """
 
     event.set()
+
+    # P5.3: route all downstream game I/O through one rate-limiter (floor between requests).
+    session = throttle_session(session)
 
     logger.info(lm("empire_start_1"))
     logger.info(lm("empire_start_2", interval=UPDATE_INTERVAL))
@@ -95,13 +99,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
                 if in_scan_hours:
-                    try:
+                    with health_guard("espionage"):
                         from espionage_manager import process_spy_cycle
-                        from attack_manager import process_attack_queue
                         process_spy_cycle(session)
+                    with health_guard("attack"):
+                        from attack_manager import process_attack_queue
                         process_attack_queue(session, in_active_hours=True)
-                    except Exception:
-                        logger.warning("[espionage] spy cycle (wake-up) falhou", exc_info=True)
                 smart_sleep(last_full_cycle_time, next_full_jitter, session)
                 continue
 
@@ -119,6 +122,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             status_summary, formatted_empire, resources_data = collect_city_data(session, ids, cities)
 
             finalize_empire_cycle(session, ids, status_summary, formatted_empire, resources_data)
+            record_success("empire")
 
             try:
                 from telegram_notifier import notify_wine_critical, clear_wine_critical
@@ -136,54 +140,53 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             next_full_jitter = random.randint(-300, 300)
 
             # ── Building queue (before scans — never blocked by long scans) ──
-            if has_building_queue():
-                if process_building_queue(session, ids, cities):
-                    logger.info(lm("queue_movements_refresh"))
-                    refresh_movements(session, ids[0])
+            with health_guard("building"):
+                if has_building_queue():
+                    if process_building_queue(session, ids, cities):
+                        logger.info(lm("queue_movements_refresh"))
+                        refresh_movements(session, ids[0])
 
             # ── Espionage / attacks / farm (income — first claim on trade ships) ──
             # Runs BEFORE internal logistics so the farm reserves its ships before
             # consolidation/wine/transports get a turn (which now yield to the reserve).
+            # Each subsystem is guarded separately (P5.2) so one failing doesn't hide the
+            # others and its failure streak is tracked for the health monitor.
             if in_scan_hours:
-                try:
+                with health_guard("espionage"):
                     from espionage_manager import fetch_spy_counts, process_spy_cycle
+                    fetch_spy_counts(session)
+                    process_spy_cycle(session)
+                with health_guard("attack"):
                     from attack_manager import (
                         process_attack_queue, evaluate_auto_attacks, process_auto_attack_waves,
                     )
-                    fetch_spy_counts(session)
-                    process_spy_cycle(session)
                     process_attack_queue(session, in_active_hours=in_scan_hours)
                     evaluate_auto_attacks(session)
                     process_auto_attack_waves(session, in_active_hours=in_scan_hours)
+                with health_guard("farm"):
                     from farm_manager import process_farm_targets
                     process_farm_targets(session, in_active_hours=in_scan_hours)
-                except Exception:
-                    logger.warning("[espionage] spy cycle falhou", exc_info=True)
 
             # ── Scheduled transports + consolidation (yield trade ships to the farm) ──
             if in_scan_hours:
-                try:
+                with health_guard("transport"):
                     from transport_manager import (
                         process_transport_queue, process_consolidation, process_wine_balancer,
                     )
                     process_transport_queue(session, in_active_hours=True)
                     process_consolidation(session, in_active_hours=True)
                     process_wine_balancer(session, in_active_hours=True)
-                except Exception:
-                    logger.warning("[transport] ciclo de transportes falhou", exc_info=True)
 
             # ── Background scans (only during active hours) ───────────────────
             if in_scan_hours:
-                if should_update_building_costs():
-                    collect_building_costs(session, ids)
-                elif should_start_scan():
-                    collect_shallow_scan(session)
-                else:
-                    try:
+                with health_guard("scan"):
+                    if should_update_building_costs():
+                        collect_building_costs(session, ids)
+                    elif should_start_scan():
+                        collect_shallow_scan(session)
+                    else:
                         from scan_collector import process_watchlist
                         process_watchlist(session, in_active_hours=True)
-                    except Exception:
-                        logger.warning("[watchlist] falhou", exc_info=True)
 
             smart_sleep(last_full_cycle_time, next_full_jitter, session)
 
@@ -198,6 +201,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             except Exception:
                 pass
             raise
-        except Exception:
+        except Exception as exc:
             logger.error(lm("cycle_error"), exc_info=True)
+            record_failure("empire", f"{type(exc).__name__}: {exc}")
             time.sleep(random.randint(120, 300))
