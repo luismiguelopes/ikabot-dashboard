@@ -174,15 +174,25 @@ guarnição, movimentos de frota) movidos para `espionage_parsers.py` (444) por 
 Re-export em `espionage_manager` → call sites e testes não mudam. Novo mount no
 `docker-compose.yml` (⚠️ requer `docker compose up -d`, não chega `restart`). 206 testes passam.
 
-**Pendente (por implementar):**
+### P5.7 ✅ Golden-file tests dos payloads que gastam tropas — 2026-06-23
+`test_attack_payloads.py` (4): fixa o POST exacto de `sendArmyPlunderSea`,
+`sendFleetBlockadeSea` e `deployArmy/deployFleet` mockando os form-fetchers e a sessão.
+Apanha regressões no strip do `s` (plunder/blockade tiram, deploy mantém s303), nos upkeep
+obrigatórios (zero-fill das unidades não enviadas) e no cap de transporters — antes de
+custarem um exército in-game.
 
-### P5.7 Golden-file tests dos payloads que gastam tropas
-Plunder/blockade/deploy: testar o POST exacto (upkeep, strip do `s`, cap de transporters) a
-partir de formulários capturados — apanha regressões antes de custarem um exército in-game.
+### P5.8 ✅ Validação de schema das configs — 2026-06-23
+`validate_configs()` (empire_utils) verifica farm_settings/auto_attack_settings/
+espionage_settings/world_scan_settings/telegram_settings contra os schemas autoritativos (as
+chaves que os writers do Flask produzem). Chaves desconhecidas (typos) e tipos errados → aviso
+no log + `config_warnings.json` + `/api/health` + banner âmbar na UI. Corre no arranque do
+`empireFunction`. Antes, um typo caía em silêncio para o default. Testes em
+`test_config_validation.py` (6).
 
-### P5.8 Validação de schema das configs
-`farm_settings`/`world_scan_settings`/`telegram_settings`/env: um typo cai em silêncio para
-defaults (o `except: return {}`). Validar e avisar.
+---
+
+**P5 concluído.** Próximo: validação in-game de tudo (ver pendências abaixo) antes de novas
+features.
 
 ---
 

@@ -31,15 +31,18 @@ function PausedBanner() {
 function SubsystemHealthBanner() {
   const t = useT()
   const [down, setDown] = useState<string[]>([])
+  const [cfg, setCfg] = useState<string[]>([])
   useEffect(() => {
     let stop = false
     const check = () => {
       fetch('/api/health')
         .then(r => r.json())
-        .then((d: { subsystems?: Record<string, { consecutiveFailures?: number }> }) => {
+        .then((d: { subsystems?: Record<string, { consecutiveFailures?: number }>
+                    configWarnings?: Record<string, string[]> }) => {
           if (stop) return
           const subs = d.subsystems || {}
           setDown(Object.keys(subs).filter(k => (subs[k]?.consecutiveFailures ?? 0) >= 3))
+          setCfg(Object.keys(d.configWarnings || {}))
         })
         .catch(() => {})
     }
@@ -47,12 +50,21 @@ function SubsystemHealthBanner() {
     const id = setInterval(check, 60000)
     return () => { stop = true; clearInterval(id) }
   }, [])
-  if (down.length === 0) return null
   return (
-    <div className="mb-4 flex items-center gap-2 text-sm text-red-800 bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 font-medium">
-      <i className="fa-solid fa-heart-crack shrink-0" />
-      {t('health_banner')}: <span className="font-mono">{down.join(', ')}</span>
-    </div>
+    <>
+      {down.length > 0 && (
+        <div className="mb-4 flex items-center gap-2 text-sm text-red-800 bg-red-50 border border-red-300 rounded-lg px-4 py-2.5 font-medium">
+          <i className="fa-solid fa-heart-crack shrink-0" />
+          {t('health_banner')}: <span className="font-mono">{down.join(', ')}</span>
+        </div>
+      )}
+      {cfg.length > 0 && (
+        <div className="mb-4 flex items-center gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-4 py-2.5">
+          <i className="fa-solid fa-gear shrink-0" />
+          {t('config_banner')}: <span className="font-mono">{cfg.join(', ')}</span>
+        </div>
+      )}
+    </>
   )
 }
 

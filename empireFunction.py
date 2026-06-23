@@ -16,7 +16,7 @@ from empire_utils import (
     LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
     FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm, logger,
-    health_guard, throttle_session, record_success, record_failure,
+    health_guard, throttle_session, record_success, record_failure, validate_configs,
 )
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
@@ -40,6 +40,12 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
     # P5.3: route all downstream game I/O through one rate-limiter (floor between requests).
     session = throttle_session(session)
+
+    # P5.8: surface mistyped/unknown config keys (silently ignored otherwise).
+    try:
+        validate_configs()
+    except Exception:
+        pass
 
     logger.info(lm("empire_start_1"))
     logger.info(lm("empire_start_2", interval=UPDATE_INTERVAL))

@@ -1556,8 +1556,15 @@ def api_health():
             subsystems = json.load(f)
     except Exception:
         pass
+    # Config schema warnings (P5.8): mistyped/unknown keys silently ignored by the bot.
+    config_warnings = {}
+    try:
+        with open(os.path.join(LOGS_DIR, "config_warnings.json")) as f:
+            config_warnings = json.load(f)
+    except Exception:
+        pass
     return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok,
-                    "subsystems": subsystems})
+                    "subsystems": subsystems, "configWarnings": config_warnings})
 
 
 @app.route("/api/stream")

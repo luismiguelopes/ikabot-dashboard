@@ -519,3 +519,67 @@ def throttle_session(session):
         return session
     return ThrottledSession(session)
 
+
+# ── Config schema validation (P5.8) ─────────────────────────────────────────────
+# Settings loaders fall back to defaults on any error, so a typo'd key (e.g. "spyAgent"
+# instead of "spyAgents") is silently ignored — the bot uses the default and the user never
+# knows their setting did nothing. validate_configs() checks the known config files against
+# their authoritative schemas (the keys the Flask writers actually produce) and warns on
+# unknown keys / wrong types, surfacing it in the log, config_warnings.json and the UI.
+CONFIG_WARNINGS_PATH = os.path.join(LOGS_DIR, "config_warnings.json")
+
+_CONFIG_SCHEMAS = {
+    "farm_settings.json": {
+        "army": dict, "fleet": dict, "spyAgents": int, "shipReserveEnabled": bool,
+        "reserveHorizonMin": int, "earlyRespyEnabled": bool,
+    },
+    "auto_attack_settings.json": {
+        "enabled": bool, "minLootTotal": int, "lootPerWave": int, "battleDelayFewMins": int,
+        "battleDelayMedMins": int, "battleDelayManyMins": int, "maxEnemyShipsToEngage": int,
+    },
+    "espionage_settings.json": {"garrisonThresholdTotal": int, "processingEnabled": bool},
+    "world_scan_settings.json": {"enabled": bool},
+    "telegram_settings.json": {"botToken": str, "chatId": str},
+}
+
+
+def _type_ok(value, expected):
+    if expected is int:                 # bool is an int subclass — keep them distinct
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected is bool:
+        return isinstance(value, bool)
+    return isinstance(value, expected)
+
+
+def validate_configs():
+    """Check known config files against their schemas. Returns {filename: [warnings]}, logs
+    each warning and writes config_warnings.json for the dashboard."""
+    warnings = {}
+    for fname, schema in _CONFIG_SCHEMAS.items():
+        path = os.path.join(LOGS_DIR, fname)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        file_warnings = []
+        for key, value in data.items():
+            if key not in schema:
+                file_warnings.append(f"chave desconhecida '{key}' — typo? (ignorada, usa-se o default)")
+            elif not _type_ok(value, schema[key]):
+                file_warnings.append(
+                    f"'{key}' é {type(value).__name__}, esperado {schema[key].__name__}")
+        if file_warnings:
+            warnings[fname] = file_warnings
+            for w in file_warnings:
+                logger.warning("[config] %s: %s", fname, w)
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(CONFIG_WARNINGS_PATH, "w") as f:
+            json.dump(warnings, f)
+    except Exception:
+        pass
+    return warnings
+
