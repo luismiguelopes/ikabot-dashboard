@@ -472,6 +472,42 @@ def _collect_military_data(session):
             logger.error("[military] erro ao escrever military.json", exc_info=True)
 
 
+def refresh_city_military(session, city_id, city_name):
+    """Live cityMilitary fetch for ONE city, merged into military.json. Returns the city's
+    {'cityId','troops','fleet'} or None. The 8h military cache lags troops cycling through
+    raids, so the farm sizes an attack from this fresh count to avoid sending units that aren't
+    home (server rejects with 'no units selected')."""
+    try:
+        params = {
+            "view": "cityMilitary", "cityId": city_id, "backgroundView": "city",
+            "currentCityId": city_id, "actionRequest": actionRequest, "ajax": "1",
+            "activeTab": "tabUnits", "currentTab": "multiTab1",
+        }
+        resp_data = json.loads(session.post(params=params), strict=False)
+        html   = resp_data[1][1][1]
+        troops = _parse_unit_tab(html, "army")
+        fleet  = _parse_unit_tab(html, "fleet")
+    except Exception:
+        logger.warning("[military] refresh ao vivo de %s falhou", city_name, exc_info=True)
+        return None
+    entry = {"cityId": str(city_id), "troops": troops, "fleet": fleet}
+    path = os.path.join(LOGS_DIR, "military.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {"byCityName": {}}
+    data.setdefault("byCityName", {})[city_name] = entry   # only this city; keep others' cache
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+    logger.info("[military] %s (ao vivo): %d tropa(s), %d frota(s)",
+                city_name, len(troops), len(fleet))
+    return entry
+
+
 def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resources_data):
     """Collect movements and write all empire JSON files + history."""
     time.sleep(random.randint(5, 10))

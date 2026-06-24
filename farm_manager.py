@@ -523,6 +523,16 @@ def process_farm_targets(session, in_active_hours=True):
             return None
         origin_name, origin_id, ox, oy = origin
 
+        # Size troops/fleet from LIVE origin counts: the 8h military cache lags the loadout
+        # units cycling through raids, so cached counts get rejected with "no units selected".
+        try:
+            from empire_collector import refresh_city_military
+            fresh = refresh_city_military(session, origin_id, origin_name)
+            if fresh:
+                military.setdefault("byCityName", {})[origin_name] = fresh
+        except Exception:
+            pass
+
         fleet_travel = _calc_travel_secs(ox, oy, ix, iy)
         troop_travel = int(fleet_travel * 2 / 3)   # rough fallback (real times below)
         transporters = max(1, math.ceil(loot / ship_cap))
@@ -716,7 +726,13 @@ def process_farm_targets(session, in_active_hours=True):
                         })
                         logger.info("[farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
                         continue
-                    # no usable origin → fall through to a scout
+                    # Origin has no free troops/ships right now (still returning) — retry when
+                    # they land, don't burn a scout.
+                    eta = _ships_back_eta(t, now, session, first_city_id)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": eta, "next_action": "attack"})
+                    logger.info("[farm] %s: sem tropas/navios livres na origem — nova tentativa ~%dmin",
+                                name, max(0, (eta - now) // 60))
+                    continue
 
             # ── Periodic / first scout ──────────────────────────────────────
             # First contact and fleet targets need the full garrison; a safe target's periodic
@@ -809,9 +825,13 @@ def process_farm_targets(session, in_active_hours=True):
 
             res = _enqueue_attack(t, loot, enemy_ships)
             if not res:
-                logger.warning("[farm] %s: sem origem utilizável — a reagendar", name)
-                farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
-                                  "last_loot": loot, "next_action": "spy"})
+                # Report is fresh; we just lack free troops/ships now (returning) → retry when
+                # they land and attack directly, no need to re-scout.
+                eta = _ships_back_eta(t, now, session, first_city_id)
+                logger.info("[farm] %s: relatório pronto mas sem tropas/navios livres — "
+                            "nova tentativa ~%dmin", name, max(0, (eta - now) // 60))
+                farm_update(tid, {"state": "IDLE", "next_run_at": eta, "last_loot": loot,
+                                  "last_enemy_ships": enemy_ships, "next_action": "attack"})
                 continue
             farm_update(tid, {
                 "state": "ATTACKING", "attack_return_at": res["return_at"], "last_attack_at": now,

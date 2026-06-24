@@ -89,6 +89,7 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     monkeypatch.setattr(am, "fetch_fleet_journey", lambda *a, **k: None, raising=False)
     import empire_collector
     monkeypatch.setattr(empire_collector, "refresh_movements", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(empire_collector, "refresh_city_military", lambda *a, **k: None, raising=False)
     import empire_utils
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
     # capture queue_add into a list
@@ -461,6 +462,27 @@ def test_healthy_real_return_still_direct_attacks(monkeypatch, tmp_path):
 
     assert [q for q, _ in added] == ["attack"]            # still direct — target still rich
     assert db_manager.farm_get("100")["state"] == "ATTACKING"
+
+
+def test_no_free_troops_reschedules_not_doomed_attack(monkeypatch, tmp_path):
+    """Origin with no free troops (still returning / cache lagging) → reschedule a short retry,
+    not a doomed dispatch the server rejects with 'no units selected'."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 200000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0, "last_attack_at": now - 100})
+    added = _common_patches(monkeypatch, tmp_path)
+    with open(tmp_path / "mil.json", "w") as f:        # origin has no troops available now
+        json.dump({"byCityName": {"Home": {"troops": {}, "fleet": {}}}}, f)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                  # neither attack nor scout enqueued
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_run_at"] > now   # rescheduled for a retry
 
 
 def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
