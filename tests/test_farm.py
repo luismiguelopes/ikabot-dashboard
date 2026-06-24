@@ -84,6 +84,11 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "missions.json"))  # isolate saves
     monkeypatch.setattr(fm, "MOVEMENTS_PATH", str(tmp_path / "movements.json"))  # isolate
     monkeypatch.setattr(fm, "_free_ships", lambda s: 50)  # ships available by default
+    # Real-time form fetches / movement refresh: stub so attacks don't hit the network or sleep
+    monkeypatch.setattr(am, "fetch_troop_journey", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(am, "fetch_fleet_journey", lambda *a, **k: None, raising=False)
+    import empire_collector
+    monkeypatch.setattr(empire_collector, "refresh_movements", lambda *a, **k: None, raising=False)
     import empire_utils
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
     # capture queue_add into a list
@@ -273,6 +278,36 @@ def test_attacking_returns_to_idle_after_return(monkeypatch, tmp_path):
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE"
     assert t["next_run_at"] > int(time.time())
+
+
+def test_attacking_unblocks_when_troops_home_despite_estimate(monkeypatch, tmp_path):
+    """An overshooting attack_return_at must not block the queue: with no movement in flight to
+    the target and grace passed, the troops are home → transition out of ATTACKING."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 9000,
+                                   "last_attack_at": now - 1800, "raids_since_spy": 1,
+                                   "last_enemy_ships": 0})
+    _common_patches(monkeypatch, tmp_path)   # MOVEMENTS_PATH isolated → no raid in flight
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] != "ATTACKING"   # unblocked
+
+
+def test_attacking_waits_while_raid_in_flight(monkeypatch, tmp_path):
+    """If a movement to the target is still in flight, keep waiting (don't false-unblock)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 9000,
+                                   "last_attack_at": now - 1800, "raids_since_spy": 1})
+    _common_patches(monkeypatch, tmp_path)
+    with open(tmp_path / "movements.json", "w") as f:
+        json.dump([{"isOwn": True, "direction": "->", "destination": "Alvo", "origin": "Home"}], f)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] == "ATTACKING"   # still out → keep waiting
 
 
 def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):

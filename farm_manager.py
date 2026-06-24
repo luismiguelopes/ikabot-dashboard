@@ -325,6 +325,30 @@ def _real_return_eta(target):
     return best
 
 
+_RAID_GRACE_SECS = 5 * 60   # let movements populate before trusting "no movement = home"
+
+
+def _raid_in_flight(target):
+    """True if ANY own movement (outbound OR returning) involves this target — i.e. the raid
+    isn't home yet. Used to detect when an overshooting return estimate has already elapsed:
+    no movement to/from the target + grace passed = troops are back, don't keep waiting."""
+    try:
+        with open(MOVEMENTS_PATH) as f:
+            movements = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return False
+    city = (target.get("target_city_name") or "").lower()
+    player = (target.get("target_player") or "").lower()
+    for m in movements:
+        if not m.get("isOwn"):
+            continue
+        for fld in ("destination", "origin"):
+            v = (m.get(fld) or "").lower()
+            if (city and city in v) or (player and player in v):
+                return True
+    return False
+
+
 def _ships_back_eta(target, now, session=None, first_city_id=None):
     """When to retry an attack that's blocked on ships: the real return arrival from the
     movements API (so we wake exactly when the fleet lands), or a short fallback if no
@@ -525,23 +549,25 @@ def process_farm_targets(session, in_active_hours=True):
             if not fleet_units:
                 fleet_units = _build_fleet_units(origin_name, military)
 
-        # Real travel times from the game forms (slowest unit sets the pace) — only for
-        # fleet-related targets; pure plunder targets keep the cheap estimate (no extra HTTP).
+        # Real travel time from the game form (slowest unit sets the pace). Fetched for EVERY
+        # raid now, not just fleet ones: the cheap _calc_travel_secs estimate can overshoot
+        # badly, leaving attack_return_at far in the future so the target stays stuck in
+        # ATTACKING (troops already home, ships free) and blocks the whole queue. One extra
+        # throttled form fetch is worth an accurate return time.
         is_fleet_target = need_fleet or ret_at > 0 or int(t.get("is_fleet_target", 0)) == 1
-        if is_fleet_target:
-            try:
-                import ikabot.config as ikc
-                from attack_manager import fetch_fleet_journey, fetch_troop_journey
-                rt = fetch_troop_journey(session, ikc, origin_id, t["target_city_id"])
-                if rt:
-                    troop_travel = rt
-                if need_fleet:
-                    rf = fetch_fleet_journey(session, ikc, origin_id, t["target_city_id"],
-                                             list(fleet_units))
-                    if rf:
-                        fleet_travel = rf
-            except Exception:
-                logger.warning("[farm] %s: leitura de tempos reais falhou — a usar estimativa", name)
+        try:
+            import ikabot.config as ikc
+            from attack_manager import fetch_fleet_journey, fetch_troop_journey
+            rt = fetch_troop_journey(session, ikc, origin_id, t["target_city_id"])
+            if rt:
+                troop_travel = rt
+            if need_fleet:
+                rf = fetch_fleet_journey(session, ikc, origin_id, t["target_city_id"],
+                                         list(fleet_units))
+                if rf:
+                    fleet_travel = rf
+        except Exception:
+            logger.warning("[farm] %s: leitura de tempos reais falhou — a usar estimativa", name)
 
         base = {
             "originCityId":     str(origin_id), "originCityName": origin_name,
@@ -803,11 +829,28 @@ def process_farm_targets(session, in_active_hours=True):
         # ── ATTACKING → wait for the real return, then relaunch soon ────────
         if state == "ATTACKING":
             return_at = int(t.get("attack_return_at", 0))
+            # Refresh movements (rate-limited) so the in-flight state is current before we
+            # decide whether the raid is still out.
+            if first_city_id and now - getattr(process_farm_targets, "_atk_mv_refresh", 0) > 90:
+                process_farm_targets._atk_mv_refresh = now
+                try:
+                    from empire_collector import refresh_movements
+                    refresh_movements(session, first_city_id)
+                except Exception:
+                    pass
             # Refine the wake from the actual fleet movement when available
             real = _real_return_eta(t)
             if real and abs(real - return_at) > 60:
                 farm_update(tid, {"attack_return_at": real})
                 return_at = real
+            elif (not real and now < return_at and int(t.get("last_attack_at", 0)) > 0
+                  and not _raid_in_flight(t)
+                  and now - int(t.get("last_attack_at", 0)) > _RAID_GRACE_SECS):
+                # The estimate overshot: no movement to/from this target and grace has passed →
+                # troops are already home and ships are free. Don't block the queue any longer.
+                logger.info("[farm] %s: tropas já em casa (sem movimento em curso) — estimativa "
+                            "de regresso era longa demais, a desbloquear a fila", name)
+                return_at = now
 
             # Pipelined re-spy: scout WHILE the troops are still on their way home (spies
             # use the safehouse, not ships) so a re-spy round is ready to attack the moment
