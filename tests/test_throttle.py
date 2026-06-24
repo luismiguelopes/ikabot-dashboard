@@ -86,6 +86,18 @@ def test_throttle_session_idempotent(monkeypatch):
     assert twice is once             # wrapping a wrapped session returns it unchanged
 
 
+def test_request_writes_heartbeat(monkeypatch, tmp_path):
+    """Every game request refreshes last_alive.json so long work phases (building costs, world
+    scan) don't let the container healthcheck false-restart the bot mid-work."""
+    import json
+    clock, _ = _fake_clock(monkeypatch)
+    monkeypatch.setattr(eu, "LAST_ALIVE_JSON_PATH", str(tmp_path / "last_alive.json"))
+    s = eu.ThrottledSession(_FakeSession())
+    s.get("view=city")
+    with open(tmp_path / "last_alive.json") as f:
+        assert json.load(f)["lastAlive"] == int(clock[0])
+
+
 def test_escape_hatch_disables_wrapping(monkeypatch):
     monkeypatch.setenv("IKABOT_NO_THROTTLE", "1")
     inner = _FakeSession()

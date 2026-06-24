@@ -488,6 +488,22 @@ class ThrottledSession:
         object.__setattr__(self, "_min_interval", min_interval)
         object.__setattr__(self, "_jitter", jitter)
         object.__setattr__(self, "_last_request", 0.0)
+        object.__setattr__(self, "_last_beat", 0.0)
+
+    def _heartbeat(self):
+        # Every game request proves the bot is alive, so long WORK phases (building costs,
+        # world scan — tens of minutes with no smart_sleep) keep last_alive.json fresh and the
+        # container healthcheck/autoheal (P5.1) don't false-restart mid-work. Gated to ~15s so
+        # request-heavy phases don't hammer the disk. A genuine hang still stops beats → restart.
+        now = time.time()
+        if now - self._last_beat < 15:
+            return
+        object.__setattr__(self, "_last_beat", now)
+        try:
+            with open(LAST_ALIVE_JSON_PATH, "w") as f:
+                json.dump({"lastAlive": int(now)}, f)
+        except Exception:
+            pass
 
     def _throttle(self):
         floor = self._min_interval + random.uniform(0, self._jitter)
@@ -495,6 +511,7 @@ class ThrottledSession:
         if elapsed < floor:
             time.sleep(floor - elapsed)
         object.__setattr__(self, "_last_request", time.time())
+        self._heartbeat()
 
     def get(self, *args, **kwargs):
         self._throttle()
