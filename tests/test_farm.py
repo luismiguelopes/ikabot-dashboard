@@ -388,6 +388,46 @@ def test_uncertain_inactivity_forces_full_scout(monkeypatch, tmp_path):
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
+def test_drained_by_real_return_respies_not_direct(monkeypatch, tmp_path):
+    """A safe target whose troops came back with < min_loot is re-spied to confirm drainage,
+    not direct-attacked on the stale scouted last_loot (the 5k-return / 268k-last_loot bug)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268638,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0, "last_attack_at": now - 100})
+    db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
+                         "toCity": "Baphomet", "resources": [3000, 2101, 0, 0, 0], "returnKey": "k1"})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]      # re-spied, did NOT attack directly
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_healthy_real_return_still_direct_attacks(monkeypatch, tmp_path):
+    """A real return still above min_loot keeps the fast direct-attack path (no needless scout)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268638,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0, "last_attack_at": now - 100})
+    db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
+                         "toCity": "Baphomet", "resources": [100000, 0, 0, 0, 0], "returnKey": "k1"})
+    added = _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]            # still direct — target still rich
+    assert db_manager.farm_get("100")["state"] == "ATTACKING"
+
+
 def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
     """The pipelined re-scout fired while troops return is warehouse-only for a safe target."""
     _setup_db(tmp_path)

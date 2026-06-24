@@ -149,6 +149,30 @@ def _confirm_inactive(session, t):
     return None
 
 
+def _recent_return_loot(t):
+    """ACTUAL loot the last raid on this target brought home (from loot_log), or None if no
+    return is recorded since the last attack. Unlike last_loot (the stale SCOUTED warehouse
+    total kept for ranking), this reflects how drained the target is RIGHT NOW: troops carry
+    min(warehouse, capacity), so a return below min_loot means the warehouse was below the
+    threshold when we hit it — the target is drained, even though last_loot is still high."""
+    last_atk = int(t.get("last_attack_at", 0) or 0)
+    if last_atk <= 0:
+        return None
+    name = str(t.get("target_city_name", "") or "")
+    try:
+        from db_manager import get_loot_log
+        for row in get_loot_log(limit=8, target=name):
+            if int(row.get("ts", 0) or 0) < last_atk:
+                continue
+            if name and name.lower() not in str(row.get("from_city", "")).lower():
+                continue
+            return sum(int(row.get(k, 0) or 0)
+                       for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+    except Exception:
+        return None
+    return None
+
+
 # ── Ship reservation ───────────────────────────────────────────────────────────
 # Trade ships ("transporters") are the SAME pool used to pillage and to move resources
 # between own cities. Internal logistics (consolidation, wine top-ups, construction
@@ -641,22 +665,32 @@ def process_farm_targets(session, in_active_hours=True):
             first_scout = int(t.get("last_spy_at", 0)) == 0
 
             # ── Direct raid on a safe target (no scout) ─────────────────────
+            # Gate also on the ACTUAL loot the last raid brought home: last_loot is the stale
+            # scouted warehouse total, so without this the bot keeps hammering a target it has
+            # already drained (e.g. troops came back with 5k while last_loot still reads 268k)
+            # until the periodic re-spy. A real return below min_loot → re-spy now to confirm
+            # drainage (the SPYING branch then disables it) instead of attacking on old intel.
             if (not first_scout and not _next_round_needs_spy(t)
                     and int(t.get("is_fleet_target", 0)) == 0
                     and int(t.get("last_loot", 0)) >= min_loot):
-                res = _enqueue_attack(t, int(t.get("last_loot", 0)), 0)
-                if res:
-                    farm_update(tid, {
-                        "state": "ATTACKING", "attack_return_at": res["return_at"],
-                        "last_attack_at": now, "last_transporters": res["transporters"],
-                        "raids_since_spy": int(t.get("raids_since_spy", 0)) + 1,
-                        "total_raids": int(t.get("total_raids", 0)) + 1,
-                        "enemy_return_at": res["enemy_return_at"],
-                        "last_troop_journey": res["troop_journey"],
-                    })
-                    logger.info("[farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
-                    continue
-                # no usable origin → fall through to a scout
+                recent = _recent_return_loot(t)
+                if recent is not None and recent < min_loot:
+                    logger.info("[farm] %s: último saque real %d < %d (drenado) — a re-espiar "
+                                "para confirmar em vez de atacar com intel antiga", name, recent, min_loot)
+                else:
+                    res = _enqueue_attack(t, int(t.get("last_loot", 0)), 0)
+                    if res:
+                        farm_update(tid, {
+                            "state": "ATTACKING", "attack_return_at": res["return_at"],
+                            "last_attack_at": now, "last_transporters": res["transporters"],
+                            "raids_since_spy": int(t.get("raids_since_spy", 0)) + 1,
+                            "total_raids": int(t.get("total_raids", 0)) + 1,
+                            "enemy_return_at": res["enemy_return_at"],
+                            "last_troop_journey": res["troop_journey"],
+                        })
+                        logger.info("[farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
+                        continue
+                    # no usable origin → fall through to a scout
 
             # ── Periodic / first scout ──────────────────────────────────────
             # First contact and fleet targets need the full garrison; a safe target's periodic
