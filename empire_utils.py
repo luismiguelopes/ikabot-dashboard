@@ -551,6 +551,35 @@ def _type_ok(value, expected):
     return isinstance(value, expected)
 
 
+def migrate_legacy_configs():
+    """Rewrite config files that still use superseded keys so they stop being silently ignored
+    (and stop tripping validate_configs). Run BEFORE validate_configs so the warning clears on
+    the same start. Currently: espionage's per-resource `garrisonThresholds` (replaced by the
+    single `garrisonThresholdTotal` the code now reads) — the old key was dead config."""
+    path = os.path.join(LOGS_DIR, "espionage_settings.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+    if not (isinstance(data, dict) and "garrisonThresholds" in data):
+        return
+    legacy = data.pop("garrisonThresholds")   # always drop the dead key
+    if "garrisonThresholdTotal" not in data:   # …and seed the total from it only if absent
+        try:
+            total = sum(int(v) for v in legacy.values()) if isinstance(legacy, dict) else 0
+        except (ValueError, TypeError):
+            total = 0
+        data["garrisonThresholdTotal"] = total or 50000
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info("[config] espionage_settings: garrisonThresholds (legado) → "
+                    "garrisonThresholdTotal=%d", data["garrisonThresholdTotal"])
+    except Exception:
+        logger.warning("[config] migração de espionage_settings falhou", exc_info=True)
+
+
 def validate_configs():
     """Check known config files against their schemas. Returns {filename: [warnings]}, logs
     each warning and writes config_warnings.json for the dashboard."""

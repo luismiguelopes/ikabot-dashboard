@@ -63,3 +63,32 @@ def test_warnings_written_to_file(monkeypatch, tmp_path):
 def test_missing_files_are_skipped(monkeypatch, tmp_path):
     _point_logs_at(monkeypatch, tmp_path)
     assert eu.validate_configs() == {}     # nothing on disk → nothing to warn about
+
+
+def test_legacy_garrison_thresholds_migrated(monkeypatch, tmp_path):
+    """The superseded per-resource garrisonThresholds collapses to a single total, preserving
+    the configured magnitude, so the dead key stops being silently ignored (and warned)."""
+    _point_logs_at(monkeypatch, tmp_path)
+    _write(tmp_path, "espionage_settings.json",
+           {"garrisonThresholds": {"wood": 10000, "wine": 0}, "processingEnabled": True})
+    eu.migrate_legacy_configs()
+    with open(tmp_path / "espionage_settings.json") as f:
+        data = json.load(f)
+    assert "garrisonThresholds" not in data
+    assert data["garrisonThresholdTotal"] == 10000
+    assert data["processingEnabled"] is True
+    # migrated file is now schema-clean
+    assert eu.validate_configs() == {}
+
+
+def test_migration_keeps_existing_total(monkeypatch, tmp_path):
+    """If a real total already exists, the legacy key is dropped without clobbering it."""
+    _point_logs_at(monkeypatch, tmp_path)
+    _write(tmp_path, "espionage_settings.json",
+           {"garrisonThresholds": {"wood": 999}, "garrisonThresholdTotal": 70000})
+    eu.migrate_legacy_configs()
+    with open(tmp_path / "espionage_settings.json") as f:
+        data = json.load(f)
+    assert "garrisonThresholds" not in data         # dead key dropped
+    assert data["garrisonThresholdTotal"] == 70000  # real total untouched
+    assert eu.validate_configs() == {}
