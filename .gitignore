@@ -19,3 +19,6 @@ __pycache__/
 ikabot_gui/db_manager.py
 ikabot_gui/telegram_notifier.py
 ikabot_gui/__pycache__/
+
+# Daily SQLite backups (P6.3)
+backups/

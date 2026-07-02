@@ -74,6 +74,14 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             except Exception:
                 pass
 
+            # P6.3: daily SQLite backup to the host-mounted dir (no-op if already done today
+            # or the mount is missing). Local file copy — no game I/O, no throttle involved.
+            try:
+                from db_manager import backup_db
+                backup_db()
+            except Exception:
+                pass
+
             now = time.time()
             if os.path.exists(FORCE_EMPIRE_FLAG):
                 try:

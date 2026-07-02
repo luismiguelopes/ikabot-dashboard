@@ -32,6 +32,8 @@ services:
       - ./loadCustomModule_patched.py:/ikabot/ikabot/function/loadCustomModule.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
+      # Backups diários do SQLite para fora do volume (P6.3) — sobrevive a docker volume rm
+      - ./backups:/backups
     command: >
       python3 -m ikabot ${IKABOT_EMAIL} ${IKABOT_PASSWORD} 21 8 1  /ikabot/ikabot/function/empireFunction.py "" 21 8 3
     ports:

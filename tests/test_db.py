@@ -207,3 +207,37 @@ def test_queue_transport_errors():
         loaded = db_manager.load_queue()
         assert "Porto" in loaded["transportErrors"]
         assert loaded["transportErrors"]["Porto"]["resource"] == "wood"
+
+
+# ── P6.3: daily SQLite backup with rotation ──────────────────────────────────
+
+def test_backup_db_daily_and_rotation(tmp_path):
+    db_manager.DB_PATH = str(tmp_path / "test.db")
+    db_manager._LOGS_DIR = str(tmp_path)
+    db_manager._DB_INIT_DONE = False
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "Alvo",
+                         "islandX": 1, "islandY": 2, "islandId": "3"})
+    dest_dir = tmp_path / "backups"
+
+    # missing mount → disabled, no crash
+    assert db_manager.backup_db(str(dest_dir)) is None
+
+    dest_dir.mkdir()
+    path = db_manager.backup_db(str(dest_dir))
+    assert path and os.path.exists(path)
+    # backup is a valid DB with the data
+    import sqlite3
+    rows = sqlite3.connect(path).execute("SELECT COUNT(*) FROM farm_targets").fetchone()
+    assert rows[0] == 1
+
+    # same day → idempotent (same file, not rewritten)
+    mtime = os.path.getmtime(path)
+    assert db_manager.backup_db(str(dest_dir)) == path
+    assert os.path.getmtime(path) == mtime
+
+    # rotation: seed 9 older dated files → keep=7 prunes down to the newest 7
+    for d in range(1, 10):
+        (dest_dir / f"ikabot-2026010{d}.db").write_bytes(b"x")
+    db_manager.backup_db(str(dest_dir))          # today exists → only rotation runs
+    left = sorted(f for f in os.listdir(dest_dir) if f.endswith(".db"))
+    assert len(left) == 7 and os.path.basename(path) in left

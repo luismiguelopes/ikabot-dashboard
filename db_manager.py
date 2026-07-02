@@ -1180,3 +1180,56 @@ def save_queue(data):
             f.write(str(int(time.time())))
     except Exception:
         pass
+
+
+# ── Daily backup (P6.3) ───────────────────────────────────────────────────────
+# Everything that can't be regenerated (farm targets, attack/loot logs, marks,
+# history) lives in this one SQLite file inside the shared docker volume; a stray
+# `docker volume rm` wipes months of data. A host directory is bind-mounted at
+# BACKUP_DIR and gets one online backup per day, rotated.
+
+BACKUP_DIR = os.environ.get("IKABOT_BACKUP_DIR", "/backups")
+
+
+def backup_db(dest_dir=None, keep=7):
+    """Write today's backup of the DB into dest_dir (sqlite3 online-backup API — safe
+    while the bot is writing) and prune to the newest `keep` files. Once per day: if
+    today's file already exists it is left untouched. Returns the backup path, or None
+    when the directory isn't mounted (backups disabled) or the copy fails."""
+    dest_dir = dest_dir or BACKUP_DIR
+    if not os.path.isdir(dest_dir):
+        return None
+    dest = os.path.join(dest_dir, "ikabot-%s.db" % time.strftime("%Y%m%d"))
+    if os.path.exists(dest):
+        _rotate_backups(dest_dir, keep)
+        return dest
+    init_db()
+    try:
+        src = _connect()
+        try:
+            dst = sqlite3.connect(dest)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except Exception:
+        try:
+            if os.path.exists(dest):
+                os.remove(dest)          # never leave a half-written backup behind
+        except Exception:
+            pass
+        return None
+    _rotate_backups(dest_dir, keep)
+    return dest
+
+
+def _rotate_backups(dest_dir, keep):
+    backups = sorted(f for f in os.listdir(dest_dir)
+                     if f.startswith("ikabot-") and f.endswith(".db"))
+    for old in backups[:-keep]:
+        try:
+            os.remove(os.path.join(dest_dir, old))
+        except Exception:
+            pass
