@@ -792,6 +792,15 @@ def process_farm_targets(session, in_active_hours=True):
                     notify_farm_drained(name, t.get("target_player", ""), loot)
                 except Exception:
                     pass
+                # Also hide it from the inactives list (mark 'ignorar' → moves to the
+                # "Ignoradas" tab, reversible there) — a drained target is just noise.
+                try:
+                    from espionage_manager import _auto_mark_ignored
+                    _auto_mark_ignored(tid, t.get("target_player", ""),
+                                       t.get("island_x", ""), t.get("island_y", ""),
+                                       f"Drenado pelo farm — saque {loot} < {min_loot}")
+                except Exception:
+                    pass
                 farm_update(tid, {"state": "IDLE", "enabled": 0, "last_loot": loot,
                                   "next_action": "spy"})
                 continue

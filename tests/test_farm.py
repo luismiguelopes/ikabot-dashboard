@@ -149,7 +149,8 @@ def test_queue_processes_only_head(monkeypatch, tmp_path):
 
 
 def test_drained_target_is_disabled(monkeypatch, tmp_path):
-    """A ready report below min_loot disables the target for good (and would alert)."""
+    """A ready report below min_loot disables the target for good (and would alert),
+    and hides it from the inactives list via an 'ignorar' mark."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 50000})
@@ -162,6 +163,9 @@ def test_drained_target_is_disabled(monkeypatch, tmp_path):
     drained = []
     import telegram_notifier as tg
     tg.notify_farm_drained = lambda *a, **k: drained.append(a)
+    ignored = []
+    import espionage_manager as em
+    monkeypatch.setattr(em, "_auto_mark_ignored", lambda *a, **k: ignored.append(a))
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
@@ -169,6 +173,8 @@ def test_drained_target_is_disabled(monkeypatch, tmp_path):
     assert t["enabled"] is False          # disabled for good
     assert [q for q, _ in added] == []    # no attack
     assert len(drained) == 1              # alerted
+    assert len(ignored) == 1              # hidden from the inactives list
+    assert ignored[0][0] == "100" and "Drenado" in ignored[0][4]
 
 
 def test_idle_enqueues_spy_when_due(monkeypatch, tmp_path):
