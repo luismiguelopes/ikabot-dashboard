@@ -300,3 +300,38 @@ def test_auto_attack_waves_sqlite_roundtrip(tmp_path, monkeypatch):
     # cancel via the same primitive the UI uses → per-item removal
     db_manager.queue_remove("auto_attack_waves", ["w1"])
     assert {w["id"] for w in am._load_auto_attack_waves()["waves"]} == {"w2"}
+
+
+# ── Auto-attack SKIPPED: poor targets are hidden from the inactives list ─────────
+
+def test_auto_attack_skip_ignores_only_poor_targets(monkeypatch, tmp_path):
+    """'Botim insuficiente' skips also auto-ignore the target (it's just noise in the
+    inactives list); rich targets skipped for fleet size stay visible."""
+    _setup_db(tmp_path)
+    mil = tmp_path / "military.json"
+    mil.write_text(json.dumps({"byCityName": {}}))
+    monkeypatch.setattr(am, "MILITARY_JSON_PATH", str(mil))
+    monkeypatch.setattr(am, "_load_auto_attack_settings",
+                        lambda: {"enabled": True, "minLootTotal": 50000,
+                                 "maxEnemyShipsToEngage": 20})
+    monkeypatch.setattr(am, "_load_auto_attack_waves", lambda: {"waves": []})
+    skipped = []
+    monkeypatch.setattr(am, "_wave_upsert", lambda plan: skipped.append(plan))
+    ignored = []
+    monkeypatch.setattr(em, "_auto_mark_ignored", lambda *a, **k: ignored.append(a))
+    # (getShipCapacity import fails in the test env → evaluate falls back to the default)
+
+    poor = {"state": "DONE", "targetCityId": "10", "targetCityName": "Pobre",
+            "targetPlayerName": "Zé", "targetIslandId": "7", "islandX": 40, "islandY": 50,
+            "result": {"resources": {"wood": 20000}}, "garrisonResult": {"troops": {}}}
+    rich_fleet = {"state": "DONE", "targetCityId": "20", "targetCityName": "Rica",
+                  "targetPlayerName": "Rui", "targetIslandId": "8", "islandX": 41, "islandY": 51,
+                  "result": {"resources": {"wood": 900000}},
+                  "garrisonResult": {"troops": {"Trirreme": 30}}}
+    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": [poor, rich_fleet]})
+
+    am.evaluate_auto_attacks(session=object())
+
+    assert [w["state"] for w in skipped] == ["AUTO_SKIPPED", "AUTO_SKIPPED"]
+    assert len(ignored) == 1                      # only the poor target is hidden
+    assert ignored[0][0] == "10" and "Botim" in ignored[0][4]

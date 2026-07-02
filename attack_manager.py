@@ -884,6 +884,15 @@ def evaluate_auto_attacks(session):
             logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
             _record_skipped(mission_key, m, reason)
             existing_keys.add(mission_key)
+            # A poor target is just noise in the inactives list → hide it (mark 'ignorar',
+            # reversible in the Ignored tab). Rich targets skipped for other reasons (enemy
+            # fleet too big, no origin city) stay visible — those limits are ours/temporary.
+            try:
+                from espionage_manager import _auto_mark_ignored
+                _auto_mark_ignored(m.get("targetCityId"), m.get("targetPlayerName", ""),
+                                   m.get("islandX"), m.get("islandY"), reason)
+            except Exception:
+                pass
             continue
 
         tier        = _determine_attack_tier(garrison)
