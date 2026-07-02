@@ -214,3 +214,63 @@ features.
       Nunca correu live — código completo e testado, validação real em dívida.
 - [ ] Validar o self-healing (P5.1): `docker compose up -d`, confirmar o `ikabot` a ficar
       `healthy` e o container `ikabot-autoheal` a correr com acesso ao docker.sock.
+
+---
+
+## P6 — Pipeline pós-auditoria (auditoria completa 2026-07-02)
+
+Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e o bot
+`healthy` em produção. Ordem = prioridade de implementação (risco primeiro, conforto depois).
+
+### Bloco A — risco (fazer primeiro)
+
+- [ ] **P6.1 Guarda de tropas no auto-attack.** `_determine_attack_tier` devolve tier 1
+      com *qualquer* tropa terrestre e o ataque avança; existe `maxEnemyShipsToEngage`
+      mas nenhum equivalente para o exército — um alvo com 500 hoplitas e armazém rico
+      passa todos os filtros. Adicionar `maxEnemyTroopsToEngage` (settings + UI) e
+      SKIPPED com razão quando excedido. É o maior risco actual de perder um exército.
+- [ ] **P6.2 Validação in-game supervisionada do auto-attack.** A primeira vaga nunca
+      correu live com `sendArmyPlunderSea` (P0.2). Sessão supervisionada com um alvo
+      controlado + validar também o deploy para cidade própria (pendência antiga).
+      Depois de P6.1, não antes.
+- [ ] **P6.3 Backup automático do `ikabot.db`.** Farm targets, attack_log, loot_log e
+      marks vivem num único SQLite dentro do volume Docker — um `docker volume rm`
+      apaga meses de dados. Cron (host ou container) com `sqlite3 .backup` para fora
+      do volume + rotação (ex. 7 diários).
+
+### Bloco B — coerência de dados e configuração
+
+- [ ] **P6.4 Thresholds de alertas para o servidor.** Hoje vivem em `localStorage` —
+      cada browser tem os seus; PC e telemóvel divergem. Migrar para um
+      `alert_thresholds.json` no volume (API GET/POST) com migração do localStorage.
+- [ ] **P6.5 Vista unificada do funil de thresholds.** `garrisonThresholdTotal`
+      (espionagem, 10k) → `min_loot` por alvo do farm → `minLootTotal` (auto-attack,
+      50k) interagem de formas subtis (banda 10k-50k dos auto-ignorados). Um cartão
+      nas Definições que mostre os três lado a lado com uma frase do efeito de cada um.
+- [ ] **P6.6 Unificar os limiares de "bot offline".** Sidebar 90 min, alerta Flask
+      30 min, healthcheck 30 min — três números para a mesma pergunta. Uma fonte única
+      (env var partilhada ou constante no /api/health).
+- [ ] **P6.7 Calibrar tempos de viagem.** ETA do DispatchTab e espaçamento de vagas do
+      auto-attack usam a estimativa fixa (1200s×distância, ⅔ tropas) sem bónus
+      (Poseidon, etc.). O farm já usa tempos reais; guardar o rácio real/estimado das
+      viagens observadas (loot_log/movements) e aplicar como factor de correcção.
+
+### Bloco C — UX e operação (conforto, sem risco)
+
+- [ ] **P6.8 Feedback de acções da UI.** Botões (force scan, run now, dispatch) escrevem
+      flag/fila e o toast diz "ok" = "enfileirado", não "feito". Mini-feed "última acção
+      → estado" (enfileirado/executado/falhou) alimentado pelas filas SQLite + logs.
+- [ ] **P6.9 Autenticação simples no dashboard.** Flask/Vite servem na LAN sem login —
+      qualquer dispositivo na rede pode lançar ataques/pausar/apagar. Token partilhado
+      ou basic auth no Flask (e proxy do Vite) chega.
+- [ ] **P6.10 Split da MundoPage.** 1751 linhas com identidade dupla: world scan
+      (inactivos/ilhas/ignoradas) + centro de combate (dispatch/farm/histórico); o
+      DispatchTab (1222) serve 3 vistas. Promover "Combate" a página própria no sidebar
+      e partir os componentes (sem mudar comportamento).
+- [ ] **P6.11 Build de produção do frontend.** `npm run dev` (Vite dev server) como
+      serviço permanente; `vite build` + servir estático pelo Flask elimina um
+      container e o overhead de HMR. (O auto-reload do Flask já mordeu com inodes —
+      manter a regra de restart.)
+- [ ] **P6.12 Testes do Flask.** 1684 linhas sem um único teste (venv nem tem flask).
+      Instalar flask no venv de testes + testes dos endpoints críticos: merge de marks,
+      farm update/unignore, filas, /api/health.
