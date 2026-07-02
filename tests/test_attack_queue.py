@@ -328,10 +328,18 @@ def test_auto_attack_skip_ignores_only_poor_targets(monkeypatch, tmp_path):
                   "targetPlayerName": "Rui", "targetIslandId": "8", "islandX": 41, "islandY": 51,
                   "result": {"resources": {"wood": 900000}},
                   "garrisonResult": {"troops": {"Trirreme": 30}}}
-    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": [poor, rich_fleet]})
+    # a disabled (drained) farm target still belongs to the farm → fully off-limits here
+    farmed = {"state": "DONE", "targetCityId": "30", "targetCityName": "Drenada",
+              "targetPlayerName": "Ana", "targetIslandId": "9", "islandX": 42, "islandY": 52,
+              "result": {"resources": {"wood": 800000}}, "garrisonResult": {"troops": {}}}
+    db_manager.farm_add({"targetCityId": "30", "targetCityName": "Drenada",
+                         "islandX": 42, "islandY": 52, "islandId": "9"})
+    db_manager.farm_update("30", {"enabled": 0})
+    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": [poor, rich_fleet, farmed]})
 
     am.evaluate_auto_attacks(session=object())
 
     assert [w["state"] for w in skipped] == ["AUTO_SKIPPED", "AUTO_SKIPPED"]
+    assert {w["targetCityId"] for w in skipped} == {"10", "20"}   # "30" never evaluated
     assert len(ignored) == 1                      # only the poor target is hidden
     assert ignored[0][0] == "10" and "Botim" in ignored[0][4]

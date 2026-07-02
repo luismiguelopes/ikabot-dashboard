@@ -1050,6 +1050,54 @@ def api_farm_add():
     return jsonify({"ok": True})
 
 
+def _unignore_farm_target(city_id):
+    """Re-enabling a farm target un-hides it in the inactives list: clear any 'ignorar'
+    mark (auto drain/skip or manual, city- or island-level key) back to 'novo'."""
+    try:
+        with open(WORLD_SCAN_JSON_PATH) as f:
+            scan = json.load(f)
+        player = next((p for p in scan.get("players", [])
+                       if str(p.get("cityId")) == str(city_id)), None)
+        if not player:
+            return
+        pid = str(player.get("playerId", ""))
+        ix, iy = str(player.get("islandX", "")), str(player.get("islandY", ""))
+        keys = {f"{pid}_{city_id}", f"{pid}_{ix}_{iy}"}
+
+        db_marks = {}
+        if _db:
+            try:
+                db_marks = _db.get_all_marks()
+            except Exception:
+                pass
+        json_marks = {}
+        if os.path.exists(PLAYER_MARKS_JSON_PATH):
+            with open(PLAYER_MARKS_JSON_PATH) as f:
+                json_marks = json.load(f)
+
+        json_changed = False
+        for k in keys:
+            in_db   = db_marks.get(k, {}).get("status") == "ignorar"
+            in_json = json_marks.get(k, {}).get("status") == "ignorar"
+            if not (in_db or in_json):
+                continue
+            if _db:
+                try:
+                    _db.save_mark(k, pid, ix, iy, "novo", "")
+                except Exception:
+                    pass
+            if in_json:
+                json_marks[k]["status"] = "novo"
+                json_marks[k]["note"] = ""
+                json_marks[k]["updatedAt"] = int(time.time())
+                json_changed = True
+        if json_changed:
+            with open(PLAYER_MARKS_JSON_PATH, "w") as f:
+                json.dump(json_marks, f, indent=2)
+    except Exception:
+        pass
+
+
 @app.route("/api/farm/update", methods=["POST"])
 def api_farm_update():
     if not _db:
@@ -1074,6 +1122,8 @@ def api_farm_update():
         _db.farm_update(tid, fields)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    if fields.get("enabled") == 1:
+        _unignore_farm_target(tid)
     return jsonify({"ok": True})
 
 

@@ -836,11 +836,12 @@ def evaluate_auto_attacks(session):
     existing_keys = {w.get("sourceMissionKey") for w in _load_auto_attack_waves()["waves"]}
 
     # Targets handled by the continuous farm (F4) are off-limits to the one-shot
-    # auto-attack, otherwise the same DONE report triggers both.
+    # auto-attack, otherwise the same DONE report triggers both. Disabled farm targets
+    # (drained/paused) still belong to the farm — they must not fall back to this path.
     farm_ids = set()
     try:
         from db_manager import farm_list
-        farm_ids = {str(f["target_city_id"]) for f in farm_list() if f.get("enabled")}
+        farm_ids = {str(f["target_city_id"]) for f in farm_list()}
     except Exception:
         pass
 
