@@ -59,6 +59,7 @@ _DEFAULT_AUTO_ATTACK_SETTINGS = {
     "battleDelayMedMins":     60,
     "battleDelayManyMins":    120,
     "maxEnemyShipsToEngage":  20,
+    "maxEnemyTroopsToEngage": 50,
 }
 
 
@@ -1435,6 +1436,7 @@ def api_auto_attack_settings_post():
     settings["battleDelayMedMins"]    = int(data.get("battleDelayMedMins", 60))
     settings["battleDelayManyMins"]   = int(data.get("battleDelayManyMins", 120))
     settings["maxEnemyShipsToEngage"] = int(data.get("maxEnemyShipsToEngage", 20))
+    settings["maxEnemyTroopsToEngage"] = int(data.get("maxEnemyTroopsToEngage", 50))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(AUTO_ATTACK_SETTINGS_PATH, "w") as f:
         json.dump(settings, f, indent=2)

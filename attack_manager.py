@@ -609,6 +609,7 @@ _DEFAULT_AUTO_ATTACK_SETTINGS = {
     "battleDelayMedMins":     60,
     "battleDelayManyMins":    120,
     "maxEnemyShipsToEngage":  20,
+    "maxEnemyTroopsToEngage": 50,
 }
 
 
@@ -902,6 +903,17 @@ def evaluate_auto_attacks(session):
 
         if enemy_ships > max_engage:
             reason = f"Frota inimiga demasiado grande: {enemy_ships} > máximo {max_engage}"
+            logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
+            _record_skipped(mission_key, m, reason)
+            existing_keys.add(mission_key)
+            continue
+
+        # P6.1: land-army guard. Tier only distinguishes fleet/no-fleet — without this cap
+        # any garrison (500 hoplites included) passed the filters and the waves engaged it.
+        enemy_troops = sum(garrison.values()) - _enemy_fleet_count(garrison)
+        max_troops   = settings.get("maxEnemyTroopsToEngage", 50)
+        if enemy_troops > max_troops:
+            reason = f"Guarnição demasiado grande: {enemy_troops} tropas > máximo {max_troops}"
             logger.info("[auto-attack] %s → SKIPPED: %s", m["targetPlayerName"], reason)
             _record_skipped(mission_key, m, reason)
             existing_keys.add(mission_key)

@@ -553,6 +553,7 @@ _CONFIG_SCHEMAS = {
     "auto_attack_settings.json": {
         "enabled": bool, "minLootTotal": int, "lootPerWave": int, "battleDelayFewMins": int,
         "battleDelayMedMins": int, "battleDelayManyMins": int, "maxEnemyShipsToEngage": int,
+        "maxEnemyTroopsToEngage": int,
     },
     "espionage_settings.json": {"garrisonThresholdTotal": int, "processingEnabled": bool},
     "world_scan_settings.json": {"enabled": bool},

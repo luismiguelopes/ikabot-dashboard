@@ -651,12 +651,13 @@ interface AutoAttackSettings {
   battleDelayMedMins: number
   battleDelayManyMins: number
   maxEnemyShipsToEngage: number
+  maxEnemyTroopsToEngage: number
 }
 
 const AUTO_ATTACK_DEFAULTS: AutoAttackSettings = {
   enabled: false, minLootTotal: 50000, lootPerWave: 195000,
   battleDelayFewMins: 30, battleDelayMedMins: 60, battleDelayManyMins: 120,
-  maxEnemyShipsToEngage: 20,
+  maxEnemyShipsToEngage: 20, maxEnemyTroopsToEngage: 50,
 }
 
 function AutoAttackSettingsCard() {
@@ -733,6 +734,10 @@ function AutoAttackSettingsCard() {
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_max_ships')}</label>
                   {numField('maxEnemyShipsToEngage', 0, 1)}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">{t('auto_attack_max_troops')}</label>
+                  {numField('maxEnemyTroopsToEngage', 0, 10)}
                 </div>
               </div>
             )}

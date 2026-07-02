@@ -343,3 +343,33 @@ def test_auto_attack_skip_ignores_only_poor_targets(monkeypatch, tmp_path):
     assert {w["targetCityId"] for w in skipped} == {"10", "20"}   # "30" never evaluated
     assert len(ignored) == 1                      # only the poor target is hidden
     assert ignored[0][0] == "10" and "Botim" in ignored[0][4]
+
+
+def test_auto_attack_skips_big_garrison(monkeypatch, tmp_path):
+    """P6.1: a rich target with a big land army is SKIPPED (troop guard) but NOT
+    auto-ignored — the loot is there, the limit is ours."""
+    _setup_db(tmp_path)
+    mil = tmp_path / "military.json"
+    mil.write_text(json.dumps({"byCityName": {}}))
+    monkeypatch.setattr(am, "MILITARY_JSON_PATH", str(mil))
+    monkeypatch.setattr(am, "_load_auto_attack_settings",
+                        lambda: {"enabled": True, "minLootTotal": 50000,
+                                 "maxEnemyShipsToEngage": 20, "maxEnemyTroopsToEngage": 50})
+    monkeypatch.setattr(am, "_load_auto_attack_waves", lambda: {"waves": []})
+    skipped = []
+    monkeypatch.setattr(am, "_wave_upsert", lambda plan: skipped.append(plan))
+    ignored = []
+    monkeypatch.setattr(em, "_auto_mark_ignored", lambda *a, **k: ignored.append(a))
+
+    fortress = {"state": "DONE", "targetCityId": "40", "targetCityName": "Fortaleza",
+                "targetPlayerName": "Leo", "targetIslandId": "5", "islandX": 43, "islandY": 53,
+                "result": {"resources": {"wood": 700000}},
+                # 500 hoplites + a few ships below the fleet cap → only the troop guard fires
+                "garrisonResult": {"troops": {"Hoplita": 500, "Trirreme": 3}}}
+    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": [fortress]})
+
+    am.evaluate_auto_attacks(session=object())
+
+    assert len(skipped) == 1 and skipped[0]["state"] == "AUTO_SKIPPED"
+    assert "Guarnição" in skipped[0]["skippedReason"] and "500" in skipped[0]["skippedReason"]
+    assert ignored == []                          # rich target stays visible
