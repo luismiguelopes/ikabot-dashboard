@@ -247,16 +247,18 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
 
 ### Bloco B — coerência de dados e configuração
 
-- [ ] **P6.4 Thresholds de alertas para o servidor.** Hoje vivem em `localStorage` —
-      cada browser tem os seus; PC e telemóvel divergem. Migrar para um
-      `alert_thresholds.json` no volume (API GET/POST) com migração do localStorage.
-- [ ] **P6.5 Vista unificada do funil de thresholds.** `garrisonThresholdTotal`
-      (espionagem, 10k) → `min_loot` por alvo do farm → `minLootTotal` (auto-attack,
-      50k) interagem de formas subtis (banda 10k-50k dos auto-ignorados). Um cartão
-      nas Definições que mostre os três lado a lado com uma frase do efeito de cada um.
-- [ ] **P6.6 Unificar os limiares de "bot offline".** Sidebar 90 min, alerta Flask
-      30 min, healthcheck 30 min — três números para a mesma pergunta. Uma fonte única
-      (env var partilhada ou constante no /api/health).
+- [x] **P6.4 Thresholds de alertas para o servidor.** ✅ 2026-07-03 —
+      `alert_thresholds.json` no volume + `GET/POST /api/alert-thresholds`; o frontend
+      migra o localStorage no primeiro load (confirmado live) e mantém-no só como
+      cache de arranque. PC e telemóvel vêem os mesmos valores.
+- [x] **P6.5 Vista unificada do funil de thresholds.** ✅ 2026-07-03 — a remoção do
+      auto-attack já tinha juntado os 2 thresholds globais no cartão de espionagem;
+      adicionado o bloco "Como os thresholds se encadeiam" (1. guarnição, 2. alvo
+      interessante, 3. min_loot por alvo do farm com contagem e gama dos activos).
+- [x] **P6.6 Unificar os limiares de "bot offline".** ✅ 2026-07-03 — fonte única
+      `BOT_OFFLINE_SECS` (env, default 1800): healthcheck do compose lê-a, o watchdog
+      Telegram do Flask usa-a, e o /api/data expõe `offlineAfterSecs` para o badge do
+      sidebar (que estava a 90 min — passou a 30, coerente com o resto).
 - [ ] **P6.7 Calibrar tempos de viagem.** ETA do DispatchTab e espaçamento de vagas do
       auto-attack usam a estimativa fixa (1200s×distância, ⅔ tropas) sem bónus
       (Poseidon, etc.). O farm já usa tempos reais; guardar o rácio real/estimado das

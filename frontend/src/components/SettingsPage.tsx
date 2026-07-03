@@ -495,6 +495,7 @@ function EspionagemTab() {
   const [saved, setSaved]                 = useState(false)
   const [thresholdTotal, setThresholdTotal] = useState(DEFAULT_GARRISON_TOTAL)
   const [minLootTotal, setMinLootTotal]   = useState(50000)
+  const [farmLoots, setFarmLoots]         = useState<number[]>([])
   const [thSaved, setThSaved]             = useState(false)
 
   useEffect(() => {
@@ -504,6 +505,12 @@ function EspionagemTab() {
         const cities: OwnCity[] = Array.isArray(d) ? d : (d.cities || [])
         setOwnCities(cities)
         if (!originCityId && cities.length > 0) setOriginCityId(String(cities[0].cityId))
+      })
+      .catch(() => {})
+    fetch('/api/farm')
+      .then(r => r.json())
+      .then((d: Array<{ enabled: boolean; min_loot: number }>) => {
+        if (Array.isArray(d)) setFarmLoots(d.filter(f => f.enabled).map(f => f.min_loot || 0))
       })
       .catch(() => {})
     fetch('/api/espionage/settings')
@@ -596,6 +603,20 @@ function EspionagemTab() {
                 className="w-36 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
               <span className="text-[10px] text-slate-400">{t('spy_min_loot_hint')}</span>
+            </div>
+            <div className="bg-slate-50 rounded-lg px-3 py-2.5 space-y-1">
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{t('threshold_funnel_title')}</p>
+              <p className="text-[11px] text-slate-500">1. {t('threshold_funnel_1', { n: thresholdTotal.toLocaleString() })}</p>
+              <p className="text-[11px] text-slate-500">2. {t('threshold_funnel_2', { n: minLootTotal.toLocaleString() })}</p>
+              <p className="text-[11px] text-slate-500">
+                3. {farmLoots.length > 0
+                  ? t('threshold_funnel_3', {
+                      c: String(farmLoots.length),
+                      min: Math.min(...farmLoots).toLocaleString(),
+                      max: Math.max(...farmLoots).toLocaleString(),
+                    })
+                  : t('threshold_funnel_3_empty')}
+              </p>
             </div>
           </div>
         </div>

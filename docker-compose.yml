@@ -8,6 +8,8 @@ services:
     tty: true
     environment:
       TZ: Europe/Lisbon
+      # P6.6: single source for "bot offline" (healthcheck + Telegram watchdog + sidebar)
+      BOT_OFFLINE_SECS: ${BOT_OFFLINE_SECS:-1800}
     env_file:
       - .env
     volumes:
@@ -46,7 +48,7 @@ services:
     labels:
       - autoheal=true
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time,sys; sys.exit(0 if time.time()-json.load(open('/tmp/ikalogs/last_alive.json'))['lastAlive'] < 1800 else 1)\""]
+      test: ["CMD-SHELL", "python3 -c \"import json,time,sys,os; sys.exit(0 if time.time()-json.load(open('/tmp/ikalogs/last_alive.json'))['lastAlive'] < int(os.environ.get('BOT_OFFLINE_SECS','1800')) else 1)\""]
       interval: 2m
       timeout: 20s
       retries: 3
@@ -71,6 +73,7 @@ services:
     restart: unless-stopped
     environment:
       TZ: Europe/Lisbon
+      BOT_OFFLINE_SECS: ${BOT_OFFLINE_SECS:-1800}
     env_file:
       - .env
     volumes:

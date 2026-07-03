@@ -46,6 +46,7 @@ export interface ApiData {
   lastUpdatedTs: number
   nextCycleAt: number | null
   lastAlive: number | null
+  offlineAfterSecs?: number
 }
 
 export interface MovementResource {

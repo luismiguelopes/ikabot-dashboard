@@ -32,6 +32,7 @@ interface SidebarProps {
   lastUpdatedTs: number
   nextCycleAt: number | null
   lastAlive: number | null
+  offlineAfterSecs?: number
   alertCount: number
   movCount: number
   sseConnected: boolean
@@ -39,10 +40,11 @@ interface SidebarProps {
   onTogglePause: () => void
 }
 
-export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, alertCount, movCount, sseConnected, paused, onTogglePause }: SidebarProps) {
+export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, offlineAfterSecs, alertCount, movCount, sseConnected, paused, onTogglePause }: SidebarProps) {
   const t = useT()
   const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60
-  const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > 90 * 60
+  // P6.6: same threshold as the docker healthcheck and the Telegram watchdog
+  const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > (offlineAfterSecs ?? 1800)
 
   const [, setTick] = useState(0)
   useEffect(() => {

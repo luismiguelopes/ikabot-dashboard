@@ -140,6 +140,30 @@ export default function App() {
   const saveThresholds = useCallback((t: AlertThresholds) => {
     setThresholds(t)
     try { localStorage.setItem('ikabot_alert_thresholds', JSON.stringify(t)) } catch {}
+    fetch('/api/alert-thresholds', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(t),
+    }).catch(() => {})
+  }, [])
+
+  // P6.4: thresholds live on the server (same values on every device); localStorage is only
+  // a fast-start cache. First load after the migration pushes the local values up once.
+  useEffect(() => {
+    fetch('/api/alert-thresholds')
+      .then(r => r.json())
+      .then((d: { configured: boolean; wineWarning: number; wineCritical: number; storageWarning: number }) => {
+        if (d.configured) {
+          const t = { wineWarning: d.wineWarning, wineCritical: d.wineCritical, storageWarning: d.storageWarning }
+          setThresholds(t)
+          try { localStorage.setItem('ikabot_alert_thresholds', JSON.stringify(t)) } catch {}
+        } else {
+          fetch('/api/alert-thresholds', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(loadThresholds()),
+          }).catch(() => {})
+        }
+      })
+      .catch(() => {})
   }, [])
 
   const [notifEnabled, setNotifEnabled] = useState(loadBrowserNotifEnabled)
@@ -239,6 +263,7 @@ export default function App() {
           lastUpdatedTs={data.lastUpdatedTs}
           nextCycleAt={data.nextCycleAt}
           lastAlive={data.lastAlive}
+          offlineAfterSecs={data.offlineAfterSecs}
           alertCount={alertCount}
           movCount={movCount}
           sseConnected={sseConnected}

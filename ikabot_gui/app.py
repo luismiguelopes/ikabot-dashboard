@@ -36,6 +36,10 @@ DB_PATH                     = os.path.join(LOGS_DIR, "ikabot.db")
 QUEUE_SETTINGS_JSON_PATH    = os.path.join(LOGS_DIR, "queue_settings.json")
 NEXT_CYCLE_JSON_PATH    = os.path.join(LOGS_DIR, "next_cycle.json")
 LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
+
+# P6.6: single source for "bot offline" — the docker healthcheck, the Telegram watchdog and
+# the sidebar badge all use this value (env-overridable via docker-compose).
+BOT_OFFLINE_SECS = int(os.environ.get("BOT_OFFLINE_SECS", "1800"))
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
@@ -145,6 +149,7 @@ def load_all_data():
         "lastUpdatedTs": last_updated_ts,
         "nextCycleAt":   next_cycle_at,
         "lastAlive":     last_alive,
+        "offlineAfterSecs": BOT_OFFLINE_SECS,
     }, None
 
 
@@ -1139,6 +1144,38 @@ def api_farm_remove():
 ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
 _DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
 
+# P6.4: UI alert thresholds (wine/storage) live on the server, not per-browser localStorage,
+# so every device sees the same configuration.
+ALERT_THRESHOLDS_PATH = os.path.join(LOGS_DIR, "alert_thresholds.json")
+_DEFAULT_ALERT_THRESHOLDS = {"wineWarning": 8, "wineCritical": 2, "storageWarning": 95}
+
+
+@app.route("/api/alert-thresholds")
+def api_alert_thresholds_get():
+    try:
+        with open(ALERT_THRESHOLDS_PATH) as f:
+            data = json.load(f)
+        merged = {k: data.get(k, v) for k, v in _DEFAULT_ALERT_THRESHOLDS.items()}
+        return jsonify({"configured": True, **merged})
+    except (FileNotFoundError, json.JSONDecodeError):
+        # configured=False lets the frontend migrate its localStorage values on first load
+        return jsonify({"configured": False, **_DEFAULT_ALERT_THRESHOLDS})
+
+
+@app.route("/api/alert-thresholds", methods=["POST"])
+def api_alert_thresholds_post():
+    body = request.get_json(silent=True) or {}
+    data = {}
+    for k, v in _DEFAULT_ALERT_THRESHOLDS.items():
+        try:
+            data[k] = max(0, int(body.get(k, v)))
+        except (TypeError, ValueError):
+            data[k] = v
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(ALERT_THRESHOLDS_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+    return jsonify({"ok": True, **data})
+
 
 @app.route("/api/alert-settings")
 def api_alert_settings_get():
@@ -1602,7 +1639,7 @@ def _offline_watch_loop():
         try:
             import telegram_notifier as _tg
             offline_min = int((time.time() - last_alive) / 60)
-            if offline_min > 30:
+            if (time.time() - last_alive) > BOT_OFFLINE_SECS:
                 _tg.notify_bot_offline(offline_min)
             else:
                 _tg.clear_bot_offline()
