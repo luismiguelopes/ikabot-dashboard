@@ -39,9 +39,9 @@ def test_unknown_key_is_flagged(monkeypatch, tmp_path):
 
 def test_type_mismatch_is_flagged(monkeypatch, tmp_path):
     _point_logs_at(monkeypatch, tmp_path)
-    _write(tmp_path, "auto_attack_settings.json", {"minLootTotal": "lots"})  # str, expected int
+    _write(tmp_path, "espionage_settings.json", {"minLootTotal": "lots"})  # str, expected int
     warnings = eu.validate_configs()
-    assert any("minLootTotal" in w for w in warnings["auto_attack_settings.json"])
+    assert any("minLootTotal" in w for w in warnings["espionage_settings.json"])
 
 
 def test_bool_not_accepted_for_int_field(monkeypatch, tmp_path):

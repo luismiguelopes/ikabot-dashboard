@@ -173,12 +173,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     fetch_spy_counts(session)
                     process_spy_cycle(session)
                 with health_guard("attack"):
-                    from attack_manager import (
-                        process_attack_queue, evaluate_auto_attacks, process_auto_attack_waves,
-                    )
+                    from attack_manager import process_attack_queue
                     process_attack_queue(session, in_active_hours=in_scan_hours)
-                    evaluate_auto_attacks(session)
-                    process_auto_attack_waves(session, in_active_hours=in_scan_hours)
                 with health_guard("farm"):
                     from farm_manager import process_farm_targets
                     process_farm_targets(session, in_active_hours=in_scan_hours)

@@ -231,22 +231,15 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       mas nenhum equivalente para o exército — um alvo com 500 hoplitas e armazém rico
       passa todos os filtros. Adicionar `maxEnemyTroopsToEngage` (settings + UI) e
       SKIPPED com razão quando excedido. É o maior risco actual de perder um exército.
-- [ ] **P6.2 Validação in-game supervisionada do auto-attack.** A primeira vaga nunca
-      correu live com `sendArmyPlunderSea` (P0.2). P6.1 feito → desbloqueado.
-      Estado 2026-07-02: auto-attack DESLIGADO (settings nunca criados). Runbook:
-      1. Escolher alvo controlado: inactivo, saque ≥ minLootTotal, guarnição ~0,
-         SEM estar no farm (excluído), sem registo prévio no histórico de vagas
-         (mission_key nunca avaliado).
-      2. Espiar pela UI (com guarnição) até relatório DONE completo.
-      3. Ligar auto-attack nas Definições com valores conservadores
-         (lootPerWave ≥ saque do alvo ⇒ 1 vaga só).
-      4. ⚠️ A vaga envia TODAS as tropas da cidade de origem (não há loadout como
-         no farm) — escolher/preparar a origem em conformidade.
-      5. Próximo ciclo: plano criado (PENDING, dispatch 5-20 min) → verificar no
-         histórico; no dispatch: attack_log + Telegram + missão visível in-game.
-      6. Desligar o auto-attack no fim, se for só validação.
-      + Validar também o deploy para cidade própria (DispatchTab → destino própria
-        → deployArmy type=10) na mesma sessão.
+- [x] **P6.2 → RESOLVIDO POR DESCONTINUAÇÃO.** ✅ 2026-07-03 — o auto-attack one-shot
+      foi removido por decisão do utilizador (nunca usado, nunca validado, redundante
+      com o farm, e enviava a guarnição inteira da origem). Removidos: evaluate/waves/
+      settings/endpoints/cartão UI/pills de waves. O `minLootTotal` passou para
+      `espionage_settings.json` e o auto-ignore de alvos pobres mudou para o pipeline
+      de espionagem (fecha o relatório sem missão de guarnição; alvos do farm isentos).
+      P6.1 (guarda de tropas) removido junto — só protegia o auto-attack.
+      Fica pendente apenas: validar deploy para cidade própria (DispatchTab → destino
+      "própria" → deployArmy type=10) numa sessão supervisionada.
 - [x] **P6.3 Backup automático do `ikabot.db`.** ✅ 2026-07-02 — `backup_db()`
       no db_manager (sqlite3 online-backup API, 1×/dia, rotação 7), chamado no início
       de cada ciclo; `./backups` (host, gitignored) montado em `/backups` no container.

@@ -44,6 +44,26 @@ def _check_garrison_threshold(resources, settings):
     return total >= settings.get("garrisonThresholdTotal", _DEFAULT_GARRISON_THRESHOLD_TOTAL)
 
 
+_DEFAULT_MIN_LOOT_TOTAL = 50000
+
+
+def _min_loot_total(settings):
+    """The 'interesting target' bar: below it a spied city is noise — the report is closed
+    and the target auto-hidden from the inactives list. Lived in the auto-attack settings
+    until that system was retired; now an espionage setting (also drives the UI ranking)."""
+    return int(settings.get("minLootTotal", _DEFAULT_MIN_LOOT_TOTAL))
+
+
+def _is_farm_target(city_id):
+    """Farm targets are never auto-hidden by the espionage pipeline: the farm runs its own
+    per-target min_loot (drain) logic, and its stationed spies must not be recalled."""
+    try:
+        from db_manager import farm_list
+        return any(str(f.get("target_city_id")) == str(city_id) for f in farm_list())
+    except Exception:
+        return False
+
+
 PLAYER_MARKS_JSON_PATH = os.path.join(LOGS_DIR, "player_marks.json")
 WORLD_SCAN_JSON_PATH   = os.path.join(LOGS_DIR, "world_scan.json")
 
@@ -985,7 +1005,12 @@ def collect_mission_results(session):
             if report.get("success"):
                 settings  = _load_espionage_settings()
                 resources = report.get("resources") or {}
-                if _check_garrison_threshold(resources, settings):
+                worth_it = _check_garrison_threshold(resources, settings)
+                if worth_it and not _is_farm_target(m.get("targetCityId", "")):
+                    # Non-farm target: below the 'interesting' bar the city is noise — close
+                    # the report (and auto-hide below) instead of spending a garrison mission.
+                    worth_it = sum(resources.values()) >= _min_loot_total(settings)
+                if worth_it:
                     if not m.get("needGarrison", True):
                         # Farm re-scout of a safe (inactive, no-fleet) target: the loot is all
                         # we need — skip the garrison mission entirely.

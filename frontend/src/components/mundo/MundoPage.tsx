@@ -165,21 +165,6 @@ interface MilitaryUnit { name: string; amount: number }
 interface CityMilitary { cityId: string; troops: Record<string, MilitaryUnit>; fleet: Record<string, MilitaryUnit> }
 interface MilitaryData { lastUpdated: number; byCityName: Record<string, CityMilitary> }
 
-interface AttackWavePlan {
-  waveNum: number; originCityId: string; originCityName: string
-  fleetUnits: Record<string, number>; troopUnits: Record<string, number>
-  transporters: number; fleetDispatchAfter: number | null; armyDispatchAfter: number
-  fleetDispatchedAt: number | null; armyDispatchedAt: number | null
-  estimatedReturnAt: number; status: string
-}
-interface AttackWaveEntry {
-  id: string; sourceMissionKey: string; targetPlayerName: string
-  targetCityId: string; targetIslandId: string; islandX: number; islandY: number
-  state: string; tier: number | null; wavePlans: AttackWavePlan[]
-  createdAt: number; skippedReason: string | null
-}
-interface AttackWaves { waves: AttackWaveEntry[] }
-
 interface AttackModalProps {
   player: WorldScanPlayer
   ownCities: OwnCity[]
@@ -353,7 +338,6 @@ function isNavalUnit(name: string): boolean {
 
 interface EnrichedPlayer extends WorldScanPlayer {
   mission: SpyMission | undefined
-  wave: AttackWaveEntry | undefined
   totalResources: number | null
   hasTroops: boolean | null   // null = no garrison data; false = clear; true = has troops
   hasShips: boolean | null
@@ -364,28 +348,11 @@ interface EnrichedPlayer extends WorldScanPlayer {
 
 // ── MissionStatePill ──────────────────────────────────────────────────────────
 
-function MissionStatePill({ priority, mission, wave }: {
+function MissionStatePill({ priority, mission }: {
   priority: number
   mission: SpyMission | undefined
-  wave: AttackWaveEntry | undefined
 }) {
   const t = useT()
-
-  if (wave && wave.state === 'IN_PROGRESS') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-      <i className="fa-solid fa-crosshairs text-[9px]" /> {t('pipeline_attacking')}
-    </span>
-  )
-  if (wave && wave.state === 'PENDING') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
-      <i className="fa-solid fa-clock text-[9px]" /> {t('pipeline_attack_pending')}
-    </span>
-  )
-  if (wave && (wave.state === 'DONE' || wave.state === 'AUTO_SKIPPED' || wave.state === 'FAILED')) return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-400">
-      {wave.state === 'DONE' ? t('pipeline_attack_done') : t('pipeline_skipped')}
-    </span>
-  )
 
   if (priority === 6) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
@@ -459,7 +426,6 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
   const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
   const [attackOk,       setAttackOk]       = useState<string | null>(null)
   const [missions,       setMissions]       = useState<SpyMission[]>([])
-  const [attackWaves,    setAttackWaves]    = useState<AttackWaveEntry[]>([])
   const [minLootTotal,   setMinLootTotal]   = useState(50000)
   const [ignoredKeys,    setIgnoredKeys]    = useState<Set<string>>(new Set())
   const [confirmModal,   setConfirmModal]   = useState<{ action: 'force-warehouse' | 'recall', player: EnrichedPlayer } | null>(null)
@@ -483,15 +449,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
   }, [])
 
   useEffect(() => {
-    const load = () => fetch('/api/espionage/attack-waves').then(r => r.json())
-      .then((d: AttackWaves) => { if (d.waves) setAttackWaves(d.waves) }).catch(() => {})
-    load()
-    const id = setInterval(load, 60000)
-    return () => clearInterval(id)
-  }, [])
-
-  useEffect(() => {
-    fetch('/api/espionage/auto-attack-settings').then(r => r.json())
+    fetch('/api/espionage/settings').then(r => r.json())
       .then(d => { if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal) }).catch(() => {})
   }, [])
 
@@ -550,16 +508,6 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     }
     return map
   }, [missions])
-
-  const latestWaveByWKey = useMemo(() => {
-    const map: Record<string, AttackWaveEntry> = {}
-    for (const w of attackWaves) {
-      // sourceMissionKey = `${targetCityId}_${islandX}_${islandY}`
-      const key = w.sourceMissionKey
-      if (!map[key] || w.createdAt > map[key].createdAt) map[key] = w
-    }
-    return map
-  }, [attackWaves])
 
   const showToast = useCallback((msg: string, ok: boolean) => {
     setToast({ msg, ok })
@@ -621,9 +569,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) continue
 
       const cKey = p.cityId || `${p.playerName}_${p.cityName}_${p.islandX}_${p.islandY}`
-      const wKey = `${p.cityId}_${p.islandX}_${p.islandY}`
       const mission = p.cityId ? latestMissionByCityId[p.cityId] : undefined
-      const wave = latestWaveByWKey[wKey]
 
       let totalResources: number | null = null
       let hasTroops: boolean | null = null
@@ -645,11 +591,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
       }
 
       let priority = 1
-      if (wave) {
-        if (wave.state === 'IN_PROGRESS') priority = 8
-        else if (wave.state === 'PENDING') priority = 7
-        else priority = -1
-      } else if (mission) {
+      if (mission) {
         if (mission.state === 'FAILED') priority = 0
         else if (_ACTIVE_SPY_STATES.has(mission.state)) priority = 2
         else if (mission.state === 'DONE') {
@@ -663,7 +605,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
         }
       }
 
-      enriched.push({ ...p, mission, wave, totalResources, hasTroops, hasShips, priority, cKey, pKey })
+      enriched.push({ ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey })
     }
 
     enriched.sort((a, b) => {
@@ -677,7 +619,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
     })
 
     return enriched
-  }, [scanData, ignoredKeys, latestMissionByCityId, latestWaveByWKey, minLootTotal])
+  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -722,7 +664,7 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                     } ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}>
                       <Td>
                         <div className="flex flex-col gap-1 items-start">
-                          <MissionStatePill priority={p.priority} mission={p.mission} wave={p.wave} />
+                          <MissionStatePill priority={p.priority} mission={p.mission} />
                           {(() => {
                             const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
                             if (!f || !f.enabled) return null
@@ -912,62 +854,6 @@ function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spy
                             )}
                             {p.mission.garrisonResult?.error && (
                               <p className="text-xs text-slate-400 italic px-1">{p.mission.garrisonResult.error}</p>
-                            )}
-
-                            {/* Wave plan */}
-                            {p.wave && (
-                              <div className="bg-white rounded-lg border border-slate-200 px-4 py-3">
-                                {(() => {
-                                  const stateColor: Record<string, string> = {
-                                    PENDING: 'text-amber-600', IN_PROGRESS: 'text-blue-600',
-                                    DONE: 'text-emerald-600', FAILED: 'text-red-600', AUTO_SKIPPED: 'text-slate-400',
-                                  }
-                                  return (
-                                    <>
-                                      <p className={`text-xs font-semibold mb-2 flex items-center justify-between gap-1.5 ${stateColor[p.wave!.state] || 'text-slate-600'}`}>
-                                        <span><i className="fa-solid fa-bolt" /> {t('auto_attack_title')}</span>
-                                        <span className="font-normal">
-                                          {t(`auto_attack_state_${p.wave!.state}` as 'auto_attack_title')}
-                                          {p.wave!.tier !== null && ` — ${t(`auto_attack_tier${p.wave!.tier}` as 'auto_attack_title')}`}
-                                        </span>
-                                        <button
-                                          onClick={() => {
-                                            fetch('/api/espionage/attack-waves/cancel', {
-                                              method: 'POST',
-                                              headers: { 'Content-Type': 'application/json' },
-                                              body: JSON.stringify({ id: p.wave!.id }),
-                                            }).then(() => setAttackWaves(prev => prev.filter(w => w.id !== p.wave!.id)))
-                                          }}
-                                          className="text-[10px] font-normal text-slate-400 hover:text-red-500 transition-colors"
-                                        >
-                                          {t('auto_attack_cancel')}
-                                        </button>
-                                      </p>
-                                      {p.wave!.skippedReason && (
-                                        <p className="text-[10px] text-slate-400 italic mb-1">{t('auto_attack_skipped_reason', { r: p.wave!.skippedReason })}</p>
-                                      )}
-                                      {p.wave!.wavePlans.map(wv => {
-                                        const wColor: Record<string, string> = {
-                                          PENDING: 'text-slate-500', FLEET_DISPATCHED: 'text-blue-600',
-                                          ARMY_DISPATCHED: 'text-indigo-600', DONE: 'text-emerald-600', FAILED: 'text-red-600',
-                                        }
-                                        return (
-                                          <div key={wv.waveNum} className={`text-[11px] mb-1.5 ${wColor[wv.status] || 'text-slate-500'}`}>
-                                            <span className="font-medium">{t('auto_attack_wave_num', { n: String(wv.waveNum) })}</span>
-                                            {' — '}{wv.originCityName}
-                                            {' · '}{t('auto_attack_transporters', { n: String(wv.transporters) })}
-                                            {wv.armyDispatchAfter && (
-                                              <span className="text-slate-400 ml-1">
-                                                ({t('auto_attack_army_dispatch')}: {new Date(wv.armyDispatchAfter * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
-                                              </span>
-                                            )}
-                                          </div>
-                                        )
-                                      })}
-                                    </>
-                                  )
-                                })()}
-                              </div>
                             )}
 
                             {/* Real loot brought from this player (F1.b) */}

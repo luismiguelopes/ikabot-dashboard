@@ -550,12 +550,8 @@ _CONFIG_SCHEMAS = {
         "army": dict, "fleet": dict, "spyAgents": int, "shipReserveEnabled": bool,
         "reserveHorizonMin": int, "earlyRespyEnabled": bool,
     },
-    "auto_attack_settings.json": {
-        "enabled": bool, "minLootTotal": int, "lootPerWave": int, "battleDelayFewMins": int,
-        "battleDelayMedMins": int, "battleDelayManyMins": int, "maxEnemyShipsToEngage": int,
-        "maxEnemyTroopsToEngage": int,
-    },
-    "espionage_settings.json": {"garrisonThresholdTotal": int, "processingEnabled": bool},
+    "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
+                                "processingEnabled": bool},
     "world_scan_settings.json": {"enabled": bool},
     "telegram_settings.json": {"botToken": str, "chatId": str},
 }

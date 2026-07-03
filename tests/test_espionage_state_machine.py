@@ -23,6 +23,7 @@ def _patch(monkeypatch, missions):
     monkeypatch.setattr(em, "_save_missions", lambda d: holder.update(d))
     monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(em, "_get_city_safehouse_position", lambda cid: 3)
+    monkeypatch.setattr(em, "_is_farm_target", lambda cid: False)  # no real DB access
     return holder
 
 
@@ -143,6 +144,35 @@ def test_collect_low_loot_done_and_recalls(monkeypatch):
     em.collect_mission_results(session=object())
     assert h["missions"][0]["state"] == "DONE"
     assert len(recalls) == 1                       # spy recalled before ignoring
+
+
+def test_collect_midband_loot_closed_and_ignored(monkeypatch):
+    """Non-farm target between garrisonThresholdTotal and minLootTotal: not worth a garrison
+    mission — closed as DONE, spy recalled, target auto-hidden from the inactives list."""
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_WAREHOUSE", collectAfter=_now() - 1,
+                                      needGarrison=True)])
+    monkeypatch.setattr(em, "_load_espionage_settings",
+                        lambda: {"garrisonThresholdTotal": 10000, "minLootTotal": 50000})
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k: _warehouse_report(30000))
+    recalls, ignored = [], []
+    monkeypatch.setattr(em, "_queue_recall", lambda item: recalls.append(item))
+    monkeypatch.setattr(em, "_auto_mark_ignored", lambda *a, **k: ignored.append(a))
+    em.collect_mission_results(session=object())
+    assert h["missions"][0]["state"] == "DONE"
+    assert len(recalls) == 1 and len(ignored) == 1
+
+
+def test_collect_midband_farm_target_still_gets_garrison(monkeypatch):
+    """Farm targets are exempt from the minLootTotal bar (the farm runs its own per-target
+    min_loot) — a mid-band report still proceeds to the garrison step."""
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_WAREHOUSE", collectAfter=_now() - 1,
+                                      needGarrison=True)])
+    monkeypatch.setattr(em, "_is_farm_target", lambda cid: True)
+    monkeypatch.setattr(em, "_load_espionage_settings",
+                        lambda: {"garrisonThresholdTotal": 10000, "minLootTotal": 50000})
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k: _warehouse_report(30000))
+    em.collect_mission_results(session=object())
+    assert h["missions"][0]["state"] == "WAITING_FOR_GARRISON"
 
 
 def test_collect_failed_report(monkeypatch):
