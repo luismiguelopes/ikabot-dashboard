@@ -650,3 +650,69 @@ def test_paused_does_nothing(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
     assert added == []
     assert db_manager.farm_get("100")["state"] == "IDLE"
+
+
+def test_bounced_return_forces_garrison_respy(monkeypatch, tmp_path):
+    """Troops home with NO registered loot → suspected naval bounce (a warship docked since
+    the last scout) → full garrison re-scout, not another blind 6h raid (Vinhedo B case)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Vinhedo B"})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now - 10,
+                                   "last_attack_at": now - 7200, "raids_since_spy": 1,
+                                   "last_enemy_ships": 0, "is_fleet_target": 0})
+    _common_patches(monkeypatch, tmp_path)   # loot_log stays empty → bounce signal
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "spy"
+    assert t["is_fleet_target"]              # next scout reads the port (full garrison)
+
+
+def test_return_with_loot_relaunches_attack(monkeypatch, tmp_path):
+    """A raid that actually brought loot home keeps the normal cadence (no bounce path)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Vinhedo B", "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now - 10,
+                                   "last_attack_at": now - 7200, "raids_since_spy": 1,
+                                   "last_enemy_ships": 0, "is_fleet_target": 0})
+    db_manager.log_loot({"ts": now - 60, "fromCity": "Vinhedo B", "fromPlayer": "J",
+                         "toCity": "Home", "resources": [100000, 50000, 0, 0, 0],
+                         "returnKey": "r1"})
+    _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "attack"
+    assert not t["is_fleet_target"]
+
+
+def test_weak_combat_fleet_engaged_with_blockade(monkeypatch, tmp_path):
+    """Combat ships within max_enemy_ships are ENGAGED — blockade wave first, troops delayed
+    by a sea-battle margin — never ignored: unescorted transports lose any sea fight."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Vinhedo B", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 50000, "maxEnemyShips": 3})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    missions = [{"state": "DONE", "targetCityId": "100",
+                 "result": {"resources": {"wood": 288962}, "reportedAt": 2000},
+                 "garrisonResult": {"troops": {"Cozinheiro": 10, "Médico": 10, "Trirreme": 2}}}]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    with open(tmp_path / "mil.json", "w") as f:
+        json.dump({"byCityName": {"Home": {
+            "troops": {"s303": {"name": "Hoplite", "amount": 200}},
+            "fleet":  {"s216": {"name": "Aríete a vapor", "amount": 12}}}}}, f)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    fleet_items = [it for q, it in added if q == "attack" and it["missionType"] == "fleet"]
+    army_items  = [it for q, it in added if q == "attack" and it["missionType"] == "army"]
+    assert len(fleet_items) == 1 and len(army_items) == 1
+    # troops launch late enough to land only after the blockade FOUGHT the combat ships
+    assert (army_items[0]["dispatchAfter"] - fleet_items[0]["dispatchAfter"]
+            >= fm._SEA_BATTLE_MARGIN_SECS)
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING" and t["is_fleet_target"]

@@ -28,6 +28,8 @@ from empire_utils import LOGS_DIR, logger
 
 _SPY_TIMEOUT_SECS = 6 * 3600
 _RELAUNCH_DELAY_RANGE = (1, 15)   # random minutes after troops return before next raid
+_SEA_BATTLE_MARGIN_SECS = 20 * 60  # extra troop delay when the blockade must FIGHT combat
+                                   # ships (rounds are ~15 min) instead of scaring flee ones
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
                                   # ready on arrival (re-spy rounds skip the post-return wait)
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
@@ -495,9 +497,11 @@ def process_farm_targets(session, in_active_hours=True):
     except Exception:
         pass
 
-    def _enqueue_attack(t, loot, enemy_ships):
+    def _enqueue_attack(t, loot, enemy_ships, combat_ships=0):
         """Pick origin, build units and enqueue the attack(s). Returns (return_at,
-        transporters) or None if no usable origin. Cadence is the real round-trip."""
+        transporters) or None if no usable origin. Cadence is the real round-trip.
+        combat_ships > 0 → the blockade wave has to FIGHT (not just scare off flee
+        ships), so the troops get an extra battle margin before sailing."""
         name = t.get("target_city_name", t["target_city_id"])
         ix, iy = t.get("island_x", 0), t.get("island_y", 0)
         required = set(farm_army) if farm_army else None
@@ -600,6 +604,8 @@ def process_farm_targets(session, in_active_hours=True):
             queue_add("attack", dict(base, missionType="fleet",
                       units=fleet_units, transporters=0, dispatchAfter=now))
             fleet_lead    = max(1, int(t.get("fleet_lead_min", 5))) * 60
+            if combat_ships > 0:
+                fleet_lead += _SEA_BATTLE_MARGIN_SECS   # sea battle rounds take ~15 min
             fleet_arrival = now + fleet_travel
             troop_arrival = fleet_arrival + fleet_lead
             army_after    = max(now, troop_arrival - troop_travel)
@@ -809,8 +815,8 @@ def process_farm_targets(session, in_active_hours=True):
                                   "next_action": "spy"})
                 continue
             if combat_ships > max_combat:
-                logger.warning("[farm] %s: %d navios de combate (não fogem ao bloqueio) — "
-                               "alvo saltado + alerta", name, combat_ships)
+                logger.warning("[farm] %s: %d navios de combate > máximo %d — "
+                               "alvo saltado + alerta", name, combat_ships, max_combat)
                 try:
                     from telegram_notifier import notify_farm_blocked
                     notify_farm_blocked(name, t.get("target_player", ""), combat_ships)
@@ -818,12 +824,15 @@ def process_farm_targets(session, in_active_hours=True):
                     pass
                 farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
                                   "last_loot": loot, "last_enemy_ships": combat_ships + flee_ships,
-                                  "is_fleet_target": 1 if flee_ships > 0 else int(t.get("is_fleet_target", 0)),
+                                  "is_fleet_target": 1,
                                   "next_action": "spy"})
                 continue
 
-            # Only flee ships remain → drive them off with the blockade; 0 → troops only.
-            enemy_ships = flee_ships
+            # Every enemy ship must be cleared by the blockade wave before the troops sail:
+            # unescorted transports lose ANY sea fight (seen live: 150 hoplites bounced off
+            # 2 triremes). Flee ships run from the blockade; tolerated combat ships
+            # (≤ max_enemy_ships) get fought by it — never ignored.
+            enemy_ships = flee_ships + combat_ships
 
             # Don't launch while the previous raid's ships are still returning — keep
             # the fresh intel and retry directly in a few minutes once they're back.
@@ -836,7 +845,7 @@ def process_farm_targets(session, in_active_hours=True):
                             name, max(0, (eta - now) // 60))
                 continue
 
-            res = _enqueue_attack(t, loot, enemy_ships)
+            res = _enqueue_attack(t, loot, enemy_ships, combat_ships)
             if not res:
                 # Report is fresh; we just lack free troops/ships now (returning) → retry when
                 # they land and attack directly, no need to re-scout.
@@ -908,6 +917,21 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
 
             if now >= return_at:
+                # Bounce detection: a raid that came home without ANY registered loot most
+                # likely turned back from a sea fight (enemy warship docked since the last
+                # garrison scout — seen live with 2 triremes at a "safe" target). Don't
+                # re-attack blind: force a FULL garrison re-scout (fleet targets always get
+                # one) so the blockade/skip logic can see the port. Worst case (loot_log
+                # missed a real return) costs one spy round instead of a 6h bounced raid.
+                if int(t.get("last_attack_at", 0) or 0) > 0 and _recent_return_loot(t) is None:
+                    delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
+                                      "next_action": "spy", "is_fleet_target": 1,
+                                      "respy_launched_at": 0})
+                    logger.warning("[farm] %s: tropas regressaram SEM saque registado — "
+                                   "possível ricochete naval; re-espionagem completa em %dmin",
+                                   name, delay // 60)
+                    continue
                 if int(t.get("respy_launched_at", 0)) > 0:
                     # An early re-spy is already in flight/done — hand straight to the
                     # SPYING evaluator (attacks as soon as the report + ships are ready),
