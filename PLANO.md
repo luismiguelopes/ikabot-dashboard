@@ -273,10 +273,12 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
 - [ ] **P6.9 Autenticação simples no dashboard.** Flask/Vite servem na LAN sem login —
       qualquer dispositivo na rede pode lançar ataques/pausar/apagar. Token partilhado
       ou basic auth no Flask (e proxy do Vite) chega.
-- [ ] **P6.10 Split da MundoPage.** 1751 linhas com identidade dupla: world scan
-      (inactivos/ilhas/ignoradas) + centro de combate (dispatch/farm/histórico); o
-      DispatchTab (1222) serve 3 vistas. Promover "Combate" a página própria no sidebar
-      e partir os componentes (sem mudar comportamento).
+- [x] **P6.10 Split da MundoPage.** ✅ 2026-07-03 — "Combate" é página própria no
+      sidebar (`CombatPage.tsx`: dispatch/farm/histórico via DispatchTab); MundoPage
+      ficou só world scan (1637→296 linhas) com os componentes extraídos para ficheiros
+      próprios em `mundo/`: SpyModal, AttackModal, InactivosTab (727), IgnoradasTab,
+      IlhasTab, types.ts. Sem mudanças de comportamento; nav "Mundo"/"Combate" no
+      sidebar e no selector de página inicial.
 - [x] **P6.11 Build de produção do frontend.** ✅ 2026-07-03 — Flask serve
       `./frontend/dist` (montado ro em /gui/dist) com fallback SPA; porta 5001 passou
       a publicar o ikabot-gui; container `ikabot-frontend` removido do compose.

@@ -15,6 +15,7 @@ import { HistoryPage } from './components/HistoryPage'
 import { CalculadorasPage } from './components/calculadoras/CalculadorasPage'
 import { BuildingQueueTab } from './components/Construction'
 import { MundoPage } from './components/mundo/MundoPage'
+import { CombatPage } from './components/CombatPage'
 import { SettingsPage } from './components/SettingsPage'
 import { LogsPage } from './components/LogsPage'
 
@@ -283,6 +284,7 @@ export default function App() {
           {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
           {page === 'construction' && <BuildingQueueTab data={data} />}
           {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
+          {page === 'combate'      && <CombatPage />}
           {page === 'logs'         && <LogsPage />}
           {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
         </main>

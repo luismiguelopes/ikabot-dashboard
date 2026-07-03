@@ -23,13 +23,14 @@ export function saveSpyDefaults(originCityId: string, numAgents: number) {
 
 const NAV_OPTIONS = [
   'home', 'cities', 'buildings', 'movements', 'alerts',
-  'history', 'calc', 'construction', 'mundo',
+  'history', 'calc', 'construction', 'combate', 'mundo',
 ] as const
 type NavKey = typeof NAV_OPTIONS[number]
 const NAV_LABEL_KEYS: Record<NavKey, string> = {
   home: 'nav_home', cities: 'nav_cities', buildings: 'nav_buildings',
   movements: 'nav_movements', alerts: 'nav_alerts', history: 'nav_history',
-  calc: 'nav_calculators', construction: 'nav_construction', mundo: 'nav_world',
+  calc: 'nav_calculators', construction: 'nav_construction',
+  combate: 'nav_combat', mundo: 'nav_world',
 }
 
 function ThresholdRow({ label, value, onChange, min, max, unit }: {
