@@ -722,6 +722,7 @@ def api_espionage_settings_get():
     except (FileNotFoundError, json.JSONDecodeError):
         data = dict(_DEFAULT_ESPIONAGE_SETTINGS)
     data.setdefault("processingEnabled", True)
+    data.setdefault("minLootTotal", 50000)
     return jsonify(data)
 
 
