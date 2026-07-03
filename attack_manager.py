@@ -640,6 +640,37 @@ def _classify_enemy_fleet(garrison_troops):
 
 
 
+# P6.7: the fixed model below ignores speed bonuses (Poseidon, etc.). Every farm raid
+# fetches the REAL journey time from the game form; the observed real/estimated ratio is
+# kept here (EWMA) so the UI's ETA preview can correct the same model it mirrors.
+TRAVEL_CALIBRATION_PATH = os.path.join(LOGS_DIR, "travel_calibration.json")
+
+
+def record_travel_calibration(kind, estimated_secs, real_secs):
+    """Fold one observed journey into the running real/estimated ratio for `kind`
+    ("troop"/"fleet"). Wild samples (routes the model can't represent) are discarded."""
+    if not estimated_secs or not real_secs:
+        return
+    ratio = real_secs / estimated_secs
+    if not 0.2 <= ratio <= 5:
+        return
+    try:
+        with open(TRAVEL_CALIBRATION_PATH) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    cur  = data.get(kind, {})
+    n    = int(cur.get("samples", 0))
+    prev = float(cur.get("ratio", 1.0))
+    new  = ratio if n == 0 else prev + 0.2 * (ratio - prev)
+    data[kind] = {"ratio": round(new, 3), "samples": n + 1, "updatedAt": int(time.time())}
+    try:
+        with open(TRAVEL_CALIBRATION_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
 def _calc_travel_secs(origin_x, origin_y, target_x, target_y):
     if origin_x == target_x and origin_y == target_y:
         return 600

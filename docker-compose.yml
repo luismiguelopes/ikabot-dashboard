@@ -81,26 +81,16 @@ services:
       - ./ikabot_gui:/gui
       - ./db_manager.py:/gui/db_manager.py
       - ./telegram_notifier.py:/gui/telegram_notifier.py
+      # P6.11: build de produção do frontend, servido pelo Flask (era um container Vite)
+      # Rebuild após mudanças no frontend: cd frontend && npx vite build
+      - ./frontend/dist:/gui/dist:ro
       # A mesma Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
     working_dir: /gui
+    ports:
+      - "5001:5000"
     command: >
       bash -c "pip install 'flask==3.1.*' && python app.py"
-
-  frontend:
-    image: node:20-alpine
-    container_name: ikabot-frontend
-    restart: unless-stopped
-    environment:
-      TZ: Europe/Lisbon
-    volumes:
-      - ./frontend:/app
-    working_dir: /app
-    command: sh -c "npm install && npm run dev"
-    ports:
-      - "5001:5173"
-    depends_on:
-      - ikabot-gui
 
 volumes:
   ikalogs_volume:

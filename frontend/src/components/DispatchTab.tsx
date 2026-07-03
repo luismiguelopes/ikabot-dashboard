@@ -278,8 +278,15 @@ export function DispatchTab({ view = 'dispatch' }: { view?: 'dispatch' | 'farm' 
 
   // ── Derived: travel time + arrival estimate (F2) ───────────────────────────
 
+  // P6.7: correct the fixed model with the real/estimated ratio observed by the farm
+  const [calib, setCalib] = useState<{ troop?: { ratio: number }; fleet?: { ratio: number } }>({})
+  useEffect(() => {
+    fetch('/api/travel-calibration').then(r => r.json()).then(setCalib).catch(() => {})
+  }, [])
+  const calibRatio = missionType === 'army' ? (calib.troop?.ratio ?? 1) : (calib.fleet?.ratio ?? 1)
+
   const travel = originCity && target
-    ? travelSecs(originCity.x, originCity.y, target.islandX, target.islandY, missionType)
+    ? Math.round(travelSecs(originCity.x, originCity.y, target.islandX, target.islandY, missionType) * calibRatio)
     : null
 
   // ── Schedule helpers ────────────────────────────────────────────────────────

@@ -259,16 +259,17 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       `BOT_OFFLINE_SECS` (env, default 1800): healthcheck do compose lê-a, o watchdog
       Telegram do Flask usa-a, e o /api/data expõe `offlineAfterSecs` para o badge do
       sidebar (que estava a 90 min — passou a 30, coerente com o resto).
-- [ ] **P6.7 Calibrar tempos de viagem.** ETA do DispatchTab e espaçamento de vagas do
-      auto-attack usam a estimativa fixa (1200s×distância, ⅔ tropas) sem bónus
-      (Poseidon, etc.). O farm já usa tempos reais; guardar o rácio real/estimado das
-      viagens observadas (loot_log/movements) e aplicar como factor de correcção.
+- [x] **P6.7 Calibrar tempos de viagem.** ✅ 2026-07-03 — cada raid do farm já busca o
+      tempo real ao formulário; agora regista o rácio real/estimado (EWMA α=0.2, por
+      tipo troop/fleet, amostras absurdas descartadas) em `travel_calibration.json`.
+      O ETA do DispatchTab multiplica a estimativa pelo rácio (`/api/travel-calibration`).
 
 ### Bloco C — UX e operação (conforto, sem risco)
 
-- [ ] **P6.8 Feedback de acções da UI.** Botões (force scan, run now, dispatch) escrevem
-      flag/fila e o toast diz "ok" = "enfileirado", não "feito". Mini-feed "última acção
-      → estado" (enfileirado/executado/falhou) alimentado pelas filas SQLite + logs.
+- [x] **P6.8 Feedback de acções da UI.** ✅ 2026-07-03 — `GET /api/activity` agrega
+      sinais existentes (itens pendentes das 4 filas SQLite, flags `.force_*` activas
+      — desaparecer = o bot pegou no pedido —, últimos dispatches do attack_log com
+      ✓/✗ e erro). Cartão "Actividade do bot" na HomePage (poll 15s; oculto se vazio).
 - [ ] **P6.9 Autenticação simples no dashboard.** Flask/Vite servem na LAN sem login —
       qualquer dispositivo na rede pode lançar ataques/pausar/apagar. Token partilhado
       ou basic auth no Flask (e proxy do Vite) chega.
@@ -276,10 +277,13 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       (inactivos/ilhas/ignoradas) + centro de combate (dispatch/farm/histórico); o
       DispatchTab (1222) serve 3 vistas. Promover "Combate" a página própria no sidebar
       e partir os componentes (sem mudar comportamento).
-- [ ] **P6.11 Build de produção do frontend.** `npm run dev` (Vite dev server) como
-      serviço permanente; `vite build` + servir estático pelo Flask elimina um
-      container e o overhead de HMR. (O auto-reload do Flask já mordeu com inodes —
-      manter a regra de restart.)
-- [ ] **P6.12 Testes do Flask.** 1684 linhas sem um único teste (venv nem tem flask).
-      Instalar flask no venv de testes + testes dos endpoints críticos: merge de marks,
-      farm update/unignore, filas, /api/health.
+- [x] **P6.11 Build de produção do frontend.** ✅ 2026-07-03 — Flask serve
+      `./frontend/dist` (montado ro em /gui/dist) com fallback SPA; porta 5001 passou
+      a publicar o ikabot-gui; container `ikabot-frontend` removido do compose.
+      ⚠️ Mudanças no frontend agora exigem `cd frontend && npx vite build`.
+- [x] **P6.12 Testes do Flask.** ✅ 2026-07-03 — flask instalado no venv;
+      `tests/test_flask_api.py` (9 testes via test_client): alert-thresholds (defaults/
+      roundtrip/clamps), espionage settings (merge parcial não esmaga minLootTotal),
+      travel-calibration, activity (filas+flags+log), marks POST, farm re-enable limpa
+      'ignorar' mas preserva 'alvo', SPA serving/fallback/404 em /api. Nota: importar o
+      db_manager REAL antes do app.py (ikabot_gui/ tem artefactos 0-byte dos mounts).

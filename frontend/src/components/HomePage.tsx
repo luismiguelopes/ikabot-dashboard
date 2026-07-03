@@ -9,6 +9,65 @@ import { Th, Td } from './ui/TableCells'
 import { StatBadge } from './ui/StatBadge'
 import type { ApiData, AlertThresholds, BuildingQueue, BuildingCostsData } from '../types'
 
+interface ActivityData {
+  pending: Array<{ queue: string; label: string; queuedAt: number | null; dispatchAfter: number | null; retries: number }>
+  flags: Array<{ kind: string; requestedAt: number }>
+  recent: Array<{ ts: number; target_city: string; target_player: string; success: boolean; error: string | null; source: string }>
+}
+
+// P6.8: "did my click actually happen?" — pending queue items + active force flags
+// (a flag disappearing = the bot picked the request up) + recent dispatch outcomes.
+function ActivityCard() {
+  const t = useT()
+  const now = useLiveClock()
+  const [data, setData] = useState<ActivityData | null>(null)
+  useEffect(() => {
+    const load = () => fetch('/api/activity').then(r => r.json()).then(setData).catch(() => {})
+    load()
+    const id = setInterval(load, 15000)
+    return () => clearInterval(id)
+  }, [])
+  if (!data || (data.pending.length === 0 && data.flags.length === 0 && data.recent.length === 0)) return null
+  const qIcon: Record<string, string> = {
+    attack: 'fa-crosshairs', spy_dispatch: 'fa-user-secret', spy_recall: 'fa-rotate-left', transport: 'fa-ship',
+  }
+  return (
+    <Card className="mb-6">
+      <CardHeader icon="fa-wave-square" title={t('activity_title')} />
+      <div className="px-5 py-3 space-y-1.5">
+        {data.flags.map(f => (
+          <div key={f.kind} className="flex items-center gap-2 text-xs text-amber-700">
+            <i className="fa-solid fa-flag text-[10px]" />
+            <span>{t(`activity_f_${f.kind}` as 'activity_title')}</span>
+            <span className="text-slate-400 ml-auto">{t('activity_requested', { m: String(Math.max(0, Math.round((now - f.requestedAt) / 60))) })}</span>
+          </div>
+        ))}
+        {data.pending.map((p, i) => (
+          <div key={`p${i}`} className="flex items-center gap-2 text-xs text-slate-600">
+            <i className={`fa-solid ${qIcon[p.queue] || 'fa-clock'} text-[10px] text-indigo-400`} />
+            <span>
+              {t(`activity_q_${p.queue}` as 'activity_title')}
+              {p.label ? ` — ${p.label}` : ''}
+              {p.retries > 0 ? ` (${t('activity_retry', { n: String(p.retries) })})` : ''}
+            </span>
+            <span className="text-slate-400 ml-auto">
+              {p.dispatchAfter && p.dispatchAfter > now ? t('activity_queued_for', { t: fmtDuration(p.dispatchAfter - now) }) : t('activity_waiting')}
+            </span>
+          </div>
+        ))}
+        {data.recent.slice(0, 5).map((r, i) => (
+          <div key={`r${i}`} className="flex items-center gap-2 text-xs">
+            <i className={`fa-solid ${r.success ? 'fa-check text-emerald-500' : 'fa-xmark text-red-500'} text-[10px]`} />
+            <span className="text-slate-500">{r.target_city || r.target_player}{r.source ? ` · ${r.source}` : ''}</span>
+            {!r.success && r.error && <span className="text-red-400 truncate max-w-[220px]">{r.error}</span>}
+            <span className="text-slate-400 ml-auto">{new Date(r.ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 function CombatSummary() {
   const t   = useT()
   const now = useLiveClock()
@@ -154,6 +213,7 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
       <PageHeader icon="fa-crown" title={t('home_title')} />
 
       <CombatSummary />
+      <ActivityCard />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
         <StatBadge icon="fa-anchor"       iconColor="text-blue-500"    label={t('ships_available')}  value={fmt(s.ships.available)}    />

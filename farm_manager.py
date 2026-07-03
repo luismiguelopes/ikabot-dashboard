@@ -565,17 +565,21 @@ def process_farm_targets(session, in_active_hours=True):
         # ATTACKING (troops already home, ships free) and blocks the whole queue. One extra
         # throttled form fetch is worth an accurate return time.
         is_fleet_target = need_fleet or ret_at > 0 or int(t.get("is_fleet_target", 0)) == 1
+        est_fleet, est_troop = fleet_travel, troop_travel
         try:
             import ikabot.config as ikc
-            from attack_manager import fetch_fleet_journey, fetch_troop_journey
+            from attack_manager import (fetch_fleet_journey, fetch_troop_journey,
+                                        record_travel_calibration)
             rt = fetch_troop_journey(session, ikc, origin_id, t["target_city_id"])
             if rt:
                 troop_travel = rt
+                record_travel_calibration("troop", est_troop, rt)
             if need_fleet:
                 rf = fetch_fleet_journey(session, ikc, origin_id, t["target_city_id"],
                                          list(fleet_units))
                 if rf:
                     fleet_travel = rf
+                    record_travel_calibration("fleet", est_fleet, rf)
         except Exception:
             logger.warning("[farm] %s: leitura de tempos reais falhou — a usar estimativa", name)
 

@@ -1,4 +1,5 @@
-from flask import Flask, render_template, jsonify, request, Response, stream_with_context
+from flask import (Flask, render_template, jsonify, request, Response,
+                   send_from_directory, stream_with_context)
 import json
 import os
 import sqlite3
@@ -153,9 +154,23 @@ def load_all_data():
     }, None
 
 
+# P6.11: Flask serves the production React build (./frontend/dist mounted at /gui/dist),
+# replacing the permanent Vite dev-server container. Explicit /api routes always win over
+# the catch-all; unknown paths fall back to index.html (SPA routing).
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+
+
 @app.route("/")
-def index():
-    return render_template("index.html")
+@app.route("/<path:path>")
+def serve_frontend(path="index.html"):
+    if path.startswith("api/"):
+        return jsonify({"error": "not found"}), 404
+    if not os.path.isdir(FRONTEND_DIST):
+        return render_template("index.html")   # legacy fallback (dist not mounted)
+    full = os.path.normpath(os.path.join(FRONTEND_DIST, path))
+    if full.startswith(FRONTEND_DIST) and os.path.isfile(full):
+        return send_from_directory(FRONTEND_DIST, path)
+    return send_from_directory(FRONTEND_DIST, "index.html")
 
 
 @app.route("/api/data")
@@ -1143,6 +1158,68 @@ def api_farm_remove():
 
 ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
 _DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
+
+# P6.7: real/estimated travel ratio observed by the farm's journey fetches — the ETA
+# preview in the UI multiplies its estimate (same fixed model as the bot) by this.
+TRAVEL_CALIBRATION_PATH = os.path.join(LOGS_DIR, "travel_calibration.json")
+
+
+@app.route("/api/travel-calibration")
+def api_travel_calibration():
+    try:
+        with open(TRAVEL_CALIBRATION_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({})
+
+
+# P6.8: activity feed — "did my click actually happen?". Aggregates the signals that
+# already exist (pending queue items, active .force_* flags, recent dispatch outcomes)
+# instead of new bot-side plumbing: a flag disappearing means the bot picked it up.
+_ACTIVITY_FLAGS = {
+    ".force_empire_update":    "empire_update",
+    ".force_world_scan":       "world_scan",
+    ".force_costs_update":     "costs_update",
+    ".force_movements_update": "movements_update",
+    ".force_queue_check":      "queue_check",
+    ".force_import_reports":   "import_reports",
+    ".force_military_update":  "military_update",
+}
+
+
+@app.route("/api/activity")
+def api_activity():
+    pending = []
+    if _db:
+        for queue in ("attack", "spy_dispatch", "spy_recall", "transport"):
+            try:
+                for it in _db.queue_items(queue):
+                    pending.append({
+                        "queue":  queue,
+                        "label":  it.get("targetCityName") or it.get("cityName")
+                                  or it.get("destName") or it.get("targetPlayerName") or "",
+                        "queuedAt": it.get("queuedAt") or it.get("addedAt") or it.get("createdAt"),
+                        "dispatchAfter": it.get("dispatchAfter"),
+                        "retries": it.get("retries", 0),
+                    })
+            except Exception:
+                pass
+    flags = []
+    for fname, kind in _ACTIVITY_FLAGS.items():
+        path = os.path.join(LOGS_DIR, fname)
+        if os.path.exists(path):
+            try:
+                flags.append({"kind": kind, "requestedAt": int(os.path.getmtime(path))})
+            except OSError:
+                pass
+    recent = []
+    if _db:
+        try:
+            recent = _db.get_attack_log(limit=8)
+        except Exception:
+            pass
+    return jsonify({"pending": pending, "flags": flags, "recent": recent})
+
 
 # P6.4: UI alert thresholds (wine/storage) live on the server, not per-browser localStorage,
 # so every device sees the same configuration.
