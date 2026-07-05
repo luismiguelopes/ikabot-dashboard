@@ -103,6 +103,15 @@ def _collect_movements(session, city_id):
             time_left = int(float(m["eventTime"])) - time_now
             arrival_ts = int(float(m["eventTime"]))
             is_returning = m["event"].get("isFleetReturning", False)
+            # Stable per-movement key for dedup (loot log + hostile alerts). The game can
+            # UPDATE a movement's arrival time mid-flight (e.g. a sea battle stretches the
+            # return), so any key built on arrival_ts sees "a new movement" and duplicates
+            # the loot row and the Telegram alert. event.id is the game's own id for the
+            # movement — upstream ikabot dedups its attack alerts with it.
+            event_key = str(m["event"].get("id", "") or "")
+            if not event_key:
+                event_key = "{}|{}|{}".format(m["origin"].get("name", ""),
+                                              m["target"].get("name", ""), arrival_ts)
 
             entry = {
                 "origin": "{} ({})".format(
@@ -145,7 +154,7 @@ def _collect_movements(session, city_id):
                     "arrivalTime": arrival_ts,
                     "troops":      entry.get("troops", 0),
                     "fleets":      entry.get("fleets", 0),
-                    "key":         "{}|{}|{}".format(entry["origin"], entry["destination"], arrival_ts),
+                    "key":         event_key,
                 })
 
             # F1.b: a returning own fleet carrying resources, coming from another
@@ -173,7 +182,7 @@ def _collect_movements(session, city_id):
                         "fromPlayer": m["target"].get("avatarName", ""),
                         "toCity":     m["origin"].get("name", ""),
                         "resources":  loot,
-                        "returnKey":  "{}|{}|{}".format(entry["origin"], entry["destination"], arrival_ts),
+                        "returnKey":  event_key,
                     })
 
             movements.append(entry)
