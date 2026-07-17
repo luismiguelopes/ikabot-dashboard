@@ -319,6 +319,18 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 logger.error("import_existing_reports falhou", exc_info=True)
             continue
 
+        # Mass recall of unused stationed spies triggered by Flask UI. Gated on active
+        # hours: the sweep fetches every safehouse view (~14 GETs) — outside hours the
+        # flag stays put and is picked up when they open.
+        if session and _in_scan_hours():
+            try:
+                from espionage_manager import FORCE_RECALL_UNUSED_FLAG, process_recall_unused_flag
+                if os.path.exists(FORCE_RECALL_UNUSED_FLAG):
+                    process_recall_unused_flag(session)
+                    continue
+            except Exception:
+                logger.error("recall em massa falhou", exc_info=True)
+
         # Pending spy dispatch or recalls queued by the Flask UI — process immediately.
         # has_due_recalls: recalls waiting for a spaced retry must not skip the sleep.
         if session:

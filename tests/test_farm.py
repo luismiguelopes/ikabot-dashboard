@@ -92,6 +92,9 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     monkeypatch.setattr(empire_collector, "refresh_city_military", lambda *a, **k: None, raising=False)
     import empire_utils
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
+    # No real anti-detection sleeps in tests; live-check memo must not leak between tests
+    monkeypatch.setattr(fm.time, "sleep", lambda *a, **k: None)
+    fm._inactive_memo.clear()
     # capture queue_add into a list
     added = []
     monkeypatch.setattr(db_manager, "queue_add", lambda q, item: added.append((q, item)) or "id")
@@ -381,6 +384,7 @@ def test_safe_target_attacks_directly(monkeypatch, tmp_path):
                                    "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
@@ -463,6 +467,7 @@ def test_healthy_real_return_still_direct_attacks(monkeypatch, tmp_path):
     db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
                          "toCity": "Baphomet", "resources": [100000, 0, 0, 0, 0], "returnKey": "k1"})
     added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
@@ -481,6 +486,7 @@ def test_no_free_troops_reschedules_not_doomed_attack(monkeypatch, tmp_path):
                                    "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
     with open(tmp_path / "mil.json", "w") as f:        # origin has no troops available now
         json.dump({"byCityName": {"Home": {"troops": {}, "fleet": {}}}}, f)
 
@@ -508,6 +514,84 @@ def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
     assert [q for q, _ in added] == ["spy_dispatch"]
     assert added[0][1]["needGarrison"] is False
     assert db_manager.farm_get("100")["respy_launched_at"] > 0
+
+
+def test_direct_raid_blocked_when_owner_active(monkeypatch, tmp_path):
+    """Live inactivity check runs immediately before EVERY direct raid: owner active again →
+    target disabled + alert, no attack goes out even though all raid gates were green."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
+    alerted = []
+    import telegram_notifier as tg
+    monkeypatch.setattr(tg, "notify_farm_active", lambda *a, **k: alerted.append(a), raising=False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    assert db_manager.farm_get("100")["enabled"] is False
+    assert len(alerted) == 1
+
+
+def test_direct_raid_unconfirmed_escalates_to_scout(monkeypatch, tmp_path):
+    """If the live check can't tell (island fetch + scan both failed → None), the direct raid
+    is NOT sent blind — the round escalates to a full garrison scout instead."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: None)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]      # scout instead of blind attack
+    assert added[0][1]["needGarrison"] is True
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_first_contact_checks_inactivity_too(monkeypatch, tmp_path):
+    """The live inactivity check now also gates FIRST-contact scouts: an owner who is active
+    at the coordinates disables the target before a single spy is spent."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_spy_at": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                    # no spy wasted on an active player
+    assert db_manager.farm_get("100")["enabled"] is False
+
+
+def test_report_attack_blocked_when_owner_active(monkeypatch, tmp_path):
+    """Even with a fresh good report in hand, the launch is re-gated by the live check:
+    owner active again → disable, no attack."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
+        "garrisonResult": {"troops": {}},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    assert db_manager.farm_get("100")["enabled"] is False
 
 
 def test_reactivated_target_is_disabled(monkeypatch, tmp_path):

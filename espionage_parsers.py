@@ -82,60 +82,71 @@ def _parse_safehouse_page(html, city_name):
 
 def _parse_active_spy_missions(html):
     """
-    Parse active spy deployments from safehouse overview HTML.
-    Returns list of {cityId, x, y, cityName, state, countdown_secs}.
+    Parse active spy deployments from safehouse overview HTML. Real markup (captured
+    2026-07-17, debug_safehouse dump): one <div class="spyinfo"> block per foreign city
+    holding spies, with <li title="Residência"><a href="...view=city&cityId=NNN">Nome
+    (x:y)</a></li>, <li> N estão em uso </li> and <li class="status">Os teus espiões
+    esperam novas ordens.</li> (ou "... estão a caminho" com countdown "Chegada Xh Ym Zs").
+    Returns list of {cityId, x, y, cityName, numAgents, state, countdown_secs}.
     state: 'WAITING_AT_CITY' | 'TRAVELING'
     """
     import re
     if not html:
         return []
 
-    STATIONED = re.compile(r'esperam\s+novas\s+ordens', re.IGNORECASE)
-    TRAVELING = re.compile(r'est[aá]\s+a\s+caminho', re.IGNORECASE)
+    STATIONED = re.compile(r'esperam?\s+novas\s+ordens', re.IGNORECASE)
+    TRAVELING = re.compile(r'est(?:[aá]|[ãa]o)\s+a\s+caminho', re.IGNORECASE)
     COUNTDOWN = re.compile(
         r'Chegada\s*(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s)?',
         re.IGNORECASE
     )
 
-    # Split into TR-level chunks; fall back to DIV if no TR boundaries
-    chunks = re.split(r'(?=<tr[\s>])', html, flags=re.IGNORECASE)
-    if len(chunks) <= 2:
-        chunks = re.split(r'(?=<div[\s>])', html, flags=re.IGNORECASE)
-
+    chunks = re.split(r'(?=<div\s[^>]*class="[^"]*spyinfo)', html, flags=re.IGNORECASE)
     results = []
-    for chunk in chunks:
+    for chunk in chunks[1:]:
         is_stationed = bool(STATIONED.search(chunk))
         is_traveling = bool(TRAVELING.search(chunk))
         if not is_stationed and not is_traveling:
+            logger.debug("[espionage] activa: bloco spyinfo com status desconhecido — a saltar")
             continue
 
         state = 'WAITING_AT_CITY' if is_stationed else 'TRAVELING'
 
-        x = y = city_id = city_name = None
-        xm = re.search(r'xcoord=(\d+)', chunk, re.IGNORECASE)
-        ym = re.search(r'ycoord=(\d+)', chunk, re.IGNORECASE)
-        cm = re.search(r'selectCity=(\d+)', chunk, re.IGNORECASE)
-        if xm:
-            x = int(xm.group(1))
-        if ym:
-            y = int(ym.group(1))
+        city_id = city_name = None
+        x = y = None
+        cm = re.search(r'view=city&(?:amp;)?cityId=(\d+)', chunk, re.IGNORECASE)
+        if not cm:
+            cm = re.search(r'(?:destinationCityId|targetCityId)=(\d+)', chunk, re.IGNORECASE)
         if cm:
             city_id = cm.group(1)
 
-        if x is None and city_id is None:
-            logger.debug("[espionage] activa: chunk sem coords — a saltar")
-            continue
-
         link_m = re.search(
-            r'<a\s[^>]*(?:xcoord|selectCity)[^>]*>(.*?)</a>',
+            r'<a\s[^>]*view=city[^>]*>(.*?)</a>',
             chunk, re.DOTALL | re.IGNORECASE
         )
         if link_m:
-            inner = re.sub(r'<br\s*/?>', ' ', link_m.group(1), flags=re.IGNORECASE)
-            inner = re.sub(r'<[^>]+>', '', inner)
+            inner = re.sub(r'<[^>]+>', '', link_m.group(1))
             inner = re.sub(r'\s+', ' ', inner.replace('&nbsp;', ' ')).strip()
-            bracket = re.search(r'\[\s*\d+\s*:\s*\d+\s*\]', inner)
-            city_name = inner[:bracket.start()].strip() if bracket else inner or None
+            coord_m = re.search(r'\(\s*(\d+)\s*:\s*(\d+)\s*\)', inner)
+            if coord_m:
+                x, y = int(coord_m.group(1)), int(coord_m.group(2))
+                city_name = inner[:coord_m.start()].strip() or None
+            else:
+                city_name = inner or None
+            title_m = re.search(r'<a\s[^>]*view=city[^>]*\btitle="([^"]+)"|'
+                                r'<a\s[^>]*\btitle="([^"]+)"[^>]*view=city',
+                                chunk, re.IGNORECASE)
+            if title_m:
+                city_name = title_m.group(1) or title_m.group(2) or city_name
+
+        if city_id is None and x is None:
+            logger.debug("[espionage] activa: bloco sem cityId/coords — a saltar")
+            continue
+
+        num_agents = None
+        am = re.search(r'(\d+)\s*est(?:[ãa]o|[aá])\s+em\s+uso', chunk, re.IGNORECASE)
+        if am:
+            num_agents = int(am.group(1))
 
         countdown_secs = None
         if is_traveling:
@@ -152,6 +163,7 @@ def _parse_active_spy_missions(html):
             "x":              x,
             "y":              y,
             "cityName":       city_name,
+            "numAgents":      num_agents,
             "state":          state,
             "countdown_secs": countdown_secs,
         })

@@ -34,7 +34,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(flask_app, "LOGS_DIR", str(tmp_path))
     for const in ("ALERT_THRESHOLDS_PATH", "ESPIONAGE_SETTINGS_PATH",
                   "WORLD_SCAN_JSON_PATH", "PLAYER_MARKS_JSON_PATH",
-                  "TRAVEL_CALIBRATION_PATH"):
+                  "TRAVEL_CALIBRATION_PATH", "SPY_MISSIONS_PATH"):
         monkeypatch.setattr(flask_app, const,
                             str(tmp_path / os.path.basename(getattr(flask_app, const))))
     flask_app.app.config["TESTING"] = True
@@ -165,3 +165,46 @@ def test_spa_serving_and_fallback(monkeypatch, tmp_path):
     assert c.get("/app.js").data == b"js"
     assert b"SPA" in c.get("/mundo").data            # SPA route → index fallback
     assert c.get("/api/nao-existe").status_code == 404
+
+
+# ── /api/farm/add: seed intel from existing MundoPage report (ranking fix) ───────
+
+def test_farm_add_seeds_intel_from_existing_report(monkeypatch, tmp_path):
+    """A new farm target inherits last_loot from its newest DONE spy report and a
+    coordinate-based troop-journey estimate, so the queue ranks it immediately."""
+    c = _client(monkeypatch, tmp_path)
+    (tmp_path / "spy_missions.json").write_text(json.dumps({"missions": [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 120000, "marble": 80000}, "reportedAt": 100}},
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 50000}, "reportedAt": 200}},
+        {"targetCityId": "901", "state": "DONE",
+         "result": {"resources": {"wood": 999999}, "reportedAt": 300}},
+    ]}))
+    (tmp_path / "own_cities.json").write_text(json.dumps([
+        {"cityId": 1, "name": "Home", "x": 50, "y": 50},
+        {"cityId": 2, "name": "Far",  "x": 10, "y": 10},
+    ]))
+    r = c.post("/api/farm/add", json={"targetCityId": "900", "targetCityName": "Rico",
+                                      "islandX": 53, "islandY": 46})
+    assert r.get_json()["ok"] is True
+    t = db_manager.farm_get("900")
+    assert t["last_loot"] == 50000                       # newest report for THIS city wins
+    assert t["last_troop_journey"] == 6000               # closest city (50,50), dist 5 × 1200
+
+
+def test_farm_readd_keeps_measured_stats(monkeypatch, tmp_path):
+    """Re-adding an existing target never overwrites real measured loot/journey."""
+    c = _client(monkeypatch, tmp_path)
+    (tmp_path / "spy_missions.json").write_text(json.dumps({"missions": [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 11111}, "reportedAt": 100}},
+    ]}))
+    (tmp_path / "own_cities.json").write_text(json.dumps([{"cityId": 1, "x": 50, "y": 50}]))
+    c.post("/api/farm/add", json={"targetCityId": "900", "islandX": 53, "islandY": 46})
+    db_manager.farm_update("900", {"last_loot": 777777, "last_troop_journey": 1234})
+
+    c.post("/api/farm/add", json={"targetCityId": "900", "islandX": 53, "islandY": 46})
+    t = db_manager.farm_get("900")
+    assert t["last_loot"] == 777777
+    assert t["last_troop_journey"] == 1234

@@ -127,28 +127,50 @@ def _scan_says_inactive(target_city_id):
     return None   # absent → ambiguous (active, or just not scanned)
 
 
+# Memo so one farm pass (verdict + attack seconds apart) doesn't fetch the same island twice.
+_INACTIVE_MEMO_SECS = 120
+_inactive_memo = {}   # tid -> (checked_at, True/False)
+
+
 def _confirm_inactive(session, t):
-    """Confirm a safe target's owner is still inactive before a direct-raid round. Tries the
-    cached world scan first; if that can't tell, fetches the island live and reads the city's
-    state. Returns True (inactive), False (active again → unsafe), or None (couldn't tell →
-    don't block, keep farming)."""
+    """Real-time confirmation that the target's owner is still inactive, done immediately
+    before EVERY farm action (scout or attack): fetches the island view live and reads the
+    city's state at the coordinates. The cached world scan is only a fallback when the live
+    fetch fails. Returns True (inactive), False (active again → unsafe), or None (couldn't
+    tell — caller decides: scout instead of attacking blind)."""
     tid = str(t["target_city_id"])
-    if _scan_says_inactive(tid) is True:
-        return True
+    now = time.time()
+    hit = _inactive_memo.get(tid)
+    if hit and now - hit[0] < _INACTIVE_MEMO_SECS:
+        return hit[1]
     island_id = str(t.get("island_id", ""))
-    if not island_id:
-        return None
+    if island_id:
+        try:
+            from ikabot.helpers.getJson import getIsland
+            time.sleep(random.randint(3, 8))
+            island = getIsland(session.get("view=island&islandId=" + island_id))
+            for c in island.get("cities", []):
+                if str(c.get("id", "")) == tid:
+                    res = c.get("state") in ("inactive", "vacation")
+                    _inactive_memo[tid] = (now, res)
+                    return res
+        except Exception:
+            logger.warning("[farm] %s: fetch da ilha para confirmar inactividade falhou — "
+                           "a tentar o world scan em cache", t.get("target_city_name", tid))
+    return _scan_says_inactive(tid)
+
+
+def _disable_active_target(t):
+    """The owner is active again → the target is no longer farmable. Disable it + alert."""
+    nm = t.get("target_city_name", t["target_city_id"])
+    logger.warning("[farm] %s: jogador já não está inactivo — alvo desactivado", nm)
     try:
-        from ikabot.helpers.getJson import getIsland
-        time.sleep(random.randint(3, 8))
-        island = getIsland(session.get("view=island&islandId=" + island_id))
-        for c in island.get("cities", []):
-            if str(c.get("id", "")) == tid:
-                return c.get("state") in ("inactive", "vacation")
+        from telegram_notifier import notify_farm_active
+        notify_farm_active(nm, t.get("target_player", ""))
     except Exception:
-        logger.warning("[farm] %s: confirmação de inactividade falhou — a prosseguir",
-                       t.get("target_city_name", tid))
-    return None
+        pass
+    from db_manager import farm_update
+    farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
 
 
 def _recent_return_loot(t):
@@ -662,26 +684,21 @@ def process_farm_targets(session, in_active_hours=True):
         return "dispatched"
 
     def _safe_target_verdict(t):
-        """Decide a target's next re-scout. Returns:
-          - "disable": a previously safe target's owner is active again → disabled + alerted.
+        """Decide a target's next re-scout. EVERY verdict starts with a live inactivity
+        re-check at the coordinates (user rule: never spy or attack without re-confirming
+        the owner is still inactive). Returns:
+          - "disable": the owner is active again → disabled + alerted.
           - "garrison": needs a FULL scout — first contact, a fleet target, OR (P5.5) a safe
-            target whose inactivity could NOT be confirmed (stale scan + island fetch failed).
+            target whose inactivity could NOT be confirmed (island fetch + scan both failed).
             Escalating to a garrison scout instead of attacking blind closes the fail-open hole.
           - "warehouse": safe target confirmed still inactive → a warehouse-only re-scout is safe.
-        Self-gates on first contacts / fleet targets without burning an island fetch."""
-        if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
-            return "garrison"
+        """
         confirmed = _confirm_inactive(session, t)
         if confirmed is False:
-            nm = t.get("target_city_name", t["target_city_id"])
-            logger.warning("[farm] %s: jogador já não está inactivo — alvo desactivado", nm)
-            try:
-                from telegram_notifier import notify_farm_active
-                notify_farm_active(nm, t.get("target_player", ""))
-            except Exception:
-                pass
-            farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
+            _disable_active_target(t)
             return "disable"
+        if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
+            return "garrison"
         return "warehouse" if confirmed is True else "garrison"
 
     # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
@@ -720,10 +737,21 @@ def process_farm_targets(session, in_active_hours=True):
                     and int(t.get("is_fleet_target", 0)) == 0
                     and int(t.get("last_loot", 0)) >= min_loot):
                 recent = _recent_return_loot(t)
+                confirmed = None
                 if recent is not None and recent < min_loot:
                     logger.info("[farm] %s: último saque real %d < %d (drenado) — a re-espiar "
                                 "para confirmar em vez de atacar com intel antiga", name, recent, min_loot)
                 else:
+                    # Live inactivity check at the coordinates immediately before the raid
+                    # (user rule): False → target gone; None → scout instead of blind attack.
+                    confirmed = _confirm_inactive(session, t)
+                    if confirmed is False:
+                        _disable_active_target(t)
+                        continue
+                    if confirmed is None:
+                        logger.info("[farm] %s: inactividade não confirmada em tempo real — "
+                                    "a re-espiar antes de atacar", name)
+                if confirmed is True:
                     res = _enqueue_attack(t, int(t.get("last_loot", 0)), 0)
                     if res:
                         farm_update(tid, {
@@ -843,6 +871,13 @@ def process_farm_targets(session, in_active_hours=True):
                                   "next_action": "attack"})
                 logger.info("[farm] %s: relatório pronto mas 0 navios — ataque agendado para o regresso (~%dmin)",
                             name, max(0, (eta - now) // 60))
+                continue
+
+            # Live inactivity check at the coordinates immediately before launching (user
+            # rule). None → proceed: unlike the direct raid there IS a fresh spy report in
+            # hand, so a failed island fetch doesn't force a blind decision.
+            if _confirm_inactive(session, t) is False:
+                _disable_active_target(t)
                 continue
 
             res = _enqueue_attack(t, loot, enemy_ships, combat_ships)

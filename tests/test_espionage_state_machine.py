@@ -271,3 +271,101 @@ def test_cycle_isolates_step_failures(monkeypatch):
     em.process_spy_cycle(session=object())
     # the failing step ran and raised, but every later step still ran
     assert calls == ["recall", "arrivals", "waiting", "collect", "garrison_exec", "garrison_collect"]
+
+
+# ── process_recall_unused_flag: mass recall sweep of unused stationed spies ──────
+
+def _sweep_setup(monkeypatch, tmp_path, missions, entries, farm_ids=frozenset()):
+    """Wire the sweep's seams: flag file, own cities, safehouse fetch/parse, queues."""
+    h = _patch(monkeypatch, missions)
+    flag = tmp_path / ".force_recall_unused"
+    flag.touch()
+    monkeypatch.setattr(em, "FORCE_RECALL_UNUSED_FLAG", str(flag))
+    own = tmp_path / "own.json"
+    own.write_text('[{"cityId": "1", "name": "Home", "safehousePosition": 3}]')
+    monkeypatch.setattr(em, "OWN_CITIES_PATH", str(own))
+    monkeypatch.setattr(em, "_enabled_farm_target_ids", lambda: set(farm_ids))
+    monkeypatch.setattr(em, "_fetch_city_spy_counts", lambda *a, **k: ({}, "<html>"))
+    monkeypatch.setattr(em, "_parse_active_spy_missions", lambda html: entries)
+    monkeypatch.setattr(em, "_recall_queue_items", lambda: [])
+    queued = []
+    monkeypatch.setattr(em, "_queue_recall", lambda item: queued.append(item) or True)
+    return h, flag, queued
+
+
+def test_sweep_recalls_only_unused(monkeypatch, tmp_path):
+    """Stationed spies are recalled EXCEPT enabled farm targets, targets with a mission in
+    progress, and spies still travelling; the swept DONE mission is marked RECALLED."""
+    missions = [
+        _mission(state="DONE", targetCityId="200", numAgents=2, spySessionId="S200"),
+        _mission(state="EXECUTING_WAREHOUSE", targetCityId="400"),
+    ]
+    entries = [
+        {"cityId": "200", "cityName": "Ocioso",   "state": "WAITING_AT_CITY"},
+        {"cityId": "300", "cityName": "FarmAlvo", "state": "WAITING_AT_CITY"},
+        {"cityId": "400", "cityName": "EmMissao", "state": "WAITING_AT_CITY"},
+        {"cityId": "500", "cityName": "AViajar",  "state": "TRAVELING"},
+    ]
+    h, flag, queued = _sweep_setup(monkeypatch, tmp_path, missions, entries, farm_ids={"300"})
+
+    em.process_recall_unused_flag(session=object())
+
+    assert [q["targetCityId"] for q in queued] == ["200"]   # only the idle one
+    assert queued[0]["numAgents"] == 2                       # enriched from the mission record
+    assert queued[0]["spySessionId"] == "S200"
+    assert h["missions"][0]["state"] == "RECALLED"
+    assert h["missions"][1]["state"] == "EXECUTING_WAREHOUSE"   # untouched
+    assert not flag.exists()                                 # single sweep per press
+
+
+def test_sweep_staggers_batches(monkeypatch, tmp_path):
+    """Recalls beyond the batch size get a future nextAttemptAfter — no request bursts."""
+    n = em._RECALL_SWEEP_BATCH + 5
+    entries = [{"cityId": str(1000 + i), "cityName": f"C{i}", "state": "WAITING_AT_CITY"}
+               for i in range(n)]
+    _, _, queued = _sweep_setup(monkeypatch, tmp_path, [], entries)
+
+    em.process_recall_unused_flag(session=object())
+
+    assert len(queued) == n
+    first_batch  = queued[:em._RECALL_SWEEP_BATCH]
+    second_batch = queued[em._RECALL_SWEEP_BATCH:]
+    assert all(q["nextAttemptAfter"] == 0 for q in first_batch)          # goes out now
+    now = _now()
+    assert all(q["nextAttemptAfter"] >= now + em._RECALL_SWEEP_SPACING_SECS
+               for q in second_batch)                                     # spaced window
+
+
+def test_sweep_skips_targets_already_pending(monkeypatch, tmp_path):
+    """A target already in the recall queue (e.g. double press) is not queued twice."""
+    entries = [{"cityId": "200", "cityName": "Ocioso", "state": "WAITING_AT_CITY"}]
+    _, _, queued = _sweep_setup(monkeypatch, tmp_path, [], entries)
+    monkeypatch.setattr(em, "_recall_queue_items", lambda: [{"targetCityId": "200"}])
+
+    em.process_recall_unused_flag(session=object())
+
+    assert queued == []
+
+
+def test_sweep_recalls_synthetic_waiting_spies(monkeypatch, tmp_path):
+    """Synthetic WAITING_AT_CITY missions (safehouse sync of manually dispatched spies)
+    are NOT 'in progress' — they are the idle spies the sweep exists to recall; the
+    record is marked RECALLED so the pipeline won't fire a mission on a homebound spy.
+    A REAL (pipeline-dispatched) WAITING_AT_CITY mission still counts as busy."""
+    missions = [
+        _mission(state="WAITING_AT_CITY", targetCityId="200", numAgents=3,
+                 syntheticFromSafehouse=True),
+        _mission(state="WAITING_AT_CITY", targetCityId="400"),   # real pipeline mission
+    ]
+    entries = [
+        {"cityId": "200", "cityName": "Ocioso",   "state": "WAITING_AT_CITY", "numAgents": 3},
+        {"cityId": "400", "cityName": "EmMissao", "state": "WAITING_AT_CITY", "numAgents": 1},
+    ]
+    h, _, queued = _sweep_setup(monkeypatch, tmp_path, missions, entries)
+
+    em.process_recall_unused_flag(session=object())
+
+    assert [q["targetCityId"] for q in queued] == ["200"]
+    assert queued[0]["numAgents"] == 3
+    assert h["missions"][0]["state"] == "RECALLED"
+    assert h["missions"][1]["state"] == "WAITING_AT_CITY"   # real mission untouched

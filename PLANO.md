@@ -289,3 +289,23 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       travel-calibration, activity (filas+flags+log), marks POST, farm re-enable limpa
       'ignorar' mas preserva 'alvo', SPA serving/fallback/404 em /api. Nota: importar o
       db_manager REAL antes do app.py (ikabot_gui/ tem artefactos 0-byte dos mounts).
+- [x] **P6.13 Recall em massa de espiões não usados.** ✅ 2026-07-17 — botão no MundoPage
+      → POST /api/espionage/recall-unused → flag `.force_recall_unused`; o bot varre os
+      safehouses (verdade real, não o spy_missions.json acumulado), salta alvos de farm
+      ACTIVOS e missões em curso, e enfileira recalls em lotes de 20 espaçados 10min
+      (nextAttemptAfter). Segundo carregamento apanha alvos com espiões de várias origens.
+- [x] **P6.14 Verificação de inactividade em tempo real antes de CADA acção do farm.**
+      ✅ 2026-07-17 — `_confirm_inactive` passou a fetch da ilha ao vivo como fonte
+      primária (world scan só como fallback), com memo de 2min; corre antes de raids
+      directos (None → escala para scout, nunca ataque cego), antes do lançamento
+      pós-relatório e em todos os verdicts de scout (incl. primeiro contacto).
+
+## P7 — Bugs conhecidos por corrigir (2026-07-17)
+
+- [ ] **P7.1 Timeout de SPYING cego ao downtime.** O timeout de 6h dispara mesmo com a
+      missão viva (WAITING/EXECUTING) — visto com Polis: bot desligado 50h, missão
+      executou 18:12:28 e o farm desistiu 18:12:45 deitando fora o relatório. Verificar
+      o estado da missão antes de desistir.
+- [ ] **P7.2 SPYING encravado congela a fila do farm.** `has_due_farm` em SPYING só
+      acorda com relatório pronto e `next_farm_eta` devolve None → o timeout nunca corre
+      e a cabeça bloqueia os restantes alvos (Barra-Multy H 3 ficou 5 dias à espera).

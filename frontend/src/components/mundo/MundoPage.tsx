@@ -24,6 +24,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [spyProcessingEnabled, setSpyProcessingEnabled] = useState(true)
   const [importingReports,     setImportingReports]     = useState(false)
   const [importMsg,            setImportMsg]            = useState<string | null>(null)
+  const [recallingUnused,      setRecallingUnused]      = useState(false)
+  const [recallMsg,            setRecallMsg]            = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
@@ -123,6 +125,22 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       })
       .catch(() => setImportMsg(null))
       .finally(() => setImportingReports(false))
+  }, [t])
+
+  const deployedTotal = Object.values(spyCounts).reduce((sum, c) => sum + (c.deployed ?? 0), 0)
+
+  const handleRecallUnused = useCallback(() => {
+    if (!window.confirm(t('recall_unused_confirm'))) return
+    setRecallingUnused(true)
+    setRecallMsg(null)
+    fetch('/api/espionage/recall-unused', { method: 'POST' })
+      .then(r => r.json())
+      .then(() => {
+        setRecallMsg(t('recall_unused_ok'))
+        setTimeout(() => setRecallMsg(null), 8000)
+      })
+      .catch(() => setRecallMsg(null))
+      .finally(() => setRecallingUnused(false))
   }, [t])
 
   const isRunning      = scanStatus?.status === 'running'
@@ -230,6 +248,17 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
             </button>
             {importMsg && (
               <p className="text-xs text-emerald-600 font-medium">{importMsg}</p>
+            )}
+            <button
+              onClick={handleRecallUnused}
+              disabled={recallingUnused}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <i className={`fa-solid ${recallingUnused ? 'fa-spinner fa-spin' : 'fa-person-walking-arrow-loop-left'}`} />
+              {t('recall_unused_btn')}{deployedTotal > 0 ? ` (${deployedTotal})` : ''}
+            </button>
+            {recallMsg && (
+              <p className="text-xs text-emerald-600 font-medium max-w-[220px] text-right">{recallMsg}</p>
             )}
           </div>
         </div>

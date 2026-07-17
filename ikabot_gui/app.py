@@ -1034,6 +1034,57 @@ def api_farm_army_set():
                      "earlyRespyEnabled") if k in s}})
 
 
+def _seed_farm_target_intel(city_id, island_x, island_y):
+    """A freshly added farm target already has intel we can rank it by: the latest DONE spy
+    report (MundoPage) gives the scouted warehouse total, and the island coordinates give a
+    troop-travel estimate (closest own city, same formula as attack_manager, adjusted by the
+    P6.7 calibration ratio). Without this every new target scores 0 and queues LAST even when
+    its report says it's the richest — the head would only reorder after draining everything
+    above it. Only fills fields still at 0: re-adding never overwrites measured stats."""
+    try:
+        t = _db.farm_get(str(city_id))
+        if not t:
+            return
+        updates = {}
+        if not int(t.get("last_loot", 0) or 0):
+            best_ts, loot = -1, 0
+            try:
+                with open(SPY_MISSIONS_PATH) as f:
+                    for m in json.load(f).get("missions", []):
+                        if str(m.get("targetCityId", "")) != str(city_id) or m.get("state") != "DONE":
+                            continue
+                        res = (m.get("result") or {}).get("resources") or {}
+                        ts  = int((m.get("result") or {}).get("reportedAt", 0)
+                                  or m.get("executedAt", 0) or 0)
+                        if res and ts >= best_ts:
+                            best_ts, loot = ts, sum(int(v or 0) for v in res.values())
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            if loot > 0:
+                updates["last_loot"] = loot
+        if not int(t.get("last_troop_journey", 0) or 0) and island_x and island_y:
+            try:
+                with open(os.path.join(LOGS_DIR, "own_cities.json")) as f:
+                    own = json.load(f)
+                dist = min((((c.get("x", 0) - island_x) ** 2
+                             + (c.get("y", 0) - island_y) ** 2) ** 0.5 for c in own),
+                           default=0)
+                if dist > 0:
+                    est = int(1200 * dist)
+                    try:
+                        with open(TRAVEL_CALIBRATION_PATH) as f:
+                            ratio = float(json.load(f).get("troop", {}).get("ratio", 1.0) or 1.0)
+                    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+                        ratio = 1.0
+                    updates["last_troop_journey"] = max(600, int(est * ratio))
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+        if updates:
+            _db.farm_update(str(city_id), updates)
+    except Exception:
+        pass
+
+
 @app.route("/api/farm/add", methods=["POST"])
 def api_farm_add():
     if not _db:
@@ -1059,6 +1110,8 @@ def api_farm_add():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    _seed_farm_target_intel(data["targetCityId"],
+                            int(data.get("islandX", 0)), int(data.get("islandY", 0)))
     return jsonify({"ok": True})
 
 
@@ -1184,6 +1237,7 @@ _ACTIVITY_FLAGS = {
     ".force_queue_check":      "queue_check",
     ".force_import_reports":   "import_reports",
     ".force_military_update":  "military_update",
+    ".force_recall_unused":    "recall_unused",
 }
 
 
@@ -1597,6 +1651,22 @@ def api_espionage_recall_spy():
     data["missions"] = missions
     _save_json(SPY_MISSIONS_PATH, data)
     return jsonify({"ok": True})
+
+
+@app.route("/api/espionage/recall-unused", methods=["POST"])
+def api_espionage_recall_unused():
+    """Flag the bot to sweep-recall every stationed spy nothing is using (enabled farm
+    targets and missions in progress are kept). The bot reads the real deployments from
+    the safehouses and queues recalls in throttled batches on its next wake-up."""
+    open(os.path.join(LOGS_DIR, ".force_recall_unused"), "w").close()
+    deployed = 0
+    try:
+        with open(SPY_COUNTS_PATH) as f:
+            for c in json.load(f).get("byCityId", {}).values():
+                deployed += int(c.get("deployed") or 0)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        pass
+    return jsonify({"ok": True, "deployed": deployed})
 
 
 BOT_LOG_PATH = os.path.join(LOGS_DIR, "bot.log")

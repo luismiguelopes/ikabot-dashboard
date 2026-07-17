@@ -152,11 +152,32 @@ def test_reports_empty_html():
 
 # ── _parse_active_spy_missions ────────────────────────────────────────────────
 
+# Real markup captured from the live game (debug_safehouse dump, 2026-07-17): one
+# div.spyinfo block per foreign city holding spies.
 _ACTIVE_MISSIONS_HTML = """
-<tr><td><a href="?view=island&xcoord=43&ycoord=57&selectCity=9911">AlvoCity [43:57]</a>
-    Os teus espiões esperam novas ordens.</td></tr>
-<tr><td><a href="?view=island&xcoord=10&ycoord=20&selectCity=8822">OutraCity [10:20]</a>
-    O teu espião está a caminho. Chegada 12m 30s</td></tr>
+<div class="spyinfo">
+  <ul>
+    <li class="user"><a href="index.php?view=avatarProfile&avatarId=104409">NinaHta</a></li>
+    <li title="Residência" class="city">
+      <a title="Felina" href="index.php?view=city&cityId=50320">Felina (48:46)</a>
+    </li>
+    <li> 10 estão em uso </li>
+    <li title="Status" class="status">Os teus espiões esperam novas ordens.</li>
+  </ul>
+  <div class="missionBtn missionAbort">
+    <a href="index.php?view=spyMissions&targetCityId=50320&retreat=1&position=8">Retirar</a>
+  </div>
+</div>
+<div class="spyinfo">
+  <ul>
+    <li class="user"><a href="index.php?view=avatarProfile&avatarId=999">Outro</a></li>
+    <li title="Residência" class="city">
+      <a title="OutraCity" href="index.php?view=city&cityId=8822">OutraCity (10:20)</a>
+    </li>
+    <li> 1 estão em uso </li>
+    <li title="Status" class="status">O teu espião está a caminho. Chegada 12m 30s</li>
+  </ul>
+</div>
 """
 
 
@@ -165,10 +186,24 @@ def test_active_missions_stationed_and_traveling():
     assert len(entries) == 2
     stationed = next(e for e in entries if e["state"] == "WAITING_AT_CITY")
     traveling = next(e for e in entries if e["state"] == "TRAVELING")
-    assert stationed["cityId"] == "9911"
-    assert stationed["cityName"] == "AlvoCity"
+    assert stationed["cityId"] == "50320"
+    assert stationed["cityName"] == "Felina"
+    assert stationed["numAgents"] == 10
+    assert stationed["x"] == 48 and stationed["y"] == 46
     assert traveling["cityId"] == "8822"
+    assert traveling["numAgents"] == 1
     assert traveling["countdown_secs"] == 12 * 60 + 30
+
+
+def test_active_missions_ignores_unknown_status_blocks():
+    html = """
+    <div class="spyinfo"><ul>
+      <li title="Residência" class="city"><a title="X" href="index.php?view=city&cityId=1">X (1:2)</a></li>
+      <li> 2 estão em uso </li>
+      <li title="Status" class="status">Os teus espiões executam uma missão.</li>
+    </ul></div>
+    """
+    assert em._parse_active_spy_missions(html) == []
 
 
 # ── _check_garrison_threshold ─────────────────────────────────────────────────

@@ -129,6 +129,11 @@ def _save_missions(data):
 SPY_DISPATCH_QUEUE = "spy_dispatch"
 RECALL_QUEUE       = "spy_recall"
 
+# UI-triggered mass recall of unused stationed spies (flag written by Flask)
+FORCE_RECALL_UNUSED_FLAG   = os.path.join(LOGS_DIR, ".force_recall_unused")
+_RECALL_SWEEP_BATCH        = 20        # recalls sent per spacing window — no bursts
+_RECALL_SWEEP_SPACING_SECS = 10 * 60
+
 
 def _dispatch_queue_items():
     try:
@@ -247,7 +252,7 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
                 "targetCityName":         entry.get("cityName") or "",
                 "islandX":                ex,
                 "islandY":                ey,
-                "numAgents":              0,
+                "numAgents":              entry.get("numAgents") or 0,
                 "state":                  estate,
                 "safehousePosition":      None,
                 "spySessionId":           None,
@@ -1309,6 +1314,136 @@ def recall_spy_mission(target_city_id):
                         ", recall game request queued" if queued else " (sem origin/position)")
     data["missions"] = missions
     _save_missions(data)
+
+
+def _enabled_farm_target_ids():
+    """City ids of ENABLED farm targets — their stationed spies are reused between rounds
+    and must never be swept. Disabled (drained) targets are NOT exempt: their spies are idle."""
+    try:
+        from db_manager import farm_list
+        return {str(f.get("target_city_id")) for f in farm_list()
+                if int(f.get("enabled", 0) or 0) == 1}
+    except Exception:
+        return set()
+
+
+def process_recall_unused_flag(session):
+    """UI-triggered sweep (.force_recall_unused): recall every spy stationed abroad that
+    nothing is using. Ground truth comes from each city's safehouse view (spy_missions.json
+    accumulates stale entries), throttled per city. Kept out of the sweep: enabled farm
+    targets and targets with a mission still in progress. Recalls are queued in batches of
+    _RECALL_SWEEP_BATCH spaced _RECALL_SWEEP_SPACING_SECS apart — the queue processor honours
+    nextAttemptAfter, so a big sweep never turns into a request burst. If one target holds
+    spies from several origins, one press recalls the first — pressing again catches the rest."""
+    if not os.path.exists(FORCE_RECALL_UNUSED_FLAG):
+        return
+    try:
+        os.remove(FORCE_RECALL_UNUSED_FLAG)
+    except OSError:
+        pass
+    try:
+        with open(OWN_CITIES_PATH) as f:
+            own_cities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("[espionage] recall em massa: own_cities.json não encontrado")
+        return
+
+    farm_ids = _enabled_farm_target_ids()
+    data     = _load_missions()
+    missions = data.get("missions", [])
+    # Busy = a mission the PIPELINE is really running. Synthetic WAITING_AT_CITY entries
+    # (created by the safehouse sync for spies the bot didn't dispatch) are the opposite:
+    # they ARE the idle stationed spies this sweep exists to bring home.
+    busy     = {str(m.get("targetCityId", "")) for m in missions
+                if m.get("state") in ("TRAVELING", "WAITING_AT_CITY", "WAITING_FOR_GARRISON",
+                                      "EXECUTING_WAREHOUSE", "EXECUTING_GARRISON")
+                and not m.get("recalledAt")
+                and not (m.get("state") == "WAITING_AT_CITY"
+                         and m.get("syntheticFromSafehouse"))}
+    pending  = {str(it.get("targetCityId", "")) for it in _recall_queue_items()}
+
+    now = int(time.time())
+    queued = skipped_farm = skipped_busy = 0
+    changed = False
+    for city in own_cities:
+        origin_id = str(city.get("cityId", ""))
+        position  = city.get("safehousePosition")
+        if position is None:
+            continue
+        time.sleep(random.randint(5, 15))
+        counts, html = _fetch_city_spy_counts(session, origin_id, city.get("name", ""), position)
+        if not html:
+            continue
+        entries = _parse_active_spy_missions(html)
+        deployed = (counts or {}).get("deployed") or 0
+        if deployed and not entries:
+            # The game reports deployed spies but the parser saw none — dump the HTML so
+            # the parser can be fixed against the real markup.
+            try:
+                dump = os.path.join(LOGS_DIR, f"debug_safehouse_{origin_id}.html")
+                with open(dump, "w") as df:
+                    df.write(html)
+                logger.warning("[espionage] recall em massa: %s tem %d destacado(s) mas o "
+                               "parser não viu nenhum — HTML gravado em %s",
+                               city.get("name", origin_id), deployed, dump)
+            except OSError:
+                pass
+        for entry in entries:
+            if entry.get("state") != "WAITING_AT_CITY":
+                continue   # still travelling → mission in progress
+            target_id = str(entry.get("cityId") or "")
+            if not target_id:
+                logger.info("[espionage] recall em massa: entrada sem cityId (%s) — a saltar",
+                            entry.get("cityName"))
+                continue
+            if target_id in farm_ids:
+                skipped_farm += 1
+                continue
+            if target_id in busy:
+                skipped_busy += 1
+                continue
+            if target_id in pending:
+                continue
+            # Enrich from the newest mission record for this target and mark it recalled.
+            # The agent count comes from the safehouse itself ("N estão em uso") when parsed.
+            num_agents, spy_sid, island_tid = entry.get("numAgents") or 1, None, ""
+            for i in range(len(missions) - 1, -1, -1):
+                m = missions[i]
+                if str(m.get("targetCityId", "")) != target_id or m.get("recalledAt"):
+                    continue
+                num_agents = entry.get("numAgents") or m.get("numAgents") or 1
+                spy_sid    = m.get("spySessionId")
+                island_tid = str(m.get("targetIslandId", ""))
+                if (m.get("state") == "DONE"
+                        or (m.get("state") == "WAITING_AT_CITY"
+                            and m.get("syntheticFromSafehouse"))):
+                    # Mark recalled so execute_waiting_missions won't fire a mission on a
+                    # spy that is about to sail home.
+                    missions[i]["state"]      = "RECALLED"
+                    missions[i]["recalledAt"] = now
+                    changed = True
+                break
+            batch = queued // _RECALL_SWEEP_BATCH
+            ok = _queue_recall({
+                "targetCityId":     target_id,
+                "targetIslandId":   island_tid,
+                "originCityId":     origin_id,
+                "position":         position,
+                "cityName":         entry.get("cityName") or "",
+                "spySessionId":     spy_sid,
+                "numAgents":        num_agents,
+                "queuedAt":         now,
+                "nextAttemptAfter": (now + batch * _RECALL_SWEEP_SPACING_SECS
+                                     + random.randint(0, 120)) if batch else 0,
+            })
+            if ok:
+                queued += 1
+                pending.add(target_id)
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+    logger.info("[espionage] recall em massa: %d espião(s) enfileirado(s) "
+                "(%d de farm mantidos, %d em missão)", queued, skipped_farm, skipped_busy)
 
 
 def has_due_recalls():
