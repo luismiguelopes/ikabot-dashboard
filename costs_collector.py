@@ -85,14 +85,14 @@ def collect_building_costs(session, ids):
 
         for city_id in random.sample(ids, len(ids)):
             pause = random.randint(15, 30)
-            logger.info(lm("costs_city_pause", pause=pause))
+            logger.debug(lm("costs_city_pause", pause=pause))
             time.sleep(pause)
 
             try:
                 html = session.get("view=city&cityId={}".format(city_id))
                 city = getCity(html)
                 city_name = city.get("cityName", city.get("name", "Unknown"))
-                logger.info(lm("costs_city_start", city=city_name))
+                logger.debug(lm("costs_city_start", city=city_name))
 
                 time.sleep(random.randint(3, 8))
                 detail_url = (
@@ -184,7 +184,7 @@ def collect_building_costs(session, ids):
                         }
 
                 all_costs[city_name] = city_costs
-                logger.info(lm("costs_city_done", city=city_name, n=len(city_costs)))
+                logger.debug(lm("costs_city_done", city=city_name, n=len(city_costs)))
 
             except Exception:
                 logger.error(lm("costs_city_error", id=city_id), exc_info=True)

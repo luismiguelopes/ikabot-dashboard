@@ -16,6 +16,8 @@ PAUSE_PATH    = os.path.join(LOGS_DIR, "pause.json")
 
 
 def _setup_logger():
+    """Terminal shows LOG_LEVEL+ (default INFO: events only — routine chatter lives at
+    DEBUG); bot.log always records DEBUG so nothing is lost for troubleshooting."""
     _log = logging.getLogger("ikabot")
     if not _log.handlers:
         _handler = logging.StreamHandler()
@@ -23,6 +25,7 @@ def _setup_logger():
             "%(asctime)s %(levelname)s %(message)s",
             datefmt="%H:%M:%S",
         ))
+        _handler.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
         _log.addHandler(_handler)
         # File handler (bounded) so the dashboard can tail the bot log (F10).
         try:
@@ -33,10 +36,11 @@ def _setup_logger():
                 "%(asctime)s %(levelname)s %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             ))
+            _fh.setLevel(logging.DEBUG)
             _log.addHandler(_fh)
         except Exception:
             pass
-        _log.setLevel(logging.INFO)
+        _log.setLevel(logging.DEBUG)
         _log.propagate = False
     # Silence ikabot's internal HTTP/session debug noise
     for _noisy in ("ikabot.web", "ikabot.web.session", "ikabot.helpers"):
@@ -116,16 +120,16 @@ _LM = {
         "pt": "[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...",
     },
     "world_scan_start": {
-        "en": "[{ts}] World scan started (radius={radius})...",
-        "pt": "[{ts}] World scan iniciado (raio={radius})...",
+        "en": "World scan started (radius={radius})...",
+        "pt": "World scan iniciado (raio={radius})...",
     },
     "scan_status_shallow": {
-        "en": "Scanning map...",
-        "pt": "A escanear mapa...",
+        "en": "[world_scan] Scanning map...",
+        "pt": "[world_scan] A escanear mapa...",
     },
     "scan_status_quadrant": {
-        "en": "Map ({x_min}-{x_max},{y_min}-{y_max})...",
-        "pt": "Mapa ({x_min}-{x_max},{y_min}-{y_max})...",
+        "en": "[world_scan] Map ({x_min}-{x_max},{y_min}-{y_max})...",
+        "pt": "[world_scan] Mapa ({x_min}-{x_max},{y_min}-{y_max})...",
     },
     "scan_islands_count": {
         "en": "[world_scan] {n} islands to scan within radius {radius}...",
@@ -136,224 +140,224 @@ _LM = {
         "pt": "[world_scan] Shallow scan concluído — {n} ilhas em fila para deep scan incremental",
     },
     "scan_status_deep": {
-        "en": "Scanning {n} islands...",
-        "pt": "A escanear {n} ilhas...",
+        "en": "[world_scan] Scanning {n} islands...",
+        "pt": "[world_scan] A escanear {n} ilhas...",
     },
     "scan_island_pause": {
-        "en": "      -> Pause {pause}s | Island {i}/{total} ({x},{y})...",
-        "pt": "      -> Pausa {pause}s | Ilha {i}/{total} ({x},{y})...",
+        "en": "[world_scan] Pause {pause}s | Island {i}/{total} ({x},{y})...",
+        "pt": "[world_scan] Pausa {pause}s | Ilha {i}/{total} ({x},{y})...",
     },
     "scan_island_done": {
-        "en": "      Island {i}/{total} ({x},{y}) processed",
-        "pt": "      Ilha {i}/{total} ({x},{y}) processada",
+        "en": "[world_scan] Island {i}/{total} ({x},{y}) processed",
+        "pt": "[world_scan] Ilha {i}/{total} ({x},{y}) processada",
     },
     "scan_island_error": {
-        "en": "      -> Error on island {id}: {err}",
-        "pt": "      -> Erro na ilha {id}: {err}",
+        "en": "[world_scan] Error on island {id}: {err}",
+        "pt": "[world_scan] Erro na ilha {id}: {err}",
     },
     "scan_status_done": {
-        "en": "Done: {n} inactive/vacation players found",
-        "pt": "Concluído: {n} inactivos/férias encontrados",
+        "en": "[world_scan] Done: {n} inactive/vacation players found",
+        "pt": "[world_scan] Concluído: {n} inactivos/férias encontrados",
     },
     "scan_done": {
         "en": "[world_scan] Done: {n} inactive/vacation players found.",
         "pt": "[world_scan] Concluído: {n} inactivos/férias encontrados.",
     },
     "scan_error": {
-        "en": "World scan error:",
-        "pt": "Erro no world scan:",
+        "en": "[world_scan] World scan error:",
+        "pt": "[world_scan] Erro no world scan:",
     },
     "scan_status_error": {
-        "en": "Error during scan",
-        "pt": "Erro durante o scan",
+        "en": "[world_scan] Error during scan",
+        "pt": "[world_scan] Erro durante o scan",
     },
     "costs_start": {
-        "en": "[{ts}] Starting building cost extraction (human mode)...",
-        "pt": "[{ts}] A iniciar extração de custos de edificios (modo humano)...",
+        "en": "[costs] Starting building cost extraction (human mode)...",
+        "pt": "[costs] A iniciar extração de custos de edificios (modo humano)...",
     },
     "costs_city_pause": {
-        "en": "      -> Pause {pause}s before next city...",
-        "pt": "      -> Pausa de {pause}s antes de próxima cidade...",
+        "en": "[costs] Pause {pause}s before next city...",
+        "pt": "[costs] Pausa de {pause}s antes de próxima cidade...",
     },
     "costs_city_start": {
-        "en": "      -> Costs: {city}...",
-        "pt": "      -> Custos: {city}...",
+        "en": "[costs] Costs: {city}...",
+        "pt": "[costs] Custos: {city}...",
     },
     "costs_city_done": {
-        "en": "      -> Success: {city} — {n} buildings with costs extracted.",
-        "pt": "      -> Sucesso: {city} — {n} edificios com custos extraídos.",
+        "en": "[costs] Success: {city} — {n} buildings with costs extracted.",
+        "pt": "[costs] Sucesso: {city} — {n} edificios com custos extraídos.",
     },
     "costs_city_error": {
-        "en": "      -> Error extracting costs for city {id}:",
-        "pt": "      -> Erro ao extrair custos de cidade {id}:",
+        "en": "[costs] Error extracting costs for city {id}:",
+        "pt": "[costs] Erro ao extrair custos de cidade {id}:",
     },
     "costs_done": {
-        "en": "[{ts}] Building cost extraction done!",
-        "pt": "[{ts}] Extração de custos de edificios concluída!",
+        "en": "[costs] Building cost extraction done!",
+        "pt": "[costs] Extração de custos de edificios concluída!",
     },
     "costs_error": {
-        "en": "Error in cost extraction:",
-        "pt": "Erro na extração de custos:",
+        "en": "[costs] Error in cost extraction:",
+        "pt": "[costs] Erro na extração de custos:",
     },
     "movements_error": {
-        "en": "      -> Warning: could not collect movements:",
-        "pt": "      -> Aviso: não foi possível recolher movimentos:",
+        "en": "[empire] Warning: could not collect movements:",
+        "pt": "[empire] Aviso: não foi possível recolher movimentos:",
     },
     "empire_start_1": {
-        "en": "\n[+] Empire Function started in background!",
-        "pt": "\n[+] Empire Function arrancada em Segundo Plano!",
+        "en": "[empire] Empire Function started in background!",
+        "pt": "[empire] Empire Function arrancada em Segundo Plano!",
     },
     "empire_start_2": {
-        "en": "[+] Silently collecting empire data every {interval} seconds...\n",
-        "pt": "[+] Extrai dados do império silenciosamente a cada {interval} segundos...\n",
+        "en": "[empire] Silently collecting empire data every {interval} seconds...",
+        "pt": "[empire] Extrai dados do império silenciosamente a cada {interval} segundos...",
     },
     "cycle_start": {
-        "en": "[{ts}] Updating empire JSON files...",
-        "pt": "[{ts}] A atualizar ficheiros JSON do Imperio...",
+        "en": "[empire] Updating empire JSON files...",
+        "pt": "[empire] A atualizar ficheiros JSON do Imperio...",
     },
     "city_done": {
-        "en": "      -> Success: City {city} extracted.",
-        "pt": "      -> Sucesso: Cidade {city} extraída.",
+        "en": "[empire] Success: City {city} extracted.",
+        "pt": "[empire] Sucesso: Cidade {city} extraída.",
     },
     "cycle_done": {
-        "en": "[+] Update cycle completed successfully!",
-        "pt": "[+] Ciclo de atualização Terminado com sucesso!",
+        "en": "[empire] Empire updated: {n} cities ({mins} min)",
+        "pt": "[empire] Império actualizado: {n} cidades ({mins} min)",
     },
     "cycle_error": {
-        "en": "Error during data extraction:",
-        "pt": "Erro durante extracção de dados:",
+        "en": "[empire] Error during data extraction:",
+        "pt": "[empire] Erro durante extracção de dados:",
     },
     "queue_cycle_start": {
-        "en": "[{ts}] Processing building queue...",
-        "pt": "[{ts}] A processar fila de construção...",
+        "en": "[build] Processing building queue...",
+        "pt": "[build] A processar fila de construção...",
     },
     "queue_city_not_found": {
-        "en": "      -> Queue: city '{city}' not found in session, skipping.",
-        "pt": "      -> Fila: cidade '{city}' não encontrada na sessão, a ignorar.",
+        "en": "[build] city '{city}' not found in session, skipping.",
+        "pt": "[build] cidade '{city}' não encontrada na sessão, a ignorar.",
     },
     "queue_building_not_found": {
-        "en": "      -> Queue [{city}]: building '{building}' not found, removing from queue.",
-        "pt": "      -> Fila [{city}]: edifício '{building}' não encontrado, a remover da fila.",
+        "en": "[build] {city}: building '{building}' not found, removing from queue.",
+        "pt": "[build] {city}: edifício '{building}' não encontrado, a remover da fila.",
     },
     "queue_max_level": {
-        "en": "      -> Queue [{city}]: {building} already at max level, removing from queue.",
-        "pt": "      -> Fila [{city}]: {building} já está no nível máximo, a remover da fila.",
+        "en": "[build] {city}: {building} already at max level, removing from queue.",
+        "pt": "[build] {city}: {building} já está no nível máximo, a remover da fila.",
     },
     "queue_target_reached": {
-        "en": "      -> Queue [{city}]: {building} reached target level {level}, removing from queue.",
-        "pt": "      -> Fila [{city}]: {building} atingiu nível alvo {level}, a remover da fila.",
+        "en": "[build] {city}: {building} reached target level {level}, removing from queue.",
+        "pt": "[build] {city}: {building} atingiu nível alvo {level}, a remover da fila.",
     },
     "queue_no_resources": {
-        "en": "      -> Queue [{city}]: {building} — insufficient resources, will retry next cycle.",
-        "pt": "      -> Fila [{city}]: {building} — recursos insuficientes, tenta no próximo ciclo.",
+        "en": "[build] {city}: {building} — insufficient resources, will retry next cycle.",
+        "pt": "[build] {city}: {building} — recursos insuficientes, tenta no próximo ciclo.",
     },
     "queue_city_busy": {
-        "en": "      -> Queue [{city}]: construction already in progress, skipping.",
-        "pt": "      -> Fila [{city}]: construção já em curso, a saltar.",
+        "en": "[build] {city}: construction already in progress, skipping.",
+        "pt": "[build] {city}: construção já em curso, a saltar.",
     },
     "queue_prestage": {
-        "en": "      -> Queue [{city}]: pre-staging resources for next item ({building}) while busy.",
-        "pt": "      -> Fila [{city}]: a pré-posicionar recursos para o próximo item ({building}) durante a obra.",
+        "en": "[build] {city}: pre-staging resources for next item ({building}) while busy.",
+        "pt": "[build] {city}: a pré-posicionar recursos para o próximo item ({building}) durante a obra.",
     },
     "queue_started": {
-        "en": "      -> Queue [{city}]: started {building} {from_lv} → {to_lv}.",
-        "pt": "      -> Fila [{city}]: iniciada construção {building} {from_lv} → {to_lv}.",
+        "en": "[build] {city}: started {building} {from_lv} → {to_lv}.",
+        "pt": "[build] {city}: iniciada construção {building} {from_lv} → {to_lv}.",
     },
     "queue_start_failed": {
-        "en": "      -> Queue [{city}]: failed to start {building} (server rejected).",
-        "pt": "      -> Fila [{city}]: falhou ao iniciar {building} (servidor recusou).",
+        "en": "[build] {city}: failed to start {building} (server rejected).",
+        "pt": "[build] {city}: falhou ao iniciar {building} (servidor recusou).",
     },
     "queue_construction_done": {
-        "en": "      -> Queue [{city}]: {building} construction completed.",
-        "pt": "      -> Fila [{city}]: construção de {building} concluída.",
+        "en": "[build] {city}: {building} construction completed.",
+        "pt": "[build] {city}: construção de {building} concluída.",
     },
     "queue_no_citizens": {
-        "en": "      -> Queue [{city}]: {building} — no free citizens, will retry next cycle.",
-        "pt": "      -> Fila [{city}]: {building} — sem cidadãos livres, tenta no próximo ciclo.",
+        "en": "[build] {city}: {building} — no free citizens, will retry next cycle.",
+        "pt": "[build] {city}: {building} — sem cidadãos livres, tenta no próximo ciclo.",
     },
     "queue_attempting": {
-        "en": "      -> Queue [{city}]: attempting {building} lv{lv} (type={btype}, pos={pos}, canUpgrade={can}, citizens={cit})",
-        "pt": "      -> Fila [{city}]: a tentar {building} lv{lv} (tipo={btype}, pos={pos}, canUpgrade={can}, cidadãos={cit})",
+        "en": "[build] {city}: attempting {building} lv{lv} (type={btype}, pos={pos}, canUpgrade={can}, citizens={cit})",
+        "pt": "[build] {city}: a tentar {building} lv{lv} (tipo={btype}, pos={pos}, canUpgrade={can}, cidadãos={cit})",
     },
     "queue_post_resp": {
-        "en": "      -> Queue [{city}]: POST response: {resp}",
-        "pt": "      -> Fila [{city}]: resposta POST: {resp}",
+        "en": "[build] {city}: POST response: {resp}",
+        "pt": "[build] {city}: resposta POST: {resp}",
     },
     "queue_done": {
-        "en": "[+] Building queue cycle done.",
-        "pt": "[+] Ciclo da fila de construção concluído.",
+        "en": "[build] Building queue cycle done.",
+        "pt": "[build] Ciclo da fila de construção concluído.",
     },
     "queue_stale_cleanup": {
-        "en": "      -> inProgress entry for {city} ({building}) has no queue items and ETA passed — removing.",
-        "pt": "      -> inProgress de {city} ({building}) sem itens na fila e ETA expirado — a remover.",
+        "en": "[build] inProgress entry for {city} ({building}) has no queue items and ETA passed — removing.",
+        "pt": "[build] inProgress de {city} ({building}) sem itens na fila e ETA expirado — a remover.",
     },
     "queue_wake": {
-        "en": "[{ts}] Queue wake-up: checking constructions...",
-        "pt": "[{ts}] Acordei para a fila de construção: a verificar construções...",
+        "en": "[build] Queue wake-up: checking constructions...",
+        "pt": "[build] Acordei para a fila de construção: a verificar construções...",
     },
     "queue_sleep_until": {
-        "en": "      -> Next construction ETA: {eta}. Sleeping {mins} min.",
-        "pt": "      -> Próxima construção prevista: {eta}. A dormir {mins} min.",
+        "en": "[build] Next construction ETA: {eta}. Sleeping {mins} min.",
+        "pt": "[build] Próxima construção prevista: {eta}. A dormir {mins} min.",
     },
     "cycle_sleep": {
-        "en": "[+] Sleeping {mins} min until next empire cycle.",
-        "pt": "[+] A dormir {mins} min até ao próximo ciclo do império.",
+        "en": "[sleep] Sleeping {mins} min until next empire cycle.",
+        "pt": "[sleep] A dormir {mins} min até ao próximo ciclo do império.",
     },
     "queue_no_cost_data": {
-        "en": "      -> Queue [{city}]: no cost data for {building}, retrying next cycle.",
-        "pt": "      -> Fila [{city}]: sem dados de custos para {building}, tenta no próximo ciclo.",
+        "en": "[build] {city}: no cost data for {building}, retrying next cycle.",
+        "pt": "[build] {city}: sem dados de custos para {building}, tenta no próximo ciclo.",
     },
     "queue_transport_missing": {
-        "en": "      -> Queue [{city}]: {building} — missing: {missing}",
-        "pt": "      -> Fila [{city}]: {building} — faltam: {missing}",
+        "en": "[build] {city}: {building} — missing: {missing}",
+        "pt": "[build] {city}: {building} — faltam: {missing}",
     },
     "queue_transport_waiting": {
-        "en": "      -> Queue [{city}]: resources in transit, waiting for arrival.",
-        "pt": "      -> Fila [{city}]: recursos a caminho, a aguardar chegada.",
+        "en": "[build] {city}: resources in transit, waiting for arrival.",
+        "pt": "[build] {city}: recursos a caminho, a aguardar chegada.",
     },
     "queue_no_ships": {
-        "en": "      -> Queue [{city}]: no ships available, retrying next cycle.",
-        "pt": "      -> Fila [{city}]: sem navios disponíveis, tenta no próximo ciclo.",
+        "en": "[build] {city}: no ships available, retrying next cycle.",
+        "pt": "[build] {city}: sem navios disponíveis, tenta no próximo ciclo.",
     },
     "queue_no_surplus": {
-        "en": "      -> Queue [{city}]: no surplus in other cities to send.",
-        "pt": "      -> Fila [{city}]: sem excedentes noutras cidades para enviar.",
+        "en": "[build] {city}: no surplus in other cities to send.",
+        "pt": "[build] {city}: sem excedentes noutras cidades para enviar.",
     },
     "queue_transport_sent": {
-        "en": "      -> Queue [{city}]: sent {amount} {resource} from {origin} ({ships} ships).",
-        "pt": "      -> Fila [{city}]: enviou {amount} {resource} de {origin} ({ships} navios).",
+        "en": "[build] {city}: sent {amount} {resource} from {origin} ({ships} ships).",
+        "pt": "[build] {city}: enviou {amount} {resource} de {origin} ({ships} navios).",
     },
     "queue_transport_sent_bundle": {
-        "en": "      -> Queue [{city}]: sent {resources} from {origin} ({ships} ships).",
-        "pt": "      -> Fila [{city}]: enviou {resources} de {origin} ({ships} navios).",
+        "en": "[build] {city}: sent {resources} from {origin} ({ships} ships).",
+        "pt": "[build] {city}: enviou {resources} de {origin} ({ships} navios).",
     },
     "queue_freighter_sent": {
-        "en": "      -> Queue [{city}]: freighters — sent {resources} from {origin} ({ships} freighters).",
-        "pt": "      -> Fila [{city}]: cargueiros — enviou {resources} de {origin} ({ships} cargueiros).",
+        "en": "[build] {city}: freighters — sent {resources} from {origin} ({ships} freighters).",
+        "pt": "[build] {city}: cargueiros — enviou {resources} de {origin} ({ships} cargueiros).",
     },
     "queue_freighter_failed": {
-        "en": "      -> Queue [{city}]: freighter dispatch from {origin} rejected by server.",
-        "pt": "      -> Fila [{city}]: despacho de cargueiro de {origin} recusado pelo servidor.",
+        "en": "[build] {city}: freighter dispatch from {origin} rejected by server.",
+        "pt": "[build] {city}: despacho de cargueiro de {origin} recusado pelo servidor.",
     },
     "queue_transport_failed": {
-        "en": "      -> Queue [{city}]: transport from {origin} rejected by server.",
-        "pt": "      -> Fila [{city}]: transporte de {origin} recusado pelo servidor.",
+        "en": "[build] {city}: transport from {origin} rejected by server.",
+        "pt": "[build] {city}: transporte de {origin} recusado pelo servidor.",
     },
     "queue_outside_hours": {
-        "en": "      -> Queue: outside active hours ({start}h–{end}h), skipping actions.",
-        "pt": "      -> Fila: fora das horas activas ({start}h–{end}h), a saltar acções.",
+        "en": "[build] outside active hours ({start}h–{end}h), skipping actions.",
+        "pt": "[build] fora das horas activas ({start}h–{end}h), a saltar acções.",
     },
     "queue_sleep_until_hours": {
-        "en": "[+] Outside active hours. Sleeping {mins} min until {start}h.",
-        "pt": "[+] Fora das horas activas. A dormir {mins} min até às {start}h.",
+        "en": "[sleep] Outside active hours. Sleeping {mins} min until {start}h.",
+        "pt": "[sleep] Fora das horas activas. A dormir {mins} min até às {start}h.",
     },
     "queue_movements_refresh": {
-        "en": "      -> Transport dispatched — refreshing movements for ETA tracking.",
-        "pt": "      -> Transporte enviado — a actualizar movimentos para rastreio de ETA.",
+        "en": "[build] Transport dispatched — refreshing movements for ETA tracking.",
+        "pt": "[build] Transporte enviado — a actualizar movimentos para rastreio de ETA.",
     },
     "scan_outside_hours": {
-        "en": "[+] Outside scan hours ({start}h–{end}h). Sleeping {mins} min (night interval).",
-        "pt": "[+] Fora das horas de scan ({start}h–{end}h). A dormir {mins} min (intervalo nocturno).",
+        "en": "[sleep] Outside scan hours ({start}h–{end}h). Sleeping {mins} min (night interval).",
+        "pt": "[sleep] Fora das horas de scan ({start}h–{end}h). A dormir {mins} min (intervalo nocturno).",
     },
 }
 

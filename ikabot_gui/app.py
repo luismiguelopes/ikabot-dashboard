@@ -1686,6 +1686,10 @@ def api_logs():
     try:
         with open(BOT_LOG_PATH, encoding="utf-8", errors="replace") as f:
             content = f.read().splitlines()
+        # bot.log records DEBUG (routine chatter); the dashboard shows INFO+ unless
+        # explicitly asked for the full stream with ?debug=1.
+        if request.args.get("debug") not in ("1", "true"):
+            content = [ln for ln in content if " DEBUG " not in ln]
         return jsonify({"lines": content[-n:]})
     except Exception as e:
         return jsonify({"lines": [], "error": str(e)}), 500

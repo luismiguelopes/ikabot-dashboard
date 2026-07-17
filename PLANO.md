@@ -299,6 +299,12 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       primária (world scan só como fallback), com memo de 2min; corre antes de raids
       directos (None → escala para scout, nunca ataque cego), antes do lançamento
       pós-relatório e em todos os verdicts de scout (incl. primeiro contacto).
+- [x] **P6.15 Logs legíveis no terminal.** ✅ 2026-07-18 — terminal a INFO+ (env
+      `LOG_LEVEL`), bot.log grava DEBUG (F10 filtra DEBUG por omissão, `?debug=1` mostra
+      tudo); catálogo _LM uniformizado (`[módulo] mensagem`, sem `[+]`/`->`/timestamps
+      duplicados); rotina a DEBUG (extracção por cidade, waits anti-detecção, wakes de
+      construção, dumps de safehouse); resumos: "Império actualizado: N cidades (Xmin)",
+      "Safehouses: N destacados"; dumps humanizados; ícones ⚔️/💰/⚠️ nos eventos críticos.
 
 ## P7 — Bugs conhecidos por corrigir (2026-07-17)
 

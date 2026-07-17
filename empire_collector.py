@@ -72,7 +72,7 @@ def _alert_incoming_attacks(hostiles, time_now):
                                    h.get("troops", 0), h.get("fleets", 0))
         except Exception:
             pass
-        logger.warning("[alert] ataque a chegar: %s → %s em ~%dmin",
+        logger.warning("⚠️ [alert] ataque a chegar: %s → %s em ~%dmin",
                        h["origin"], h["destination"], eta_mins)
     if changed or seen:
         try:
@@ -205,7 +205,7 @@ def _collect_movements(session, city_id):
                                                      lr["toCity"], sum(lr["resources"]))
                             except Exception:
                                 pass
-                logger.info("[loot] %d regresso(s) com saque (%d novo(s))", len(loot_returns), new_count)
+                logger.info("💰 [loot] %d regresso(s) com saque (%d novo(s))", len(loot_returns), new_count)
             except Exception:
                 logger.warning("[loot] falha ao registar saque", exc_info=True)
 
@@ -306,7 +306,7 @@ def collect_city_data(session, ids, cities):
             "name": city_name, "cityId": id, "x": island_x, "y": island_y,
             "islandId": str(city_data.get("islandId", "")),
         })
-        logger.info(lm("city_done", city=city_name))
+        logger.debug(lm("city_done", city=city_name))
         _write_scan_status("running", "cities", len(own_cities_list), len(ids), city_name)
 
         storage_capacity = int(float(city_data.get("storageCapacity") or 0))
@@ -468,7 +468,7 @@ def _collect_military_data(session):
                 pass
 
             result[city_name] = {"cityId": str(city_id), "troops": troops, "fleet": fleet}
-            logger.info("[military] %s: %d tropa(s), %d frota(s)",
+            logger.debug("[military] %s: %d tropa(s), %d frota(s)",
                         city_name, len(troops), len(fleet))
         except Exception:
             logger.warning("[military] erro %s", city_name, exc_info=True)

@@ -171,7 +171,7 @@ def _parse_active_spy_missions(html):
                      state, x, y, city_id, countdown_secs)
 
     if results:
-        logger.info("[espionage] %d espião(ões) activo(s) detectado(s) no safehouse", len(results))
+        logger.debug("[espionage] %d espião(ões) activo(s) detectado(s) no safehouse", len(results))
     return results
 
 

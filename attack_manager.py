@@ -536,7 +536,7 @@ def process_attack_queue(session, in_active_hours=True):
         _log_attack_attempt(item, ok)
         if ok:
             queue_remove(ATTACK_QUEUE, [item.get("id")])
-            logger.info("[attack] ataque despachado → %s (%s)",
+            logger.info("⚔️ [attack] ataque despachado → %s (%s)",
                         item.get("targetPlayerName"), item.get("targetCityName"))
             try:
                 from telegram_notifier import notify_attack_dispatched

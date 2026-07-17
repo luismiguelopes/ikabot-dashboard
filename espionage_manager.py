@@ -348,7 +348,7 @@ def fetch_spy_counts(session):
 
         if not first:
             delay = random.randint(5, 15)
-            logger.info("[espionage] aguardar %ds antes de consultar safehouse de %s", delay, city_name)
+            logger.debug("[espionage] aguardar %ds antes de consultar safehouse de %s", delay, city_name)
             time.sleep(delay)
         else:
             time.sleep(random.randint(3, 8))
@@ -362,13 +362,17 @@ def fetch_spy_counts(session):
             active = _parse_active_spy_missions(html_content)
             if active:
                 _sync_active_spy_missions(active, city_id)
-        logger.info("[espionage] safehouse %s: %s", city_name,
-                    {k: v for k, v in counts.items() if k != "cityName"})
+        logger.debug("[espionage] safehouse %s: %s em defesa, %s destacado(s), %s em treino",
+                     city_name, counts.get("inDefense"), counts.get("deployed"),
+                     counts.get("inTraining"))
         results[city_id] = counts
 
     data = {"lastUpdated": int(time.time()), "byCityId": results}
     _save_spy_counts(data)
-    logger.info("[espionage] spy_counts.json atualizado para %d cidade(s)", len(results))
+    tot_dep = sum(int(c.get("deployed") or 0) for c in results.values())
+    tot_def = sum(int(c.get("inDefense") or 0) for c in results.values())
+    logger.info("[espionage] Safehouses: %d espião(ões) destacado(s), %d em defesa (%d cidades)",
+                tot_dep, tot_def, len(results))
 
 
 # ── In-field count (fallback when spy_counts.json is stale) ──────────────────
@@ -422,7 +426,7 @@ def process_dispatch_queue(session):
     for i, item in enumerate(pending):
         if i > 0:
             delay = random.randint(15, 35)
-            logger.info("[espionage] aguardar %ds antes do próximo dispatch", delay)
+            logger.debug("[espionage] aguardar %ds antes do próximo dispatch", delay)
             time.sleep(delay)
 
         origin_id  = str(item["originCityId"])
@@ -1020,20 +1024,20 @@ def collect_mission_results(session):
                         # Farm re-scout of a safe (inactive, no-fleet) target: the loot is all
                         # we need — skip the garrison mission entirely.
                         missions[i]["state"] = "DONE"
-                        logger.info("[espionage] armazém %s → recursos=%s — só-armazém (alvo seguro), DONE",
-                                    m["targetCityName"], resources)
+                        logger.info("[espionage] armazém %s: total %s — só-armazém (alvo seguro), DONE",
+                                    m["targetCityName"], f"{sum(resources.values()):,}")
                     else:
                         delay = random.randint(20, 60) if m.get("fast") else random.randint(1, 5) * 60
                         missions[i]["state"] = "WAITING_FOR_GARRISON"
                         missions[i]["garrisonExecuteAfter"] = now + delay
                         missions[i]["garrisonExecutedAt"]   = None
                         missions[i]["garrisonResult"]       = None
-                        logger.info("[espionage] armazém %s → recursos=%s — threshold atingido, garrison em %ds",
-                                    m["targetCityName"], resources, delay)
+                        logger.info("[espionage] armazém %s: total %s — threshold atingido, garrison em %ds",
+                                    m["targetCityName"], f"{sum(resources.values()):,}", delay)
                 else:
                     missions[i]["state"] = "DONE"
-                    logger.info("[espionage] armazém %s → recursos=%s — threshold não atingido, DONE",
-                                m["targetCityName"], resources)
+                    logger.info("[espionage] armazém %s: total %s — threshold não atingido, DONE",
+                                m["targetCityName"], f"{sum(resources.values()):,}")
                     total = sum(resources.values())
                     note = "Abaixo do threshold de saque (recursos: {:,})".format(total)
                     # Recall spy before auto-ignoring
@@ -1171,8 +1175,12 @@ def collect_garrison_results(session):
                     continue
             missions[i]["state"] = "DONE"
             missions[i]["garrisonResult"] = report
-            logger.info("[espionage] garrison %s → tropas=%s",
-                        m["targetCityName"], report.get("troops"))
+            _tr = report.get("troops") or {}
+            logger.info("[espionage] garrison %s: %s",
+                        m["targetCityName"],
+                        ("%d unidade(s) em %d tipo(s)"
+                         % (sum(int(v or 0) for v in _tr.values()), len(_tr)))
+                        if _tr else "sem tropas")
             matched = True
             changed = True
             break
@@ -1631,7 +1639,7 @@ def import_existing_reports(session):
     city_id  = str(origin.get("cityId", ""))
     position = origin["safehousePosition"]
     delay = random.randint(2, 5)
-    logger.info("[espionage] aguardar %ds antes de buscar relatórios (%s)", delay, origin.get("name", ""))
+    logger.debug("[espionage] aguardar %ds antes de buscar relatórios (%s)", delay, origin.get("name", ""))
     time.sleep(delay)
     all_reports = _fetch_all_reports(session, city_id, position)
     logger.info("[espionage] %d relatório(s) encontrado(s)", len(all_reports))

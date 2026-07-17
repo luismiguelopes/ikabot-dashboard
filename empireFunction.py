@@ -110,7 +110,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         pass
                     refresh_movements(session, ids[0])
                 if ids and has_building_queue():
-                    logger.info(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
+                    logger.debug(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
                     if process_building_queue(session, ids, cities):
                         logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
@@ -131,7 +131,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                                start=SCAN_ACTIVE_HOURS_START, end=SCAN_ACTIVE_HOURS_END,
                                mins=_night_mins))
 
-            logger.info(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
+            logger.debug(lm("cycle_start", ts=time.strftime('%H:%M:%S')))
+            _cycle_t0 = time.time()
             time.sleep(random.randint(3, 10))
             (ids, cities) = getIdsOfCities(session)
 
@@ -151,7 +152,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             except Exception:
                 pass
 
-            logger.info(lm("cycle_done"))
+            logger.info(lm("cycle_done", n=len(ids), mins=round((time.time() - _cycle_t0) / 60)))
             last_full_cycle_time = time.time()
             next_full_jitter = random.randint(-300, 300)
 

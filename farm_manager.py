@@ -647,7 +647,7 @@ def process_farm_targets(session, in_active_hours=True):
                             "até ~%dmin) (saque ~%d, %d navios)",
                             name, origin_name, max(0, (ret_at - now) // 60), loot, transporters)
             else:
-                logger.info("[farm] %s: ataque agendado de %s (saque ~%d, %d navios)",
+                logger.info("⚔️ [farm] %s: ataque agendado de %s (saque ~%d, %d navios)",
                             name, origin_name, loot, transporters)
         queue_add("attack", dict(base, missionType="army",
                   units=troop_units, transporters=transporters, dispatchAfter=army_after))
@@ -762,7 +762,7 @@ def process_farm_targets(session, in_active_hours=True):
                             "enemy_return_at": res["enemy_return_at"],
                             "last_troop_journey": res["troop_journey"],
                         })
-                        logger.info("[farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
+                        logger.info("⚔️ [farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
                         continue
                     # Origin has no free troops/ships right now (still returning) — retry when
                     # they land, don't burn a scout.

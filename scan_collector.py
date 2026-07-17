@@ -260,7 +260,7 @@ def scan_next_island(session):
     done_count = cp["totalIslands"] - len(islands_queue)
 
     pause = random.randint(15, 30)
-    logger.info(lm("scan_island_pause", pause=pause,
+    logger.debug(lm("scan_island_pause", pause=pause,
                    i=done_count, total=cp["totalIslands"],
                    x=island["x"], y=island["y"]))
     time.sleep(pause)

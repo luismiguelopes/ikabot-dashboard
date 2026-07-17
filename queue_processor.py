@@ -227,7 +227,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         sleep_secs = max(30, min(next_full_at, wake_for_queue) - time.time())
         if wake_for_queue < next_full_at:
             eta_str = time.strftime('%H:%M:%S', time.localtime(eta))
-            logger.info(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
+            logger.debug(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
     else:
         sleep_secs = max(60, next_full_at - time.time())
         # Se há itens em queue mas sem ETA conhecido, acorda em 30 min para re-tentar
@@ -794,7 +794,7 @@ def process_building_queue(session, ids, cities):
     if is_paused():
         logger.info("[pause] em pausa — fila de construção ignorada")
         return False
-    logger.info(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
+    logger.debug(lm("queue_cycle_start", ts=time.strftime('%H:%M:%S')))
     data = _load_queue()
     if not data.get("enabled", True):
         return False
@@ -870,7 +870,7 @@ def process_building_queue(session, ids, cities):
                         "eta": int(busy_b.get("completed", 0)),
                     }
                     changed = True
-            logger.info(lm("queue_city_busy", city=city_name))
+            logger.debug(lm("queue_city_busy", city=city_name))
 
             # ── F8.b: pre-stage the NEXT queued item while this one builds ──────
             # Construction takes hours during which no resources are moved otherwise.
@@ -934,7 +934,7 @@ def process_building_queue(session, ids, cities):
                     dispatched_any = True
             else:
                 _ah_s, _ah_e = _get_active_hours()
-                logger.info(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
+                logger.debug(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         if city_data.get("freeCitizens", 1) == 0:
@@ -943,11 +943,11 @@ def process_building_queue(session, ids, cities):
 
         if not _in_active_hours():
             _ah_s, _ah_e = _get_active_hours()
-            logger.info(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
+            logger.debug(lm("queue_outside_hours", start=_ah_s, end=_ah_e))
             continue
 
         # ── Fire the upgrade POST ─────────────────────────────────────────────
-        logger.info(lm("queue_attempting", city=city_name, building=next_item["building"],
+        logger.debug(lm("queue_attempting", city=city_name, building=next_item["building"],
                        lv=target_b["level"], btype=target_b["building"], pos=target_b["position"],
                        can=target_b.get("canUpgrade"), cit=city_data.get("freeCitizens")))
 
@@ -1009,5 +1009,5 @@ def process_building_queue(session, ids, cities):
         data["inProgress"] = in_progress
         _save_queue(data)
 
-    logger.info(lm("queue_done"))
+    logger.debug(lm("queue_done"))
     return dispatched_any
