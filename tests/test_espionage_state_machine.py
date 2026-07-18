@@ -369,3 +369,22 @@ def test_sweep_recalls_synthetic_waiting_spies(monkeypatch, tmp_path):
     assert queued[0]["numAgents"] == 3
     assert h["missions"][0]["state"] == "RECALLED"
     assert h["missions"][1]["state"] == "WAITING_AT_CITY"   # real mission untouched
+
+
+def test_sync_does_not_duplicate_known_stationed_spies(monkeypatch):
+    """A stationed spy whose mission progressed past WAITING (EXECUTING/DONE) is already
+    known — the safehouse sync must NOT create a duplicate synthetic entry for it (seen
+    live: every counts refresh added one more synthetic, each firing a warehouse mission)."""
+    h = _patch(monkeypatch, [
+        _mission(state="EXECUTING_WAREHOUSE", targetCityId="200"),
+        _mission(state="DONE", targetCityId="300"),
+    ])
+    em._sync_active_spy_missions(
+        [{"cityId": "200", "x": 1, "y": 2, "cityName": "A", "state": "WAITING_AT_CITY"},
+         {"cityId": "300", "x": 3, "y": 4, "cityName": "B", "state": "WAITING_AT_CITY"},
+         {"cityId": "400", "x": 5, "y": 6, "cityName": "C", "state": "WAITING_AT_CITY"}],
+        origin_city_id="1")
+    states = [(m.get("targetCityId"), m.get("state")) for m in h["missions"]]
+    assert len(h["missions"]) == 3                       # only the truly unknown 400 added
+    assert ("400", "WAITING_AT_CITY") in states
+    assert h["missions"][2].get("syntheticFromSafehouse") is True

@@ -198,6 +198,13 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
     changed  = False
     now      = int(time.time())
 
+    # Any live (non-recalled) record for the same target+origin means the spy is already
+    # known — matching only TRAVELING/WAITING missed spies whose mission had progressed to
+    # EXECUTING/DONE, so every counts refresh created a DUPLICATE synthetic entry (and each
+    # duplicate fired another warehouse mission — seen live 2026-07-18).
+    _KNOWN_STATES = ("TRAVELING", "WAITING_AT_CITY", "WAITING_FOR_GARRISON",
+                     "EXECUTING_WAREHOUSE", "EXECUTING_GARRISON", "DONE")
+
     for entry in active_entries:
         ex     = entry.get("x")
         ey     = entry.get("y")
@@ -205,18 +212,21 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
         estate = entry.get("state")
 
         match_idx = None
+        known = False
         for idx, m in enumerate(missions):
-            if m.get("state") not in ("TRAVELING", "WAITING_AT_CITY"):
+            if m.get("state") not in _KNOWN_STATES or m.get("recalledAt"):
                 continue
             if str(m.get("originCityId", "")) != str(origin_city_id):
                 continue
-            if ecid and str(m.get("targetCityId", "")) == str(ecid):
+            same = (ecid and str(m.get("targetCityId", "")) == str(ecid)) or \
+                   (ex is not None and ey is not None
+                    and m.get("islandX") == ex and m.get("islandY") == ey)
+            if not same:
+                continue
+            known = True
+            if m.get("state") in ("TRAVELING", "WAITING_AT_CITY"):
                 match_idx = idx
                 break
-            if ex is not None and ey is not None:
-                if m.get("islandX") == ex and m.get("islandY") == ey:
-                    match_idx = idx
-                    break
 
         if match_idx is not None:
             m = missions[match_idx]
@@ -236,7 +246,7 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
                     logger.info("[espionage] sync: countdown para %s: +%dm",
                                 m.get("targetCityName", "?"), countdown // 60)
                     changed = True
-        else:
+        elif not known:
             # Espião manualmente despachado — criar missão sintética
             if estate == "WAITING_AT_CITY":
                 execute_after = now + random.randint(5, 15) * 60
