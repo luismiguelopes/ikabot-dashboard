@@ -483,6 +483,29 @@ def _dispatch_attack(session, item):
                                 item["islandId"], item.get("units", {}))
 
 
+def _last_failure_is_vacation():
+    """True when the last dispatch rejection was the game's 'player is on vacation'
+    feedback — a permanent condition (for hours/days), so retrying is pointless."""
+    txt = unicodedata.normalize("NFKD", _last_feedback_text or "").encode("ascii", "ignore").decode().lower()
+    return "ferias" in txt or "vacation" in txt or "urlaub" in txt
+
+
+def _skip_farm_target_vacation(target_city_id):
+    """Push the matching enabled farm target 24h ahead so the farm queue moves on to the
+    next due target instead of re-scouting/re-attacking a vacation-protected player."""
+    try:
+        from db_manager import farm_get, farm_update
+        t = farm_get(str(target_city_id))
+        if t and int(t.get("enabled", 0) or 0) == 1:
+            farm_update(str(target_city_id), {"state": "IDLE",
+                        "next_run_at": int(time.time()) + 24 * 3600,
+                        "next_action": "spy"})
+            logger.warning("[farm] %s: jogador de férias — alvo saltado 24h, fila avança",
+                           t.get("target_city_name", target_city_id))
+    except Exception:
+        pass
+
+
 def process_attack_queue(session, in_active_hours=True):
     """Dispatch attacks whose dispatchAfter has been reached.
     Each item is removed from (or rescheduled in) the SQLite queue immediately after
@@ -548,10 +571,17 @@ def process_attack_queue(session, in_active_hours=True):
                 pass
         else:
             retries = item.get("retries", 0) + 1
-            if retries >= 3:
+            vacation = _last_failure_is_vacation()
+            if vacation or retries >= 3:
                 queue_remove(ATTACK_QUEUE, [item.get("id")])
-                logger.warning("[attack] dispatch falhou %d vezes para %s — removido da fila",
-                               retries, item.get("targetPlayerName"))
+                if vacation:
+                    logger.warning("[attack] %s está de férias — o jogo recusa ataques; "
+                                   "item removido sem novas tentativas",
+                                   item.get("targetPlayerName"))
+                    _skip_farm_target_vacation(item.get("targetCityId", ""))
+                else:
+                    logger.warning("[attack] dispatch falhou %d vezes para %s — removido da fila",
+                                   retries, item.get("targetPlayerName"))
                 try:
                     from telegram_notifier import notify_attack_failed
                     notify_attack_failed(item.get("targetCityName", "?"),

@@ -123,7 +123,10 @@ def _scan_says_inactive(target_city_id):
         return None
     for p in data.get("players", []):
         if str(p.get("cityId", "")) == str(target_city_id):
-            return p.get("state") in ("inactive", "vacation")
+            st = p.get("state")
+            if st == "vacation":
+                return "vacation"
+            return st == "inactive"
     return None   # absent → ambiguous (active, or just not scanned)
 
 
@@ -136,8 +139,9 @@ def _confirm_inactive(session, t):
     """Real-time confirmation that the target's owner is still inactive, done immediately
     before EVERY farm action (scout or attack): fetches the island view live and reads the
     city's state at the coordinates. The cached world scan is only a fallback when the live
-    fetch fails. Returns True (inactive), False (active again → unsafe), or None (couldn't
-    tell — caller decides: scout instead of attacking blind)."""
+    fetch fails. Returns True (inactive → farmable), "vacation" (the game REFUSES attacks
+    on vacation players — skip the target), False (active again → unsafe), or None
+    (couldn't tell — caller decides: scout instead of attacking blind)."""
     tid = str(t["target_city_id"])
     now = time.time()
     hit = _inactive_memo.get(tid)
@@ -151,7 +155,8 @@ def _confirm_inactive(session, t):
             island = getIsland(session.get("view=island&islandId=" + island_id))
             for c in island.get("cities", []):
                 if str(c.get("id", "")) == tid:
-                    res = c.get("state") in ("inactive", "vacation")
+                    st = c.get("state")
+                    res = "vacation" if st == "vacation" else (st == "inactive")
                     _inactive_memo[tid] = (now, res)
                     return res
         except Exception:
@@ -171,6 +176,22 @@ def _disable_active_target(t):
         pass
     from db_manager import farm_update
     farm_update(t["target_city_id"], {"state": "IDLE", "enabled": 0, "next_action": "spy"})
+
+
+_VACATION_SKIP_SECS = 24 * 3600
+
+
+def _skip_vacation_target(t):
+    """Vacation mode: the game refuses attacks outright (type=11 'está de férias'), so
+    raiding or scouting is pointless — but vacation ends, so instead of disabling the
+    target we push it 24h ahead and let the queue advance to the next due target."""
+    nm = t.get("target_city_name", t["target_city_id"])
+    logger.warning("[farm] %s: jogador em modo de férias — o jogo recusa ataques; "
+                   "alvo saltado por 24h", nm)
+    from db_manager import farm_update
+    farm_update(t["target_city_id"], {"state": "IDLE",
+                "next_run_at": int(time.time()) + _VACATION_SKIP_SECS,
+                "next_action": "spy"})
 
 
 def _recent_return_loot(t):
@@ -431,8 +452,13 @@ def _queue_head(targets):
     active = [t for t in targets if t.get("state", "IDLE") != "IDLE"]
     if active:
         return active[0]
-    return max(targets, key=lambda t: (_priority_score(t), int(t.get("last_loot", 0) or 0),
-                                       -int(t.get("created_at", 0) or 0)))
+    # Among IDLE targets prefer the DUE ones: a rich target rescheduled into the future
+    # (vacation skip, retry backoff) must not block due targets behind it.
+    now = int(time.time())
+    due = [t for t in targets if now >= int(t.get("next_run_at", 0) or 0)]
+    pool = due or targets
+    return max(pool, key=lambda t: (_priority_score(t), int(t.get("last_loot", 0) or 0),
+                                    -int(t.get("created_at", 0) or 0)))
 
 
 def has_due_farm():
@@ -465,7 +491,11 @@ def next_farm_eta():
     now = int(time.time())
     st = head.get("state", "IDLE")
     if st == "IDLE":
-        return max(int(head.get("next_run_at", 0)), now)
+        # Soonest next_run over ALL idle targets — with due-preference in _queue_head,
+        # whichever becomes due first will be the head at that moment.
+        runs = [int(t.get("next_run_at", 0) or 0) for t in _enabled_targets()
+                if t.get("state", "IDLE") == "IDLE"]
+        return max(min(runs) if runs else int(head.get("next_run_at", 0)), now)
     if st == "ATTACKING":
         ra = int(head.get("attack_return_at", 0))
         if (early_respy_enabled() and int(head.get("respy_launched_at", 0)) == 0
@@ -697,6 +727,9 @@ def process_farm_targets(session, in_active_hours=True):
         if confirmed is False:
             _disable_active_target(t)
             return "disable"
+        if confirmed == "vacation":
+            _skip_vacation_target(t)
+            return "skip"
         if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
             return "garrison"
         return "warehouse" if confirmed is True else "garrison"
@@ -748,6 +781,9 @@ def process_farm_targets(session, in_active_hours=True):
                     if confirmed is False:
                         _disable_active_target(t)
                         continue
+                    if confirmed == "vacation":
+                        _skip_vacation_target(t)
+                        continue
                     if confirmed is None:
                         logger.info("[farm] %s: inactividade não confirmada em tempo real — "
                                     "a re-espiar antes de atacar", name)
@@ -777,7 +813,7 @@ def process_farm_targets(session, in_active_hours=True):
             # re-scout is warehouse-only (loot + drained check) and instead re-confirms the
             # owner is still inactive — the only thing that can turn it unsafe.
             verdict = _safe_target_verdict(t)
-            if verdict == "disable":
+            if verdict in ("disable", "skip"):
                 continue
             need_garrison = (verdict == "garrison")
 
@@ -876,8 +912,12 @@ def process_farm_targets(session, in_active_hours=True):
             # Live inactivity check at the coordinates immediately before launching (user
             # rule). None → proceed: unlike the direct raid there IS a fresh spy report in
             # hand, so a failed island fetch doesn't force a blind decision.
-            if _confirm_inactive(session, t) is False:
+            confirmed = _confirm_inactive(session, t)
+            if confirmed is False:
                 _disable_active_target(t)
+                continue
+            if confirmed == "vacation":
+                _skip_vacation_target(t)
                 continue
 
             res = _enqueue_attack(t, loot, enemy_ships, combat_ships)
@@ -940,7 +980,7 @@ def process_farm_targets(session, in_active_hours=True):
                 # Safe targets pipeline a warehouse-only re-scout (+inactivity re-check); fleet
                 # targets and unconfirmed-inactivity (P5.5) pipeline the full garrison scout.
                 verdict = _safe_target_verdict(t)
-                if verdict == "disable":
+                if verdict in ("disable", "skip"):
                     continue
                 need_garrison = (verdict == "garrison")
                 spy = _launch_respy(t, need_garrison=need_garrison)

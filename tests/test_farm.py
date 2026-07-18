@@ -800,3 +800,65 @@ def test_weak_combat_fleet_engaged_with_blockade(monkeypatch, tmp_path):
             >= fm._SEA_BATTLE_MARGIN_SECS)
     t = db_manager.farm_get("100")
     assert t["state"] == "ATTACKING" and t["is_fleet_target"]
+
+
+def test_vacation_target_skipped_not_attacked(monkeypatch, tmp_path):
+    """A vacation-mode owner can't be attacked (game refuses): the raid is skipped, the
+    target stays enabled but is pushed ~24h ahead so the queue advances."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Férias", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: "vacation")
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                    # no attack, no scout
+    t = db_manager.farm_get("100")
+    assert t["enabled"] is True                           # NOT disabled — vacation ends
+    assert t["next_run_at"] >= now + 23 * 3600            # pushed ~24h
+
+
+def test_queue_head_prefers_due_targets():
+    """A rich target rescheduled into the future (vacation skip) must not block a due one."""
+    future = int(time.time()) + 3600
+    rich_skipped = {"target_city_id": "1", "state": "IDLE", "last_loot": 999999,
+                    "last_troop_journey": 2000, "next_run_at": future}
+    poor_due     = {"target_city_id": "2", "state": "IDLE", "last_loot": 50000,
+                    "last_troop_journey": 2000, "next_run_at": 0}
+    assert fm._queue_head([rich_skipped, poor_due])["target_city_id"] == "2"
+    # nothing due → best score again (ETA scheduling picks the soonest wake)
+    poor_due["next_run_at"] = future + 100
+    assert fm._queue_head([rich_skipped, poor_due])["target_city_id"] == "1"
+
+
+def test_attack_queue_vacation_fails_fast(monkeypatch, tmp_path):
+    """The game's 'está de férias' rejection removes the item on the FIRST failure (no
+    3-retry loop) and pushes the matching farm target 24h ahead."""
+    import attack_manager as am
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "38319", "targetCityName": "Java", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("38319", {"state": "ATTACKING", "next_run_at": 0})
+    item = {"id": "i1", "targetCityId": "38319", "targetPlayerName": "K", "dispatchAfter": 0}
+    removed = []
+    monkeypatch.setattr(am, "_attack_queue_items", lambda: [item])
+    monkeypatch.setattr(am, "_dispatch_attack", lambda s, it: False)
+    monkeypatch.setattr(am, "_log_attack_attempt", lambda *a, **k: None)
+    monkeypatch.setattr(db_manager, "queue_remove", lambda q, ids: removed.extend(ids))
+    monkeypatch.setattr(db_manager, "queue_add", lambda q, it: (_ for _ in ()).throw(
+        AssertionError("não devia reagendar — férias é falha definitiva")))
+    import empire_utils
+    monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
+    am._last_feedback_text = "O jogador neste momento está de férias"
+
+    am.process_attack_queue(session=object(), in_active_hours=True)
+
+    assert removed == ["i1"]                              # removed on 1st failure
+    t = db_manager.farm_get("38319")
+    assert t["state"] == "IDLE" and t["next_run_at"] >= now + 23 * 3600
