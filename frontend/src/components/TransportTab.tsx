@@ -34,6 +34,7 @@ interface WineSettings {
   enabled:        boolean
   thresholdHours: number
   targetHours:    number
+  donorReserveHours: number
 }
 
 function selectClass() {
@@ -486,7 +487,7 @@ export function TransportTab() {
                 <span className="text-sm text-slate-700">{t('transport_enabled')}</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 max-w-md">
+              <div className="grid grid-cols-3 gap-3 max-w-xl">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
                     {t('wine_threshold')}
@@ -506,6 +507,17 @@ export function TransportTab() {
                     type="number" min={wine.thresholdHours} max={336}
                     value={wine.targetHours}
                     onChange={e => setWine({ ...wine, targetHours: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                    {t('wine_donor_reserve')}
+                  </label>
+                  <input
+                    type="number" min={wine.targetHours} max={720}
+                    value={wine.donorReserveHours ?? 96}
+                    onChange={e => setWine({ ...wine, donorReserveHours: Math.max(1, Number(e.target.value)) })}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                 </div>

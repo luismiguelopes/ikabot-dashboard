@@ -1384,7 +1384,8 @@ def api_loot_stats():
 
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
-_DEFAULT_WINE_SETTINGS = {"enabled": False, "thresholdHours": 12, "targetHours": 48}
+_DEFAULT_WINE_SETTINGS = {"enabled": False, "thresholdHours": 12, "targetHours": 48,
+                          "donorReserveHours": 96}
 
 
 @app.route("/api/transport/wine")
@@ -1406,6 +1407,7 @@ def api_wine_post():
     s["enabled"]        = bool(data.get("enabled", False))
     s["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
     s["targetHours"]    = max(s["thresholdHours"], min(336, int(data.get("targetHours", 48))))
+    s["donorReserveHours"] = max(s["targetHours"], min(720, int(data.get("donorReserveHours", 96))))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(WINE_SETTINGS_PATH, "w") as f:
         json.dump(s, f, indent=2)

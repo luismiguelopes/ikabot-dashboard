@@ -39,9 +39,10 @@ _WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserv
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
 _DEFAULT_WINE_SETTINGS = {
-    "enabled":        False,
-    "thresholdHours": 12,   # act when a city's wine runway drops below this
-    "targetHours":    48,   # top the city up to this many hours of consumption
+    "enabled":           False,
+    "thresholdHours":    12,   # act when a city's wine runway drops below this
+    "targetHours":       48,   # top the city up to this many hours of consumption
+    "donorReserveHours": 96,   # non-producing city lends only what exceeds this runway
 }
 
 
@@ -403,6 +404,8 @@ def save_wine_settings(data):
     settings["enabled"]        = bool(data.get("enabled", False))
     settings["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
     settings["targetHours"]    = max(settings["thresholdHours"], min(336, int(data.get("targetHours", 48))))
+    settings["donorReserveHours"] = max(settings["targetHours"],
+                                        min(720, int(data.get("donorReserveHours", 96))))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(WINE_SETTINGS_PATH, "w") as f:
         json.dump(settings, f, indent=2)
@@ -411,8 +414,13 @@ def save_wine_settings(data):
 
 def process_wine_balancer(session, in_active_hours=True):
     """Pre-empt wine shortages: when a city's projected wine runway drops below
-    thresholdHours, ship wine from self-sufficient cities (runway = ∞) to top it up to
-    targetHours of consumption — before the critical alert would even fire."""
+    thresholdHours, top it up to targetHours of consumption — before the critical alert
+    would even fire. Sources, in order:
+      1. self-sufficient cities (runway = ∞ — wine producers), lending above targetHours;
+      2. fallback for empires with NO producers (all cities net consumers): cities with a
+         comfortable surplus — runway ≥ donorReserveHours — lend what exceeds that many
+         hours of their own consumption (e.g. the farm-loot city sitting on 2000h of wine
+         while six cities starve at <12h)."""
     if not in_active_hours:
         return
     from empire_utils import is_paused
@@ -435,8 +443,9 @@ def process_wine_balancer(session, in_active_hours=True):
     except (FileNotFoundError, json.JSONDecodeError):
         return
 
-    threshold = int(settings["thresholdHours"]) * 3600
-    target_h  = int(settings["targetHours"])
+    threshold   = int(settings["thresholdHours"]) * 3600
+    target_h    = int(settings["targetHours"])
+    donor_floor = max(int(settings.get("donorReserveHours", 96)), target_h)
 
     needy, sources = [], []
     for name, d in resources.items():
@@ -448,14 +457,21 @@ def process_wine_balancer(session, in_active_hours=True):
             if deficit > 0:
                 needy.append((name, runs_out, deficit))
         elif runs_out == -1:
-            # self-sufficient: keep targetHours for itself, lend the rest
+            # tier 0 — self-sufficient (producer): keep targetHours for itself, lend the rest
             reserve = cons * target_h
             spare = max(0, stock - reserve)
             if spare > 0:
-                sources.append([name, spare])
+                sources.append([name, spare, 0])
+        elif runs_out >= donor_floor * 3600:
+            # tier 1 — net consumer with a comfortable surplus: lend down to donor_floor
+            spare = max(0, stock - cons * donor_floor)
+            if spare > 0:
+                sources.append([name, spare, 1])
 
     if not needy or not sources:
         return
+    # producers first, then surplus donors with the biggest spare first
+    sources.sort(key=lambda src: (src[2], -src[1]))
 
     needy.sort(key=lambda x: x[1])  # most urgent (lowest runway) first
     try:
