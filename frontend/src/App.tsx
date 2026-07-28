@@ -232,6 +232,7 @@ export default function App() {
 
   const [movCount, setMovCount] = useState(0)
   const [incomingAttacks, setIncomingAttacks] = useState<{ count: number; eta: number | null }>({ count: 0, eta: null })
+  const [sidebarOpen, setSidebarOpen] = useState(false)   // mobile drawer (desktop: always open)
   useEffect(() => {
     fetch('/api/movements')
       .then(r => r.json())
@@ -270,24 +271,44 @@ export default function App() {
           sseConnected={sseConnected}
           paused={paused}
           onTogglePause={togglePause}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
-        <main className="flex-1 overflow-y-auto bg-slate-100 p-6 md:p-8">
-          {incomingAttacks.count > 0 && <IncomingAttackBanner count={incomingAttacks.count} eta={incomingAttacks.eta} />}
-          {paused && <PausedBanner />}
-          <SubsystemHealthBanner />
-          {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
-          {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
-          {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
-          {page === 'movements'    && <MovementsPage />}
-          {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
-          {page === 'history'      && <HistoryPage data={data} />}
-          {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
-          {page === 'construction' && <BuildingQueueTab data={data} />}
-          {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
-          {page === 'combate'      && <CombatPage />}
-          {page === 'logs'         && <LogsPage />}
-          {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
-        </main>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Mobile top bar — hidden on desktop (md+), where the sidebar is always visible */}
+          <header className="md:hidden flex items-center gap-3 h-14 px-4 bg-slate-900 flex-shrink-0">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Menu"
+              className="text-slate-200 hover:text-white w-9 h-9 flex items-center justify-center rounded-lg hover:bg-slate-700 transition-colors"
+            >
+              <i className="fa-solid fa-bars text-lg" />
+            </button>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <i className="fa-solid fa-globe text-white text-xs" />
+              </div>
+              <span className="text-white font-bold tracking-tight">Ikabot</span>
+            </div>
+          </header>
+          <main className="flex-1 overflow-y-auto bg-slate-100 p-4 md:p-8">
+            {incomingAttacks.count > 0 && <IncomingAttackBanner count={incomingAttacks.count} eta={incomingAttacks.eta} />}
+            {paused && <PausedBanner />}
+            <SubsystemHealthBanner />
+            {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
+            {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
+            {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
+            {page === 'movements'    && <MovementsPage />}
+            {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
+            {page === 'history'      && <HistoryPage data={data} />}
+            {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
+            {page === 'construction' && <BuildingQueueTab data={data} />}
+            {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
+            {page === 'combate'      && <CombatPage />}
+            {page === 'logs'         && <LogsPage />}
+            {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
+          </main>
+        </div>
       </div>
     </LangContext.Provider>
   )

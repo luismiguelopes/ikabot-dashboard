@@ -38,10 +38,15 @@ interface SidebarProps {
   sseConnected: boolean
   paused: boolean
   onTogglePause: () => void
+  // Mobile drawer: on desktop (md+) the sidebar is always visible and these are no-ops.
+  open?: boolean
+  onClose?: () => void
 }
 
-export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, offlineAfterSecs, alertCount, movCount, sseConnected, paused, onTogglePause }: SidebarProps) {
+export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCycleAt, lastAlive, offlineAfterSecs, alertCount, movCount, sseConnected, paused, onTogglePause, open = false, onClose }: SidebarProps) {
   const t = useT()
+  // Navigating from the drawer closes it (mobile); harmless on desktop where it stays open.
+  const go = (p: string) => { setActive(p); onClose?.() }
   const isStale = lastUpdatedTs && (Date.now() / 1000 - lastUpdatedTs) > 70 * 60
   // P6.6: same threshold as the docker healthcheck and the Telegram watchdog
   const isBotOffline = lastAlive && (Date.now() / 1000 - lastAlive) > (offlineAfterSecs ?? 1800)
@@ -57,7 +62,17 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
     : null
 
   return (
-    <aside className="w-56 flex-shrink-0 bg-slate-900 flex flex-col h-screen">
+    <>
+      {/* Backdrop — mobile only, when the drawer is open */}
+      <div
+        onClick={onClose}
+        className={`fixed inset-0 z-30 bg-black/50 md:hidden transition-opacity duration-200 ${
+          open ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+      />
+      <aside className={`fixed inset-y-0 left-0 z-40 w-56 flex-shrink-0 bg-slate-900 flex flex-col h-screen transform transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
+        open ? 'translate-x-0' : '-translate-x-full'
+      }`}>
       <div className="px-5 py-6 border-b border-slate-700/60">
         <div className="flex items-center gap-2 mb-1">
           <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
@@ -69,17 +84,17 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <NavItem icon="fa-house"                label={t('nav_home')}         active={active === 'home'}         onClick={() => setActive('home')}         />
-        <NavItem icon="fa-city"                 label={t('nav_cities')}       active={active === 'cities'}       onClick={() => setActive('cities')}       />
-        <NavItem icon="fa-landmark"             label={t('nav_buildings')}    active={active === 'buildings'}    onClick={() => setActive('buildings')}    />
-        <NavItem icon="fa-ship"                 label={t('nav_movements')}    active={active === 'movements'}    onClick={() => setActive('movements')}    badge={movCount} />
-        <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')}       active={active === 'alerts'}       onClick={() => setActive('alerts')}       badge={alertCount} />
-        <NavItem icon="fa-chart-line"           label={t('nav_history')}      active={active === 'history'}      onClick={() => setActive('history')}      />
-        <NavItem icon="fa-calculator"           label={t('nav_calculators')}  active={active === 'calc'}         onClick={() => setActive('calc')}         />
-        <NavItem icon="fa-list-check"           label={t('nav_construction')} active={active === 'construction'} onClick={() => setActive('construction')} />
-        <NavItem icon="fa-crosshairs"           label={t('nav_combat')}       active={active === 'combate'}      onClick={() => setActive('combate')}      />
-        <NavItem icon="fa-earth-europe"         label={t('nav_world')}        active={active === 'mundo'}        onClick={() => setActive('mundo')}        />
-        <NavItem icon="fa-terminal"             label={t('nav_logs')}         active={active === 'logs'}         onClick={() => setActive('logs')}         />
+        <NavItem icon="fa-house"                label={t('nav_home')}         active={active === 'home'}         onClick={() => go('home')}         />
+        <NavItem icon="fa-city"                 label={t('nav_cities')}       active={active === 'cities'}       onClick={() => go('cities')}       />
+        <NavItem icon="fa-landmark"             label={t('nav_buildings')}    active={active === 'buildings'}    onClick={() => go('buildings')}    />
+        <NavItem icon="fa-ship"                 label={t('nav_movements')}    active={active === 'movements'}    onClick={() => go('movements')}    badge={movCount} />
+        <NavItem icon="fa-triangle-exclamation" label={t('nav_alerts')}       active={active === 'alerts'}       onClick={() => go('alerts')}       badge={alertCount} />
+        <NavItem icon="fa-chart-line"           label={t('nav_history')}      active={active === 'history'}      onClick={() => go('history')}      />
+        <NavItem icon="fa-calculator"           label={t('nav_calculators')}  active={active === 'calc'}         onClick={() => go('calc')}         />
+        <NavItem icon="fa-list-check"           label={t('nav_construction')} active={active === 'construction'} onClick={() => go('construction')} />
+        <NavItem icon="fa-crosshairs"           label={t('nav_combat')}       active={active === 'combate'}      onClick={() => go('combate')}      />
+        <NavItem icon="fa-earth-europe"         label={t('nav_world')}        active={active === 'mundo'}        onClick={() => go('mundo')}        />
+        <NavItem icon="fa-terminal"             label={t('nav_logs')}         active={active === 'logs'}         onClick={() => go('logs')}         />
       </nav>
 
       {/* Pause toggle + Settings — separated, above status footer */}
@@ -96,7 +111,7 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
           <i className={`fa-solid ${paused ? 'fa-play' : 'fa-pause'} w-4 text-center text-sm`} />
           <span className="flex-1 text-left">{t(paused ? 'pause_resume' : 'pause_pause')}</span>
         </button>
-        <NavItem icon="fa-gear" label={t('settings')} active={active === 'settings'} onClick={() => setActive('settings')} />
+        <NavItem icon="fa-gear" label={t('settings')} active={active === 'settings'} onClick={() => go('settings')} />
       </div>
 
       <div className="px-4 py-4 border-t border-slate-700/60 space-y-2">
@@ -129,6 +144,7 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
           </p>
         )}
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }
