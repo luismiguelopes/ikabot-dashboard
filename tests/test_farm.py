@@ -323,6 +323,37 @@ def test_next_farm_eta_schedules_spying_backstop(monkeypatch, tmp_path):
     assert eta == now + fm._SPY_STUCK_GRACE     # grace deadline while still within grace
 
 
+def test_spying_live_mission_not_aborted_before_backstop(monkeypatch, tmp_path):
+    """P7.1: a still-live/executing mission past the OLD 6h wall-clock (e.g. after downtime)
+    must NOT be aborted — that used to orphan the in-flight report (the Polis case). It stays
+    SPYING and waits for the espionage machine to finish it."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
+    disp = now - 7 * 3600                                   # 7h: past old 6h, under 13h backstop
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    missions = [{"state": "EXECUTING_WAREHOUSE", "targetCityId": "100", "dispatchedAt": disp}]
+    _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] == "SPYING"   # not aborted — report preserved
+
+
+def test_spying_live_mission_released_by_backstop(monkeypatch, tmp_path):
+    """P7.1: the 13h last-resort backstop still frees a head if a mission stays 'live' beyond
+    the espionage machine's own 12h termination, so the queue can never freeze permanently."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
+    disp = now - 14 * 3600                                  # 14h: past the 13h backstop
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": disp}]
+    _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] == "IDLE"     # backstop released the head
+
+
 def test_attacking_returns_to_idle_after_return(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "intervalHours": 8})

@@ -26,7 +26,13 @@ import time
 
 from empire_utils import LOGS_DIR, logger
 
-_SPY_TIMEOUT_SECS = 6 * 3600
+# P7.1: last-resort backstop, NOT the primary timeout. A live/executing mission is owned by
+# the espionage state machine, which terminalises it on its own (FAILED at 12h no-arrival /
+# 2h no-report). The farm must never abort a still-live mission earlier than that on a naive
+# wall-clock: during downtime the old 6h clock fired on healthy in-flight missions and
+# orphaned their reports (the Polis case). So this backstop sits ABOVE the espionage 12h
+# limit — it only frees a head if the espionage machine itself somehow never terminated it.
+_SPY_TIMEOUT_SECS = 13 * 3600
 # Grace after dispatch before a SPYING head with no in-flight mission is treated as stuck.
 # Long enough to clear the dispatch-write race and a normal launch; short enough that a
 # silently-failed dispatch doesn't pin the whole queue for the full 6h timeout.
@@ -877,9 +883,16 @@ def process_farm_targets(session, in_active_hours=True):
                     logger.info("[farm] %s: espião não chegou a partir — nova espionagem em %dmin", name, wait // 60)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait, "next_action": "spy"})
                 elif now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS:
-                    logger.info("[farm] %s: sem relatório após 6h — a reagendar", name)
+                    # Last-resort backstop only: the mission is still 'live' after 13h, beyond
+                    # the espionage machine's own 12h termination. Free the head so the queue
+                    # can't freeze. NOT the normal path — a live mission is left to reach
+                    # DONE (evaluated above) or FAILED (retried above) on its own.
+                    logger.warning("[farm] %s: espião preso há >13h — a libertar (backstop)", name)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
                                       "next_action": "spy"})
+                # else: mission is live and within the backstop → keep waiting. The espionage
+                # state machine owns its progression; the farm no longer aborts it on a naive
+                # wall-clock, which used to kill in-flight reports across downtime.
                 continue
 
             loot     = sum((m.get("result") or {}).get("resources", {}).values())
