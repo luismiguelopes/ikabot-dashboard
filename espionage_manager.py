@@ -1303,6 +1303,25 @@ def latest_failed_after(target_city_id, since):
     return False
 
 
+# States a spy mission passes through while still in flight — anything not terminal
+# (DONE/FAILED). Used to tell "the spy is still working" from "the spy is gone".
+_LIVE_MISSION_STATES = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING",
+                        "EXECUTING_WAREHOUSE", "WAITING_FOR_GARRISON", "EXECUTING_GARRISON")
+
+
+def has_live_mission(target_city_id, since):
+    """True if the target has a non-terminal spy mission dispatched at/after `since`.
+    The farm uses this to distinguish a spy still in flight (keep waiting) from one that
+    silently never launched or vanished (release the SPYING head instead of blocking the
+    queue for the full timeout)."""
+    for m in _load_missions().get("missions", []):
+        if str(m.get("targetCityId", "")) != str(target_city_id):
+            continue
+        if m.get("state") in _LIVE_MISSION_STATES and m.get("dispatchedAt", 0) >= since - 120:
+            return True
+    return False
+
+
 def recall_spy_mission(target_city_id):
     """Queue a recall for a spy stationed at target_city_id.
     Looks up origin city and safehouse position from the active mission.

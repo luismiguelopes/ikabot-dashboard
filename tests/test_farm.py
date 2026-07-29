@@ -278,6 +278,51 @@ def test_spying_low_loot_reschedules(monkeypatch, tmp_path):
     assert db_manager.farm_get("100")["state"] == "IDLE"  # back to idle
 
 
+def test_spying_stuck_head_released(monkeypatch, tmp_path):
+    """P7.2: a SPYING head with no report, no failure and no in-flight mission (dispatch
+    silently never took) is released to IDLE past the grace window — so the queue advances
+    instead of blocking on it for the full 6h timeout."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
+    # dispatched well past the stuck grace, and no missions at all for the target
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - fm._SPY_STUCK_GRACE - 60})
+    added = _common_patches(monkeypatch, tmp_path, missions=[])
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE"                 # head released
+    assert t["next_run_at"] > now              # scheduled for a short retry
+    assert added == []                          # no attack
+
+
+def test_spying_live_mission_not_released(monkeypatch, tmp_path):
+    """An in-flight spy (a live, non-terminal mission) must keep the head in SPYING even
+    past the grace window — the stuck-release only fires when the mission is truly gone."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
+    disp = now - fm._SPY_STUCK_GRACE - 60
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": disp}]
+    _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] == "SPYING"   # still waiting, not released
+
+
+def test_next_farm_eta_schedules_spying_backstop(monkeypatch, tmp_path):
+    """P7.2: next_farm_eta must return a wake for a SPYING head (grace deadline) instead of
+    None, so smart_sleep re-evaluates a possibly-stuck head at a bounded time."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now})
+    eta = fm.next_farm_eta()
+    assert eta is not None
+    assert eta == now + fm._SPY_STUCK_GRACE     # grace deadline while still within grace
+
+
 def test_attacking_returns_to_idle_after_return(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "intervalHours": 8})

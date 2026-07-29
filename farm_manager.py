@@ -27,6 +27,10 @@ import time
 from empire_utils import LOGS_DIR, logger
 
 _SPY_TIMEOUT_SECS = 6 * 3600
+# Grace after dispatch before a SPYING head with no in-flight mission is treated as stuck.
+# Long enough to clear the dispatch-write race and a normal launch; short enough that a
+# silently-failed dispatch doesn't pin the whole queue for the full 6h timeout.
+_SPY_STUCK_GRACE = 12 * 60
 _RELAUNCH_DELAY_RANGE = (1, 15)   # random minutes after troops return before next raid
 _SEA_BATTLE_MARGIN_SECS = 20 * 60  # extra troop delay when the blockade must FIGHT combat
                                    # ships (rounds are ~15 min) instead of scaring flee ones
@@ -412,11 +416,29 @@ def _ships_back_eta(target, now, session=None, first_city_id=None):
     return now + random.randint(5, 15) * 60
 
 
+def _spy_is_stuck(t, now):
+    """A SPYING head whose spy has neither returned a report nor left any in-flight mission:
+    the dispatch silently failed or the mission record vanished. Past the grace window this
+    is a dead head that must be released so the queue advances — without waiting the full
+    6h timeout. (A genuinely in-flight spy always has a live mission, so this never fires
+    on a healthy wait.)"""
+    disp = int(t.get("spy_dispatched_at", 0))
+    if now - disp <= _SPY_STUCK_GRACE:
+        return False
+    try:
+        from espionage_manager import has_live_mission
+        return not has_live_mission(t["target_city_id"], disp)
+    except Exception:
+        return False
+
+
 def _spy_report_ready(missions, t, now):
-    """True if a SPYING target either has a fresh report or has timed out."""
+    """True if a SPYING target has a fresh report, has timed out, or is a dead head."""
     if _latest_done_report(missions, t["target_city_id"], int(t.get("spy_dispatched_at", 0)) - 120):
         return True
-    return now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS
+    if now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS:
+        return True
+    return _spy_is_stuck(t, now)
 
 
 # ── Pure queue: one active target at a time ─────────────────────────────────────
@@ -483,13 +505,19 @@ def has_due_farm():
 
 
 def next_farm_eta():
-    """Soonest wake time for the queue head (IDLE next run / ATTACKING return), or None.
-    SPYING is omitted — that wake is driven by the spy mission ETA already."""
+    """Soonest wake time for the queue head (IDLE next run / ATTACKING return / SPYING
+    backstop), or None. A live spy's own ETA is already scheduled via spy_eta; the SPYING
+    value here is the backstop that guarantees a stuck head (dead mission) is re-evaluated
+    at the grace deadline, then the timeout — instead of relying on the opportunistic poll."""
     head = _queue_head(_enabled_targets())
     if not head:
         return None
     now = int(time.time())
     st = head.get("state", "IDLE")
+    if st == "SPYING":
+        disp = int(head.get("spy_dispatched_at", 0))
+        grace = disp + _SPY_STUCK_GRACE
+        return max(now, grace if now < grace else disp + _SPY_TIMEOUT_SECS)
     if st == "IDLE":
         # Soonest next_run over ALL idle targets — with due-preference in _queue_head,
         # whichever becomes due first will be the head at that moment.
@@ -840,6 +868,13 @@ def process_farm_targets(session, in_active_hours=True):
                     # the (reused or fresh) spy was detected/gone — retry soon with a dispatch
                     wait = random.randint(5, 15) * 60
                     logger.info("[farm] %s: espião falhou — nova espionagem em %dmin", name, wait // 60)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait, "next_action": "spy"})
+                elif _spy_is_stuck(t, now):
+                    # No report, no failure, and no in-flight mission: the dispatch never took.
+                    # Release the head now so the queue advances instead of blocking on it for
+                    # the full timeout. Short retry, like the failed path.
+                    wait = random.randint(5, 15) * 60
+                    logger.info("[farm] %s: espião não chegou a partir — nova espionagem em %dmin", name, wait // 60)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait, "next_action": "spy"})
                 elif now - int(t.get("spy_dispatched_at", 0)) > _SPY_TIMEOUT_SECS:
                     logger.info("[farm] %s: sem relatório após 6h — a reagendar", name)
