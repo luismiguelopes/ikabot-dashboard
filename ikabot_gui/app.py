@@ -181,6 +181,64 @@ def api_data():
     return jsonify(data)
 
 
+# Cache windows mirror the collectors: costs_collector (3d), empire_collector military (8h).
+_MILITARY_CACHE_SECS = 8 * 3600
+_COSTS_CACHE_SECS    = 3 * 24 * 3600
+
+
+@app.route("/api/cycles")
+def api_cycles():
+    """Single snapshot for the Home 'Cycles & refreshes' grid: last-updated timestamps,
+    the empire next-cycle countdown, cache windows, and world-scan progress."""
+    now = int(time.time())
+
+    next_cycle_at = None
+    if os.path.exists(NEXT_CYCLE_JSON_PATH):
+        try:
+            with open(NEXT_CYCLE_JSON_PATH) as f:
+                next_cycle_at = json.load(f).get("nextCycleAt")
+        except Exception:
+            pass
+
+    scan = {"status": "idle", "phase": "", "progress": 0, "total": 0}
+    if os.path.exists(WORLD_SCAN_STATUS_PATH):
+        try:
+            with open(WORLD_SCAN_STATUS_PATH) as f:
+                scan = json.load(f)
+        except Exception:
+            pass
+
+    last_alive = None
+    if os.path.exists(LAST_ALIVE_JSON_PATH):
+        try:
+            with open(LAST_ALIVE_JSON_PATH) as f:
+                last_alive = json.load(f).get("lastAlive")
+        except Exception:
+            pass
+
+    empire_ts = get_last_modified_ts(EMPIRE_JSON_PATH)
+    mil_ts    = get_last_modified_ts(MILITARY_JSON_PATH)
+    costs_ts  = get_last_modified_ts(BUILDING_COSTS_JSON_PATH)
+
+    cycles = [
+        {"key": "empire",     "lastUpdated": empire_ts,
+         "nextAt": next_cycle_at, "endpoint": "/api/data/refresh"},
+        {"key": "world",      "lastUpdated": get_last_modified_ts(WORLD_SCAN_JSON_PATH),
+         "scan": scan, "endpoint": "/api/world-scan/refresh"},
+        {"key": "movements",  "lastUpdated": get_last_modified_ts(MOVEMENTS_JSON_PATH),
+         "endpoint": "/api/movements/refresh"},
+        {"key": "military",   "lastUpdated": mil_ts,
+         "nextAt": (mil_ts + _MILITARY_CACHE_SECS) if mil_ts else None,
+         "cacheSecs": _MILITARY_CACHE_SECS, "endpoint": "/api/military/refresh"},
+        {"key": "costs",      "lastUpdated": costs_ts,
+         "nextAt": (costs_ts + _COSTS_CACHE_SECS) if costs_ts else None,
+         "cacheSecs": _COSTS_CACHE_SECS, "endpoint": "/api/building-costs/refresh"},
+        {"key": "queue",      "lastUpdated": None,
+         "everyCycle": True, "endpoint": "/api/building-queue/check"},
+    ]
+    return jsonify({"now": now, "lastAlive": last_alive, "cycles": cycles})
+
+
 @app.route("/api/movements")
 def api_movements():
     if not os.path.exists(MOVEMENTS_JSON_PATH):
@@ -833,6 +891,7 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "intervalHours": 6,
     "minSendTotal":  1000,
     "shipType":      "transporters",  # transporters | freighters | both
+    "ignoreCityIds": [],              # source cities never drained by consolidation
 }
 
 
@@ -954,6 +1013,7 @@ def api_consolidate_post():
     settings["minSendTotal"]  = max(0, int(data.get("minSendTotal", 1000)))
     ship_type = data.get("shipType", "transporters")
     settings["shipType"] = ship_type if ship_type in ("transporters", "freighters", "both") else "transporters"
+    settings["ignoreCityIds"] = [str(c) for c in (data.get("ignoreCityIds") or [])]
     if settings["enabled"] and not settings["destCityId"]:
         return jsonify({"error": "Cidade de destino obrigatória"}), 400
     os.makedirs(LOGS_DIR, exist_ok=True)

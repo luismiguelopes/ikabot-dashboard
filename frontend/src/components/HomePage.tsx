@@ -15,6 +15,114 @@ interface ActivityData {
   recent: Array<{ ts: number; target_city: string; target_player: string; success: boolean; error: string | null; source: string }>
 }
 
+interface CycleInfo {
+  key: string
+  lastUpdated: number | null
+  nextAt?: number | null
+  cacheSecs?: number
+  everyCycle?: boolean
+  endpoint: string
+  scan?: { status: string; phase?: string; progress?: number; total?: number }
+}
+
+const CYCLE_META: Record<string, { icon: string; color: string }> = {
+  empire:    { icon: 'fa-globe',          color: 'text-indigo-500'  },
+  world:     { icon: 'fa-earth-europe',   color: 'text-sky-500'     },
+  movements: { icon: 'fa-ship',           color: 'text-blue-500'    },
+  military:  { icon: 'fa-shield-halved',  color: 'text-rose-500'    },
+  costs:     { icon: 'fa-coins',          color: 'text-amber-500'   },
+  queue:     { icon: 'fa-list-check',     color: 'text-emerald-500' },
+}
+
+// Cycle countdowns + one-tap "force now" (writes a .force_* flag the bot picks up on its
+// next smart_sleep tick, ≤ ~1 min). All refresh endpoints already existed.
+function CyclesCard() {
+  const t = useT()
+  const now = useLiveClock()
+  const [cycles, setCycles] = useState<CycleInfo[]>([])
+  const [busy, setBusy]     = useState<Record<string, boolean>>({})
+  const [done, setDone]     = useState<Record<string, number>>({})
+
+  const load = () => fetch('/api/cycles').then(r => r.json())
+    .then(d => setCycles(d.cycles || [])).catch(() => {})
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 15000)
+    return () => clearInterval(id)
+  }, [])
+
+  async function force(c: CycleInfo) {
+    setBusy(b => ({ ...b, [c.key]: true }))
+    try {
+      await fetch(c.endpoint, { method: 'POST' })
+      setDone(d => ({ ...d, [c.key]: Date.now() }))
+      setTimeout(() => setDone(d => { const n = { ...d }; delete n[c.key]; return n }), 6000)
+    } catch { /* ignore */ }
+    setBusy(b => ({ ...b, [c.key]: false }))
+    setTimeout(load, 1500)
+  }
+
+  // Ages beyond 2 days read better as days than as a huge hour count.
+  const fmtAge = (secs: number) => secs >= 2 * 86400 ? `${Math.floor(secs / 86400)}d` : fmtDuration(secs)
+
+  const statusLine = (c: CycleInfo) => {
+    if (c.everyCycle) return t('cycle_every_cycle')
+    if (c.scan && c.scan.status && c.scan.status !== 'idle' && (c.scan.total || 0) > 0)
+      return t('cycle_scanning', { p: String(c.scan.progress ?? 0), n: String(c.scan.total ?? 0) })
+    if (c.key === 'empire' && c.nextAt && c.nextAt > now)
+      return t('cycle_next_in', { t: fmtDuration(c.nextAt - now) })
+    if (!c.lastUpdated) return t('cycle_never')
+    return t('cycle_updated_ago', { t: fmtAge(Math.max(0, now - c.lastUpdated)) })
+  }
+
+  const subLine = (c: CycleInfo) => {
+    if (c.cacheSecs && c.nextAt)
+      return c.nextAt > now ? t('cycle_renews_in', { t: fmtAge(c.nextAt - now) })
+                            : t('cycle_renews_soon')
+    return null
+  }
+
+  if (cycles.length === 0) return null
+  return (
+    <Card className="mb-6">
+      <CardHeader icon="fa-arrows-rotate" title={t('cycles_title')} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 p-3">
+        {cycles.map(c => {
+          const meta = CYCLE_META[c.key] || { icon: 'fa-clock', color: 'text-slate-400' }
+          const sub = subLine(c)
+          return (
+            <div key={c.key} className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
+              <i className={`fa-solid ${meta.icon} ${meta.color} w-5 text-center`} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-slate-700 leading-tight">{t(`cycle_${c.key}` as 'cycles_title')}</div>
+                <div className="text-xs text-slate-500 leading-tight">
+                  {statusLine(c)}
+                  {sub && <span className="text-slate-400"> · {sub}</span>}
+                </div>
+              </div>
+              {done[c.key] ? (
+                <span className="text-xs text-emerald-600 font-medium whitespace-nowrap">
+                  <i className="fa-solid fa-check mr-1" />{t('cycle_scheduled')}
+                </span>
+              ) : (
+                <button
+                  onClick={() => force(c)}
+                  disabled={busy[c.key]}
+                  title={t('cycle_force_hint')}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white text-indigo-600 border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 disabled:opacity-40"
+                >
+                  <i className={`fa-solid ${busy[c.key] ? 'fa-spinner fa-spin' : 'fa-bolt'}`} />
+                  {t('cycle_force')}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 // P6.8: "did my click actually happen?" — pending queue items + active force flags
 // (a flag disappearing = the bot picked the request up) + recent dispatch outcomes.
 function ActivityCard() {
@@ -213,6 +321,7 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
       <PageHeader icon="fa-crown" title={t('home_title')} />
 
       <CombatSummary />
+      <CyclesCard />
       <ActivityCard />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">

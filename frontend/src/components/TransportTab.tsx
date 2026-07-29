@@ -26,6 +26,7 @@ interface ConsolidateSettings {
   intervalHours: number
   minSendTotal:  number
   shipType:      'transporters' | 'freighters' | 'both'
+  ignoreCityIds: string[]
   lastRun?:      number
   lastSent?:     Record<string, number>
 }
@@ -436,6 +437,41 @@ export function TransportTab() {
                            : 'transport_ship_type_both')}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                    {t('transport_consolidate_ignore')}
+                  </label>
+                  <p className="text-xs text-slate-400 mb-2">{t('transport_consolidate_ignore_hint')}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {ownCities
+                      .filter(c => String(c.cityId) !== consolidate.destCityId)
+                      .map(c => {
+                        const id = String(c.cityId)
+                        const on = (consolidate.ignoreCityIds || []).includes(id)
+                        return (
+                          <button
+                            key={c.cityId}
+                            onClick={() => {
+                              const cur = consolidate.ignoreCityIds || []
+                              setConsolidate({
+                                ...consolidate,
+                                ignoreCityIds: on ? cur.filter(x => x !== id) : [...cur, id],
+                              })
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                              on
+                                ? 'bg-amber-500 text-white border-amber-500'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-amber-300'
+                            }`}
+                          >
+                            {on && <i className="fa-solid fa-ban mr-1" />}
+                            {c.name}
+                          </button>
+                        )
+                      })}
                   </div>
                 </div>
 

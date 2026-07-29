@@ -33,6 +33,7 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "intervalHours": 6,
     "minSendTotal":  1000,
     "shipType":      "transporters",  # transporters | freighters | both
+    "ignoreCityIds": [],              # source cities never drained by consolidation
 }
 
 _WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserve
@@ -355,8 +356,11 @@ def process_consolidation(session, in_active_hours=True):
                     ships_to_use, "cargueiros" if kind == "freighters" else "navios")
         return ships_to_use
 
+    ignored = {str(c) for c in (settings.get("ignoreCityIds") or [])}
     for src in random.sample(own_cities, len(own_cities)):
         if str(src.get("cityId")) == str(settings["destCityId"]):
+            continue
+        if str(src.get("cityId")) in ignored:
             continue
         if avail["transporters"] <= 0 and avail["freighters"] <= 0:
             break
