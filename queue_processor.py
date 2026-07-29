@@ -17,7 +17,7 @@ from empire_utils import (
     ACTIVE_HOURS_START, ACTIVE_HOURS_END,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
     FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
-    FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, lm, logger,
+    FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, FORCE_COSTS_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -302,8 +302,25 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
             try:
                 from empire_collector import _collect_military_data
                 _collect_military_data(session)
+                logger.info("[força] actualização militar concluída (pedido pela UI)")
             except Exception:
                 logger.error("military refresh falhou", exc_info=True)
+            continue
+
+        # Manual building-costs refresh triggered by Flask UI. Costs otherwise only run
+        # inside the full empire cycle (3d cache), so without this the "Force" button
+        # would wait for the next cycle — up to hours at night. Gated on scan hours
+        # (one HTTP per city). should_update_building_costs() consumes the flag.
+        if session and _in_scan_hours() and os.path.exists(FORCE_COSTS_FLAG):
+            try:
+                from ikabot.helpers.pedirInfo import getIdsOfCities
+                from costs_collector import should_update_building_costs, collect_building_costs
+                if should_update_building_costs():   # removes the flag
+                    _ids, _ = getIdsOfCities(session)
+                    collect_building_costs(session, _ids)
+                    logger.info("[força] custos de edifícios actualizados (pedido pela UI)")
+            except Exception:
+                logger.error("costs refresh falhou", exc_info=True)
             continue
 
         # Import existing safehouse reports triggered by Flask UI
