@@ -218,7 +218,16 @@ def api_cycles():
 
     empire_ts = get_last_modified_ts(EMPIRE_JSON_PATH)
     mil_ts    = get_last_modified_ts(MILITARY_JSON_PATH)
-    costs_ts  = get_last_modified_ts(BUILDING_COSTS_JSON_PATH)
+    # Costs are stored in SQLite (save_building_costs), not the legacy JSON —
+    # read the DB timestamp, falling back to the stale JSON mtime only if no DB.
+    costs_ts  = 0
+    if _db:
+        try:
+            costs_ts = int(_db.costs_last_updated() or 0)
+        except Exception:
+            costs_ts = 0
+    if not costs_ts:
+        costs_ts = get_last_modified_ts(BUILDING_COSTS_JSON_PATH)
 
     cycles = [
         {"key": "empire",     "lastUpdated": empire_ts,
