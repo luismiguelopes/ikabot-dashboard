@@ -1,5 +1,15 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Surgical override for ikabot.function.loadCustomModule.
+
+NOT mounted over the stock file. bot_launcher execs this into the live stock
+loadCustomModule module namespace at startup, redefining loadCustomModule
+(our Add/Remove custom-module manager) while leaving the stock file intact, so
+an upstream image that adds symbols to that module can't break our imports.
+Applied best-effort: this is a menu-only feature off the boot path, so a
+failure here must not stop the bot from starting (see bot_launcher).
+"""
 import sys
 import os
 import traceback

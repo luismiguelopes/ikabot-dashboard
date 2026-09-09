@@ -1,18 +1,24 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Surgical overrides for ikabot.helpers.planRoutes (anti-detection human delays).
 
-import json
-import math
-import random
-import re
-import time
-from decimal import *
+This file is NOT mounted over the stock module. Instead, bot_launcher execs it
+into the *live* stock planRoutes module namespace at startup
+(`exec(compile(...), planRoutes.__dict__)`), redefining only sendGoods and
+executeRoutes. Every other name they use (city_url, actionRequest, getCity,
+wait, getMinimumWaitingTime, getShipCapacity, waitForArrival, splitCargoBetweenFleets,
+json, math, Decimal, time, random) resolves from the stock module's own globals.
 
-from ikabot.config import *
-from ikabot.helpers.getJson import getCity
-from ikabot.helpers.naval import *
-from ikabot.helpers.varios import wait
-from ikabot.helpers.pedirInfo import getShipCapacity
+Why not a full-file copy: shadowing the whole planRoutes.py freezes it at one
+upstream version, so any function the upstream later adds (e.g. 7.6.0's
+splitCargoBetweenFleets, imported by consolidateResources) goes missing and the
+bot won't boot. Overriding only the two functions we tune keeps everything else
+live, so additive upstream changes can't break us.
+
+The only bodies here that differ from stock are the `time.sleep(random...)`
+pauses — see the inline "Pausa ..." comments.
+"""
 
 
 def sendGoods(session, originCityId, destinationCityId, islandId, ships, send, useFreighters=False):
@@ -188,95 +194,3 @@ def executeRoutes(session, routes, useFreighters=False):
 
         # Pausa entre rotas distintas (origem/destino diferente)
         time.sleep(random.randint(12, 30))
-
-
-def splitCargoBetweenFleets(session, toSend):
-    """This function splits a cargo between trade ships and freighters. Trade ships are filled first because they are faster, and whatever doesn't fit in the currently available trade ships is assigned to the freighters. If only one of the two fleets has ships available, the whole cargo is assigned to it
-    Parameters
-    ----------
-    session : ikabot.web.session.Session
-        Session object
-    toSend : list
-        array of resources to send
-
-    Returns
-    -------
-    (tradeShipCargo, freighterCargo) : tuple
-        two arrays of resources, the first one to be sent with trade ships and the second one with freighters
-    """
-    tradeShipCargo = [0] * len(toSend)
-    freighterCargo = [0] * len(toSend)
-
-    if getAvailableFreighters(session) == 0:
-        return list(toSend), freighterCargo
-
-    ship_capacity, _ = getShipCapacity(session)
-    tradeShipSpace = getAvailableShips(session) * ship_capacity
-    if tradeShipSpace == 0:
-        return tradeShipCargo, list(toSend)
-
-    for i in range(len(toSend)):
-        tradeShipCargo[i] = min(toSend[i], tradeShipSpace)
-        tradeShipSpace -= tradeShipCargo[i]
-        freighterCargo[i] = toSend[i] - tradeShipCargo[i]
-
-    return tradeShipCargo, freighterCargo
-
-
-def get_random_wait_time():
-    return random.randint(0, 20) * 3
-
-
-def getMinimumWaitingTime(session):
-    """This function returns the time needed to wait for the closest fleet to arrive. If all ships are unavailable, this represents the minimum time needed to wait for any ships to become available. A random waiting time between 0 and 10 seconds is added to the waiting time to avoid race conditions between multiple concurrently running processes.
-    Parameters
-    ----------
-    session : ikabot.web.session.Session
-        Session object
-
-    Returns
-    -------
-    timeToWait : int
-        the minimum waiting time for the closest fleet to arrive
-    """
-    html = session.get()
-    idCiudad = re.search(r"currentCityId:\s(\d+),", html).group(1)
-    url = "view=militaryAdvisor&oldView=city&oldBackgroundView=city&backgroundView=city&currentCityId={}&actionRequest={}&ajax=1".format(
-        idCiudad, actionRequest
-    )
-    posted = session.post(url)
-    postdata = json.loads(posted, strict=False)
-    militaryMovements = postdata[1][1][2]["viewScriptParams"][
-        "militaryAndFleetMovements"
-    ]
-    current_time = int(postdata[0][1]["time"])
-    delivered_times = []
-    for militaryMovement in [mv for mv in militaryMovements if mv["isOwnArmyOrFleet"]]:
-        remaining_time = int(militaryMovement["eventTime"]) - current_time
-        delivered_times.append(remaining_time)
-    if delivered_times:
-        return min(delivered_times) + get_random_wait_time()
-    else:
-        return 0
-
-
-def waitForArrival(session, useFreighters=False):
-    """This function will return the number of available ships, and if there aren't any, it will wait for the closest fleet to arrive and then return the number of available ships
-    Parameters
-    ----------
-    session : ikabot.web.session.Session
-        Session object
-
-    Returns
-    -------
-    ships : int
-        number of available ships
-    """
-    if useFreighters is False: available_ships = getAvailableShips(session)
-    elif useFreighters is True: available_ships = getAvailableFreighters(session)
-    while available_ships == 0:
-        minimum_waiting_time_for_ship = getMinimumWaitingTime(session)
-        wait(minimum_waiting_time_for_ship)
-        if useFreighters is False: available_ships = getAvailableShips(session)
-        elif useFreighters is True: available_ships = getAvailableFreighters(session)
-    return available_ships

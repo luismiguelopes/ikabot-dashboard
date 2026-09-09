@@ -38,10 +38,11 @@ services:
       - ./attack_manager.py:/ikabot/ikabot/function/attack_manager.py
       - ./transport_manager.py:/ikabot/ikabot/function/transport_manager.py
       - ./farm_manager.py:/ikabot/ikabot/function/farm_manager.py
-      # Substitui o helper de rotas por versão com delays humanos entre envios consecutivos
-      - ./planRoutes_patched.py:/ikabot/ikabot/helpers/planRoutes.py
-      # Fix: read() devolve strings do predetermined_input; int() cast evita TypeError no menu
-      - ./loadCustomModule_patched.py:/ikabot/ikabot/function/loadCustomModule.py
+      # Surgical overrides — bot_launcher execs these INTO the live stock modules
+      # (planRoutes: human delays; loadCustomModule: Add/Remove menu) instead of
+      # shadowing whole stock files, so upstream additions can't break our imports.
+      - ./planroutes_overrides.py:/ikabot/planroutes_overrides.py
+      - ./loadcustommodule_overrides.py:/ikabot/loadcustommodule_overrides.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
       # Backups diários do SQLite para fora do volume (P6.3) — sobrevive a docker volume rm

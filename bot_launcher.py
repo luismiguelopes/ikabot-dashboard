@@ -26,9 +26,47 @@ _FUNCTION_DIR = "/ikabot/ikabot/function"
 if _FUNCTION_DIR not in sys.path:
     sys.path.insert(0, _FUNCTION_DIR)
 
+# Surgical overrides: (module, overrides source, fatal-if-it-fails).
+# We inject our function definitions into the *live* stock module namespaces
+# instead of shadowing whole files with mounted copies. Shadowing froze a stock
+# file at one version, so any symbol the upstream later added to it went missing
+# and broke imports (e.g. 7.6.0's splitCargoBetweenFleets). Overriding only the
+# functions we tune keeps every other stock symbol live and additive upstream
+# changes can no longer break us.
+#   planRoutes  -> anti-detection human delays; CRITICAL, must apply (fatal).
+#   loadCustomModule -> our Add/Remove menu; menu-only, off the boot path (best-effort).
+_OVERRIDES = [
+    ("ikabot.helpers.planRoutes", "/ikabot/planroutes_overrides.py", True),
+    ("ikabot.function.loadCustomModule", "/ikabot/loadcustommodule_overrides.py", False),
+]
+
+
+def _apply_surgical_patches():
+    """Inject our overrides into the live stock modules. Must run BEFORE importing
+    command_line/empireFunction so every `from <module> import <fn>` binds ours."""
+    import importlib
+    import traceback
+    for mod_name, src_path, fatal in _OVERRIDES:
+        try:
+            mod = importlib.import_module(mod_name)
+            with open(src_path) as f:
+                exec(compile(f.read(), src_path, "exec"), mod.__dict__)
+        except Exception:
+            if fatal:
+                raise
+            sys.stderr.write(
+                "[bot_launcher] AVISO: override nao-critico falhou (%s); a continuar.\n"
+                % mod_name
+            )
+            traceback.print_exc()
+
 
 def _run():
     import ikabot.config as config
+
+    # Apply our surgical patches before anything imports the stock modules.
+    _apply_surgical_patches()
+
     from ikabot.web.session import Session
     from ikabot.command_line import menu, init
     from ikabot.helpers.process import updateProcessList
