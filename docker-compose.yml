@@ -1,9 +1,7 @@
 
 services:
   ikabot:
-    # Pinned to a digest: :latest silently reordered the Options submenu (Load custom
-    # module 8->7) and broke the hardcoded menu navigation below. Bump deliberately.
-    image: ghcr.io/luismiguelopes/ikabot@sha256:1c4cd3380b791abc2a797cbff1d852800b403bf2b23e5969084f64488cb83c0b
+    image: ghcr.io/luismiguelopes/ikabot:latest
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
@@ -15,6 +13,8 @@ services:
     env_file:
       - .env
     volumes:
+      # Deterministic entrypoint — spawns empireFunction by reference, then menu
+      - ./bot_launcher.py:/ikabot/bot_launcher.py
       # Main loop — thin orchestrator
       - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py
       # Módulos de suporte injectados na mesma pasta para importação relativa
@@ -38,8 +38,11 @@ services:
       - ikalogs_volume:/tmp/ikalogs/
       # Backups diários do SQLite para fora do volume (P6.3) — sobrevive a docker volume rm
       - ./backups:/backups
+    # Deterministic startup: bot_launcher spawns empireFunction by reference and
+    # then hands PID 1 the normal interactive menu (docker attach still works).
+    # No hardcoded menu indices -> an upstream :latest menu reorder can't break it.
     command: >
-      python3 -m ikabot ${IKABOT_EMAIL} ${IKABOT_PASSWORD} 21 7 1  /ikabot/ikabot/function/empireFunction.py "" 21 7 3
+      python3 /ikabot/bot_launcher.py ${IKABOT_EMAIL} ${IKABOT_PASSWORD}
     ports:
       - "43357:43357"
       - "43573:43573"
