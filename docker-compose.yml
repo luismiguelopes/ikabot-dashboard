@@ -1,7 +1,14 @@
 
 services:
   ikabot:
-    image: ghcr.io/luismiguelopes/ikabot:latest
+    # STABLE channel — pinned to a validated digest (ikabot 7.5.1).
+    # We mount patched copies of stock files (planRoutes.py, loadCustomModule.py),
+    # so a :latest bump that touches those stock modules breaks our patches
+    # (e.g. a rebuilt image made consolidateResources import splitCargoBetweenFleets,
+    # which planRoutes_patched.py doesn't define -> ImportError -> bot won't boot).
+    # Promotion flow: test :latest as "beta", re-validate/fix the mounted patches
+    # against it, and only then pin the new digest here as the next stable.
+    image: ghcr.io/luismiguelopes/ikabot@sha256:1c4cd3380b791abc2a797cbff1d852800b403bf2b23e5969084f64488cb83c0b
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
