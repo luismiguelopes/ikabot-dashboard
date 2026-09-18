@@ -1,15 +1,17 @@
 
 services:
   ikabot:
-    # STABLE channel — pinned to a validated digest (ikabot 7.6.0).
-    # We mount patched copies of stock files (planRoutes.py, loadCustomModule.py),
-    # so a :latest bump that touches those stock modules breaks our patches
-    # (e.g. 7.6.0 made consolidateResources import splitCargoBetweenFleets, which
-    # we now mirror into planRoutes_patched.py alongside our human-delay changes).
-    # Promotion flow: test :latest as "beta", re-validate/fix the mounted patches
-    # against it, and only then pin the new digest here as the next stable.
-    # Previous stable: 7.5.1 @sha256:1c4cd3380b791abc2a797cbff1d852800b403bf2b23e5969084f64488cb83c0b
-    image: ghcr.io/luismiguelopes/ikabot@sha256:a5aad9ba0911d672786a9b53f45e1a2a6112395ff55ddf757f9adbf9d05f7651
+    # STABLE channel — pinned to a validated digest (ikabot 7.6.1).
+    # Our anti-detection tweaks are injected surgically at runtime by bot_launcher
+    # (see planroutes_overrides.py / loadcustommodule_overrides.py), so additive
+    # upstream changes no longer break us. Promotion flow: test :latest as "beta"
+    # (diff stock files, re-run the offline import check, one live boot), then pin
+    # its digest here as the next stable.
+    # 7.6.1 note: the login flow now caches sessions in ~/.ikabot and skips the
+    # password prompt when cookies exist; bot_launcher drains predetermined_input
+    # after Session() so no leftover misfires the menu.
+    # Previous stable: 7.6.0 @sha256:a5aad9ba0911d672786a9b53f45e1a2a6112395ff55ddf757f9adbf9d05f7651
+    image: ghcr.io/luismiguelopes/ikabot@sha256:9efc25bbd0bc3e2500f2455e04e00bfefbf0cb69fc8444ece049de9acc1fc923
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true

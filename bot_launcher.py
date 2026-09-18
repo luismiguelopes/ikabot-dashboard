@@ -85,8 +85,20 @@ def _run():
         except ValueError:
             config.predetermined_input.append(arg)
 
-    # Logs in; pops email + password from predetermined_input.
+    # Logs in; pops the email and (on a fresh login) the password from
+    # predetermined_input.
     session = Session()
+
+    # Drain any leftover predetermined_input before handing off. We only ever
+    # supply email+password for login, so nothing legitimate remains afterwards.
+    # This matters because the login flow does not always pop the password: once
+    # a session is cached (~/.ikabot/users/<email>.json, persists across a plain
+    # docker restart), Session() reuses the cookies and leaves the password in
+    # the queue. A leftover would otherwise be popped by the first menu read()
+    # below and misfire a random menu action. Draining makes the menu fully
+    # interactive again and keeps us immune to login-flow pop-count changes.
+    while len(config.predetermined_input):
+        config.predetermined_input.pop()
 
     # Spawn empireFunction the same way the menu would (multiprocessing.Process
     # with the (session, event, stdin_fd, predetermined_input) contract), but
