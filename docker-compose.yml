@@ -47,6 +47,11 @@ services:
       - ./loadcustommodule_overrides.py:/ikabot/loadcustommodule_overrides.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
+      # Sessão persistente: ~/.ikabot guarda os cookies de login (7.6.1). Num volume,
+      # sobrevive a recreate/promoção de imagem → o bot reutiliza a sessão em vez de fazer
+      # login fresco (que depende do serviço externo do blackbox token). Menos logins no
+      # jogo (anti-detecção) e deploys deixam de arriscar um login preso.
+      - ikabot_home:/root/.ikabot
       # Backups diários do SQLite para fora do volume (P6.3) — sobrevive a docker volume rm
       - ./backups:/backups
     # Deterministic startup: bot_launcher spawns empireFunction by reference and
@@ -110,3 +115,4 @@ services:
 
 volumes:
   ikalogs_volume:
+  ikabot_home:    # sessão/cookies do ikabot (~/.ikabot), persistente entre recreations
