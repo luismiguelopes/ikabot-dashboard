@@ -766,11 +766,14 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
                 continue
             ships_to_use = int(math.ceil(amt / ship_cap))
             cost = amt * price
-            rec = {"seller": offer["jugadorAComprar"], "toCity": offer["ciudadDestino"],
-                   "amount": amt, "price": price, "cost": cost}
+            # offer["ciudadDestino"]/["jugadorAComprar"] are the SELLER's city and player
+            # (ikabot's naming is misleading); the wine is delivered to our own commercial
+            # city (city["name"]), then the balancer spreads it.
+            rec = {"seller": offer["jugadorAComprar"], "fromCity": offer["ciudadDestino"],
+                   "toCity": city["name"], "amount": amt, "price": price, "cost": cost}
             if dry:
-                logger.info("[wine-buy][dry] compraria %d vinho @%d de %s→%s (%d ouro)",
-                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], cost)
+                logger.info("[wine-buy][dry] compraria %d vinho @%d a %s (%s) → %s (%d ouro)",
+                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], city["name"], cost)
             else:
                 if not first:
                     time.sleep(random.randint(8, 20))
@@ -781,8 +784,8 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
                     logger.error("[wine-buy] compra recusada/erro", exc_info=True)
                     continue
                 ships -= ships_to_use
-                logger.info("[wine-buy] comprei %d vinho @%d de %s→%s (%d ouro)",
-                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], cost)
+                logger.info("[wine-buy] comprei %d vinho @%d a %s (%s) → %s (%d ouro)",
+                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], city["name"], cost)
             buys.append(rec)
             budget    -= cost
             spent     += cost

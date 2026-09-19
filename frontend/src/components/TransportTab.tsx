@@ -58,7 +58,7 @@ interface WineBuyStatus {
   cheapest?: number | null
   gold?: number
   note?: string
-  buys?: { seller: string; toCity: string; amount: number; price: number; cost: number }[]
+  buys?: { seller: string; fromCity: string; toCity: string; amount: number; price: number; cost: number }[]
   topCities?: [string, number][]
 }
 
