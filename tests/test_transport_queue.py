@@ -177,7 +177,7 @@ def test_consolidation_both_does_two_passes(monkeypatch, tmp_path):
 
 def test_wine_settings_defaults_and_save(tmp_path, monkeypatch):
     monkeypatch.setattr(tm, "WINE_SETTINGS_PATH", str(tmp_path / "w.json"))
-    assert tm.get_wine_settings()["enabled"] is False
+    assert tm.get_wine_settings()["enabled"] is True  # on by default (a wine-out costs population)
     saved = tm.save_wine_settings({"enabled": True, "thresholdHours": 10, "targetHours": 60})
     assert saved["thresholdHours"] == 10 and saved["targetHours"] == 60
     assert tm.get_wine_settings()["enabled"] is True
@@ -201,8 +201,11 @@ def test_wine_balancer_ships_wine_to_needy(monkeypatch, tmp_path):
 
     import queue_processor as qp
     monkeypatch.setattr(qp, "_load_resources_json", lambda: {
-        "Dry":    {"Wine": 1000,   "wineConsumptionPerHour": 1000, "wineRunsOutIn": 1 * 3600},
-        "Vinery": {"Wine": 500000, "wineConsumptionPerHour": 500,  "wineRunsOutIn": -1},
+        "Dry":    {"Wine": 1000,   "wineConsumptionPerHour": 1000, "wineProductionPerHour": 0,
+                   "wineRunsOutIn": 1 * 3600},
+        # real producer: wineProductionPerHour > 0 (runway -1 alone no longer means producer)
+        "Vinery": {"Wine": 500000, "wineConsumptionPerHour": 500, "wineProductionPerHour": 600,
+                   "wineRunsOutIn": -1},
     })
     import ikabot.helpers.naval as naval
     import ikabot.helpers.pedirInfo as pedir

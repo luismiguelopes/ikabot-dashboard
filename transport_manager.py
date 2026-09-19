@@ -418,14 +418,20 @@ def save_wine_settings(data):
 
 
 def process_wine_balancer(session, in_active_hours=True):
-    """Pre-empt wine shortages: when a city's projected wine runway drops below
-    thresholdHours, top it up to targetHours of consumption — before the critical alert
-    would even fire. Sources, in order:
-      1. self-sufficient cities (runway = ∞ — wine producers), lending above targetHours;
-      2. fallback for empires with NO producers (all cities net consumers): cities with a
-         comfortable surplus — runway ≥ donorReserveHours — lend what exceeds that many
-         hours of their own consumption (e.g. the farm-loot city sitting on 2000h of wine
-         while six cities starve at <12h)."""
+    """Pre-empt AND recover wine shortages. A city is needy when either:
+      - it is still consuming and its runway (wineRunsOutIn) drops below thresholdHours, or
+      - it has already emptied: production 0 and live consumption 0 (you can't consume wine
+        you don't have, so the game reports 0) with stock below thresholdHours of the sister
+        cities' median consumption. It is then topped up using that median as a consumption
+        estimate; once primed, the next cycle sees its real consumption and the runway path
+        takes over.
+    Sources, in order:
+      1. real wine producers (wineProductionPerHour > 0), lending above targetHours;
+      2. net consumers with a comfortable surplus (runway ≥ donorReserveHours), lending what
+         exceeds that many hours of their own consumption (e.g. the farm-loot city sitting on
+         2000h of wine while six cities starve at <12h).
+    A city with production 0 and consumption 0 is NEVER a donor — treating an emptied city as
+    a "producer" would let the balancer ship away its last drops, worsening the shortage."""
     if not in_active_hours:
         return
     from empire_utils import is_paused
@@ -448,26 +454,42 @@ def process_wine_balancer(session, in_active_hours=True):
     except (FileNotFoundError, json.JSONDecodeError):
         return
 
-    threshold   = int(settings["thresholdHours"]) * 3600
+    threshold_h = int(settings["thresholdHours"])
+    threshold   = threshold_h * 3600
     target_h    = int(settings["targetHours"])
     donor_floor = max(int(settings.get("donorReserveHours", 96)), target_h)
+
+    # Median consumption of the cities that ARE consuming — used to size top-ups for
+    # emptied cities whose live consumption reads 0 only because they have no wine left.
+    active_cons = sorted(int(d.get("wineConsumptionPerHour", 0) or 0)
+                         for d in resources.values()
+                         if int(d.get("wineConsumptionPerHour", 0) or 0) > 0)
+    median_cons = active_cons[len(active_cons) // 2] if active_cons else 0
 
     needy, sources = [], []
     for name, d in resources.items():
         cons     = int(d.get("wineConsumptionPerHour", 0) or 0)
+        prod     = int(d.get("wineProductionPerHour", 0) or 0)
         stock    = int(d.get("Wine", 0) or 0)
         runs_out = d.get("wineRunsOutIn", -1)
         if runs_out != -1 and 0 < runs_out < threshold and cons > 0:
+            # still draining, runway below threshold
             deficit = max(0, cons * target_h - stock)
             if deficit > 0:
                 needy.append((name, runs_out, deficit))
-        elif runs_out == -1:
-            # tier 0 — self-sufficient (producer): keep targetHours for itself, lend the rest
+        elif prod == 0 and cons == 0 and median_cons > 0 and stock < median_cons * threshold_h:
+            # emptied consumer: it stopped "consuming" only because it ran dry. Prime it
+            # with the sister cities' median consumption; runway ~0 => most urgent + critical.
+            deficit = max(0, median_cons * target_h - stock)
+            if deficit > 0:
+                needy.append((name, 1, deficit))
+        elif prod > 0 and runs_out == -1:
+            # tier 0 — real wine producer: keep targetHours for itself, lend the rest
             reserve = cons * target_h
             spare = max(0, stock - reserve)
             if spare > 0:
                 sources.append([name, spare, 0])
-        elif runs_out >= donor_floor * 3600:
+        elif runs_out != -1 and runs_out >= donor_floor * 3600:
             # tier 1 — net consumer with a comfortable surplus: lend down to donor_floor
             spare = max(0, stock - cons * donor_floor)
             if spare > 0:
