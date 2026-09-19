@@ -38,6 +38,30 @@ interface WineSettings {
   donorReserveHours: number
 }
 
+interface WineBuySettings {
+  enabled:          boolean
+  dryRun:           boolean
+  targetHours:      number
+  maxPricePerUnit:  number
+  goldFloor:        number
+  maxSpendPerCycle: number
+  ignoreCityIds:    string[]
+}
+
+interface WineBuyStatus {
+  now?: number
+  dryRun?: boolean
+  deficit?: number
+  bought?: number
+  spent?: number
+  avgPrice?: number
+  cheapest?: number | null
+  gold?: number
+  note?: string
+  buys?: { seller: string; toCity: string; amount: number; price: number; cost: number }[]
+  topCities?: [string, number][]
+}
+
 function selectClass() {
   return 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700'
 }
@@ -55,6 +79,11 @@ export function TransportTab() {
   const [wine,          setWine]          = useState<WineSettings | null>(null)
   const [wineSaving,    setWineSaving]    = useState(false)
   const [wineSaved,     setWineSaved]     = useState(false)
+  const [wineBuy,        setWineBuy]        = useState<WineBuySettings | null>(null)
+  const [wineBuySaving,  setWineBuySaving]  = useState(false)
+  const [wineBuySaved,   setWineBuySaved]   = useState(false)
+  const [wineBuyStatus,  setWineBuyStatus]  = useState<WineBuyStatus | null>(null)
+  const [wineBuyPreview, setWineBuyPreview] = useState(false)
 
   // Manual form state
   const [originName,   setOriginName]   = useState('')
@@ -91,6 +120,9 @@ export function TransportTab() {
 
     fetch('/api/transport/consolidate').then(r => r.json()).then(setConsolidate).catch(() => {})
     fetch('/api/transport/wine').then(r => r.json()).then(setWine).catch(() => {})
+    fetch('/api/transport/wine-buy').then(r => r.json()).then(setWineBuy).catch(() => {})
+    fetch('/api/transport/wine-buy/status').then(r => r.json())
+      .then((d: WineBuyStatus) => { if (d && d.now) setWineBuyStatus(d) }).catch(() => {})
   }, [])
 
   async function handleSaveWine() {
@@ -107,6 +139,39 @@ export function TransportTab() {
       setWineSaved(true)
     } catch { /* ignore */ } finally {
       setWineSaving(false)
+    }
+  }
+
+  async function handleSaveWineBuy() {
+    if (!wineBuy) return
+    setWineBuySaving(true)
+    setWineBuySaved(false)
+    try {
+      const res = await fetch('/api/transport/wine-buy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wineBuy),
+      })
+      const json = await res.json()
+      if (json.settings) setWineBuy(json.settings)
+      setWineBuySaved(true)
+    } catch { /* ignore */ } finally {
+      setWineBuySaving(false)
+    }
+  }
+
+  async function handlePreviewWineBuy() {
+    setWineBuyPreview(true)
+    try {
+      await fetch('/api/transport/wine-buy/preview', { method: 'POST' })
+      // the bot runs the dry-run within ~60s; poll the status a few times
+      const prevNow = wineBuyStatus?.now ?? 0
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 4000))
+        const d: WineBuyStatus = await fetch('/api/transport/wine-buy/status').then(r => r.json()).catch(() => ({}))
+        if (d && d.now && d.now !== prevNow) { setWineBuyStatus(d); break }
+      }
+    } catch { /* ignore */ } finally {
+      setWineBuyPreview(false)
     }
   }
 
@@ -570,6 +635,119 @@ export function TransportTab() {
                 <i className={`fa-solid ${wineSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`} />
                 {t('transport_save')}
               </button>
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* ── Wine market buyer (F10) ───────────────────────────────────────── */}
+      <Card className="mb-4">
+        <CardHeader icon="fa-cart-shopping" title={t('winebuy_title')} />
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-slate-500">{t('winebuy_hint')}</p>
+          {wineBuy && (
+            <>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setWineBuy({ ...wineBuy, enabled: !wineBuy.enabled })}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      wineBuy.enabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      wineBuy.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                  <span className="text-sm text-slate-700">{t('transport_enabled')}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setWineBuy({ ...wineBuy, dryRun: !wineBuy.dryRun })}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      wineBuy.dryRun ? 'bg-amber-500' : 'bg-slate-300'}`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      wineBuy.dryRun ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                  <span className="text-sm text-slate-700">
+                    {t('winebuy_dryrun')}
+                    <i className="fa-solid fa-shield-halved ml-1.5 text-amber-500" title={t('winebuy_dryrun_hint')} />
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_target')}</label>
+                  <input type="number" min={1} max={336} value={wineBuy.targetHours}
+                    onChange={e => setWineBuy({ ...wineBuy, targetHours: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_maxprice')}</label>
+                  <input type="number" min={1} max={10000} value={wineBuy.maxPricePerUnit}
+                    onChange={e => setWineBuy({ ...wineBuy, maxPricePerUnit: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_goldfloor')}</label>
+                  <input type="number" min={0} step={1000} value={wineBuy.goldFloor}
+                    onChange={e => setWineBuy({ ...wineBuy, goldFloor: Math.max(0, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_maxspend')}</label>
+                  <input type="number" min={0} step={1000} value={wineBuy.maxSpendPerCycle}
+                    onChange={e => setWineBuy({ ...wineBuy, maxSpendPerCycle: Math.max(0, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+              </div>
+
+              {/* Preview / last run */}
+              {wineBuyStatus && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm space-y-1.5">
+                  <div className="flex items-center gap-2 text-slate-600">
+                    <i className={`fa-solid ${wineBuyStatus.dryRun ? 'fa-flask text-amber-500' : 'fa-check text-emerald-600'}`} />
+                    <span className="font-medium">{wineBuyStatus.dryRun ? t('winebuy_plan') : t('winebuy_bought')}</span>
+                    <span className="text-slate-400">· {wineBuyStatus.note}</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div><span className="text-slate-400">{t('winebuy_deficit')}: </span><b>{(wineBuyStatus.deficit ?? 0).toLocaleString()}</b></div>
+                    <div><span className="text-slate-400">{t('winebuy_bought')}: </span><b>{(wineBuyStatus.bought ?? 0).toLocaleString()}</b></div>
+                    <div><span className="text-slate-400">{t('winebuy_spent')}: </span><b>{(wineBuyStatus.spent ?? 0).toLocaleString()}</b> <i className="fa-solid fa-coins text-amber-400" /></div>
+                    <div><span className="text-slate-400">{t('winebuy_avgprice')}: </span><b>{wineBuyStatus.avgPrice ?? 0}</b>{wineBuyStatus.cheapest != null && <span className="text-slate-400"> ({t('winebuy_cheapest')} {wineBuyStatus.cheapest})</span>}</div>
+                  </div>
+                  {wineBuyStatus.topCities && wineBuyStatus.topCities.length > 0 && (
+                    <div className="text-xs text-slate-500 pt-1">
+                      {wineBuyStatus.topCities.slice(0, 6).map(([n, d]) => (
+                        <span key={n} className="inline-block mr-2 mb-1 px-1.5 py-0.5 rounded bg-white border border-slate-200">
+                          {n}: <b>{d.toLocaleString()}</b>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {wineBuySaved && (
+                <div className="rounded-lg px-3 py-2 text-sm bg-emerald-50 text-emerald-700">{t('transport_saved')}</div>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40"
+                  onClick={handleSaveWineBuy} disabled={wineBuySaving}
+                >
+                  <i className={`fa-solid ${wineBuySaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'}`} />
+                  {t('transport_save')}
+                </button>
+                <button
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                  onClick={handlePreviewWineBuy} disabled={wineBuyPreview}
+                  title={t('winebuy_preview_hint')}
+                >
+                  <i className={`fa-solid ${wineBuyPreview ? 'fa-spinner fa-spin' : 'fa-magnifying-glass-chart'}`} />
+                  {wineBuyPreview ? t('winebuy_previewing') : t('winebuy_preview')}
+                </button>
+              </div>
             </>
           )}
         </div>

@@ -184,11 +184,13 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             if in_scan_hours:
                 with health_guard("transport"):
                     from transport_manager import (
-                        process_transport_queue, process_consolidation, process_wine_balancer,
+                        process_transport_queue, process_consolidation,
+                        process_wine_balancer, process_wine_buyer,
                     )
                     process_transport_queue(session, in_active_hours=True)
                     process_consolidation(session, in_active_hours=True)
-                    process_wine_balancer(session, in_active_hours=True)
+                    process_wine_buyer(session, in_active_hours=True)      # replenish from market
+                    process_wine_balancer(session, in_active_hours=True)   # then spread it
 
             # ── Background scans (only during active hours) ───────────────────
             if in_scan_hours:

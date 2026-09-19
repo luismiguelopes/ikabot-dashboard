@@ -17,7 +17,7 @@ from empire_utils import (
     ACTIVE_HOURS_START, ACTIVE_HOURS_END,
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
     FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
-    FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, FORCE_COSTS_FLAG, lm, logger,
+    FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, FORCE_COSTS_FLAG, FORCE_WINE_BUY_FLAG, lm, logger,
 )
 
 from ikabot.helpers.getJson import getCity
@@ -321,6 +321,20 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                     logger.info("[força] custos de edifícios actualizados (pedido pela UI)")
             except Exception:
                 logger.error("costs refresh falhou", exc_info=True)
+            continue
+
+        # Wine-buy preview (dry-run) triggered by Flask UI — runs even when disabled
+        if session and _in_scan_hours() and os.path.exists(FORCE_WINE_BUY_FLAG):
+            try:
+                os.remove(FORCE_WINE_BUY_FLAG)
+            except Exception:
+                pass
+            try:
+                from transport_manager import process_wine_buyer
+                process_wine_buyer(session, in_active_hours=True, force_preview=True)
+                logger.info("[força] preview de compra de vinho gerado (pedido pela UI)")
+            except Exception:
+                logger.error("wine-buy preview falhou", exc_info=True)
             continue
 
         # Import existing safehouse reports triggered by Flask UI

@@ -559,3 +559,243 @@ def process_wine_balancer(session, in_active_hours=True):
                             src_name, dest_name, int(amount), ships_to_use, runs_out // 3600)
             else:
                 logger.warning("[wine] envio de %s → %s recusado", src_name, dest_name)
+
+
+# ── Wine market buyer (F10) ───────────────────────────────────────────────────
+# Buys wine from other players' market offers to keep the empire stocked. The wine
+# balancer only redistributes an existing (finite) pool; with no wine producer the
+# pool only shrinks, so buying is the piece that replenishes it. Roles stay split:
+# this buyer refills the empire's total, the balancer spreads it to every city.
+WINE_BUY_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_buy_settings.json")
+WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
+_DEFAULT_WINE_BUY_SETTINGS = {
+    "enabled":          False,   # opt-in: this is the only feature that spends gold
+    "dryRun":           True,    # start safe: log the plan, buy nothing
+    "targetHours":      72,      # keep this many hours of wine per city (empire target)
+    "maxPricePerUnit":  15,      # never buy above this gold/unit (offers are player-priced)
+    "goldFloor":        100000,  # never let gold drop below this
+    "maxSpendPerCycle": 200000,  # cap gold spent per run
+    "ignoreCityIds":    [],
+}
+
+
+def get_wine_buy_settings():
+    settings = dict(_DEFAULT_WINE_BUY_SETTINGS)
+    try:
+        with open(WINE_BUY_SETTINGS_PATH) as f:
+            settings.update(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return settings
+
+
+def save_wine_buy_settings(data):
+    settings = dict(_DEFAULT_WINE_BUY_SETTINGS)
+    settings["enabled"]          = bool(data.get("enabled", False))
+    settings["dryRun"]           = bool(data.get("dryRun", True))
+    settings["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
+    settings["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
+    settings["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
+    settings["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
+    settings["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WINE_BUY_SETTINGS_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+    return settings
+
+
+def _wine_buy_deficit(resources, own, settings):
+    """Total wine (and per-city breakdown) the empire is short of its per-city target
+    of targetHours of consumption. Emptied cities (live consumption 0) are sized from
+    the sister cities' median consumption, exactly like the balancer."""
+    target_h = int(settings["targetHours"])
+    ignored_ids = {str(c) for c in settings.get("ignoreCityIds", [])}
+    ignored_names = {name for name, c in own.items()
+                     if str(c.get("cityId")) in ignored_ids}
+    active = sorted(int(d.get("wineConsumptionPerHour", 0) or 0)
+                    for d in resources.values()
+                    if int(d.get("wineConsumptionPerHour", 0) or 0) > 0)
+    median = active[len(active) // 2] if active else 0
+
+    total, detail = 0, []
+    for name, d in resources.items():
+        if name in ignored_names:
+            continue
+        cons  = int(d.get("wineConsumptionPerHour", 0) or 0)
+        prod  = int(d.get("wineProductionPerHour", 0) or 0)
+        stock = int(d.get("Wine", 0) or 0)
+        eff_cons = cons if cons > 0 else (median if prod == 0 else 0)
+        if eff_cons <= 0:
+            continue
+        need = max(0, eff_cons * target_h - stock)
+        if need > 0:
+            total += need
+            detail.append((name, need))
+    detail.sort(key=lambda x: -x[1])
+    return total, detail
+
+
+def _write_wine_buy_status(status):
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        status["now"] = int(time.time())
+        with open(WINE_BUY_STATUS_PATH, "w") as f:
+            json.dump(status, f, indent=2)
+    except Exception:
+        logger.error("[wine-buy] falha a escrever status", exc_info=True)
+
+
+def _set_market_resource(session, city, resource_index):
+    """Non-interactive equivalent of buyResources.chooseResource: tells the branch
+    office which resource to list offers for. resource_index: 0=wood..4=sulfur."""
+    import ikabot.config as config
+    search = "resource" if resource_index == 0 else resource_index
+    session.post(params={
+        "cityId": city["id"], "position": city["pos"], "view": "branchOffice",
+        "activeTab": "bargain", "type": 444, "searchResource": search,
+        "range": city["rango"], "backgroundView": "city", "currentCityId": city["id"],
+        "templateView": "branchOffice", "currentTab": "bargain",
+        "actionRequest": config.actionRequest, "ajax": 1,
+    })
+
+
+_WINE_RESOURCE_INDEX = 1  # materials_names = [Wood, Wine, Marble, Crystal, Sulfur]
+
+
+def process_wine_buyer(session, in_active_hours=True, force_preview=False):
+    """Top up the empire's wine from the market, within hard gold/price guards.
+    Off and dry-run by default. The balancer then spreads what lands.
+    force_preview: run once in dry-run even when disabled, to populate the UI preview."""
+    if not in_active_hours and not force_preview:
+        return
+    from empire_utils import is_paused
+    if is_paused():
+        return
+    settings = get_wine_buy_settings()
+    if not settings.get("enabled") and not force_preview:
+        return
+
+    from queue_processor import _load_resources_json
+    resources = _load_resources_json()
+    if not resources:
+        return
+    try:
+        with open(OWN_CITIES_PATH) as f:
+            own = {c["name"]: c for c in json.load(f)}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+
+    deficit, detail = _wine_buy_deficit(resources, own, settings)
+    dry = True if force_preview else bool(settings.get("dryRun", True))
+    if deficit <= 0:
+        _write_wine_buy_status({"dryRun": dry, "deficit": 0, "bought": 0, "spent": 0,
+                                "note": "sem défice — nada a comprar", "buys": []})
+        return
+
+    from ikabot.helpers.market import getCommercialCities, getGold
+    from ikabot.function.buyResources import getOffers, buy
+    from ikabot.helpers.pedirInfo import getShipCapacity
+    from ikabot.helpers.naval import getAvailableShips
+
+    commercial = getCommercialCities(session)
+    time.sleep(random.randint(2, 5))
+    if not commercial:
+        logger.info("[wine-buy] nenhuma cidade com entreposto — a saltar")
+        _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
+                                "note": "sem entreposto comercial", "buys": []})
+        return
+
+    gold, _gp = getGold(session, commercial[0])
+    gold_floor = int(settings["goldFloor"])
+    budget = min(gold - gold_floor, int(settings["maxSpendPerCycle"]))
+    if budget <= 0:
+        logger.info("[wine-buy] ouro (%d) no/abaixo do piso (%d) — a saltar", gold, gold_floor)
+        _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
+                                "gold": gold, "note": "ouro no piso", "buys": []})
+        return
+
+    try:
+        ship_cap, _ = getShipCapacity(session)
+        ships = int(getAvailableShips(session))
+        time.sleep(random.randint(2, 5))
+    except Exception:
+        logger.warning("[wine-buy] não foi possível obter navios — a saltar")
+        return
+    if ship_cap <= 0:
+        return
+    # Yield trade ships to the farm — the buyer is a background top-up, never urgent.
+    try:
+        from farm_manager import apply_ship_reserve
+        ships = apply_ship_reserve(ships, "wine-buy")
+    except Exception:
+        pass
+    if not dry and ships <= 0:
+        logger.info("[wine-buy] sem navios livres (reservados p/ farm) — a saltar")
+        _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
+                                "gold": gold, "note": "sem navios livres", "buys": []})
+        return
+
+    max_price = int(settings["maxPricePerUnit"])
+    remaining = deficit
+    spent = bought = 0
+    cheapest = None
+    buys = []
+    first = True
+    for city in commercial:
+        if remaining <= 0 or budget <= 0 or (not dry and ships <= 0):
+            break
+        try:
+            _set_market_resource(session, city, _WINE_RESOURCE_INDEX)
+            time.sleep(random.randint(2, 5))
+            offers = [o for o in getOffers(session, city)
+                      if o.get("tipo") == "wine" and o["amountAvailable"] > 0
+                      and o["precio"] <= max_price]
+        except Exception:
+            logger.error("[wine-buy] falha a obter ofertas em %s", city.get("name"), exc_info=True)
+            continue
+        offers.sort(key=lambda o: o["precio"])
+        for offer in offers:
+            if remaining <= 0 or budget <= 0 or (not dry and ships <= 0):
+                break
+            price = offer["precio"]
+            cheapest = price if cheapest is None else min(cheapest, price)
+            by_gold  = budget // price
+            by_ships = (ships * ship_cap) if not dry else remaining
+            amt = int(min(offer["amountAvailable"], remaining, by_gold, by_ships))
+            if amt <= 0:
+                continue
+            ships_to_use = int(math.ceil(amt / ship_cap))
+            cost = amt * price
+            rec = {"seller": offer["jugadorAComprar"], "toCity": offer["ciudadDestino"],
+                   "amount": amt, "price": price, "cost": cost}
+            if dry:
+                logger.info("[wine-buy][dry] compraria %d vinho @%d de %s→%s (%d ouro)",
+                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], cost)
+            else:
+                if not first:
+                    time.sleep(random.randint(8, 20))
+                first = False
+                try:
+                    buy(session, city, offer, amt, ships, ship_cap)
+                except Exception:
+                    logger.error("[wine-buy] compra recusada/erro", exc_info=True)
+                    continue
+                ships -= ships_to_use
+                logger.info("[wine-buy] comprei %d vinho @%d de %s→%s (%d ouro)",
+                            amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], cost)
+            buys.append(rec)
+            budget    -= cost
+            spent     += cost
+            bought    += amt
+            remaining -= amt
+
+    avg = round(spent / bought, 1) if bought else 0
+    note = "plano (dry-run)" if dry else "compra executada"
+    if bought == 0:
+        note = "sem ofertas dentro do tecto de preço" if cheapest is None else "nada comprado"
+    _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": bought,
+                            "spent": spent, "avgPrice": avg, "cheapest": cheapest,
+                            "gold": gold, "goldFloor": gold_floor, "note": note,
+                            "buys": buys[:20], "topCities": detail[:8]})
+    logger.info("[wine-buy] %s: %d vinho por %d ouro (défice %d, preço médio %s)",
+                "dry-run" if dry else "comprado", bought, spent, deficit, avg)

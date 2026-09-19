@@ -72,6 +72,7 @@ FORCE_MOVEMENTS_FLAG      = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_IMPORT_REPORTS_FLAG = os.path.join(LOGS_DIR, ".force_import_reports")
 FORCE_MILITARY_FLAG       = os.path.join(LOGS_DIR, ".force_military_update")
 FORCE_COSTS_FLAG          = os.path.join(LOGS_DIR, ".force_costs_update")
+FORCE_WINE_BUY_FLAG       = os.path.join(LOGS_DIR, ".force_wine_buy")
 SCAN_CHECKPOINT_PATH      = os.path.join(LOGS_DIR, "world_scan_checkpoint.json")
 
 

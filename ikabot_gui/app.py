@@ -1483,6 +1483,59 @@ def api_wine_post():
     return jsonify({"status": "ok", "settings": s})
 
 
+# ── Wine market buyer (F10) ───────────────────────────────────────────────────
+WINE_BUY_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_buy_settings.json")
+WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
+_DEFAULT_WINE_BUY_SETTINGS = {"enabled": False, "dryRun": True, "targetHours": 72,
+                              "maxPricePerUnit": 15, "goldFloor": 100000,
+                              "maxSpendPerCycle": 200000, "ignoreCityIds": []}
+
+
+@app.route("/api/transport/wine-buy")
+def api_wine_buy_get():
+    try:
+        with open(WINE_BUY_SETTINGS_PATH) as f:
+            s = json.load(f)
+        for k, v in _DEFAULT_WINE_BUY_SETTINGS.items():
+            s.setdefault(k, v)
+    except (FileNotFoundError, json.JSONDecodeError):
+        s = dict(_DEFAULT_WINE_BUY_SETTINGS)
+    return jsonify(s)
+
+
+@app.route("/api/transport/wine-buy", methods=["POST"])
+def api_wine_buy_post():
+    data = request.get_json(silent=True) or {}
+    s = dict(_DEFAULT_WINE_BUY_SETTINGS)
+    s["enabled"]          = bool(data.get("enabled", False))
+    s["dryRun"]           = bool(data.get("dryRun", True))
+    s["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
+    s["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
+    s["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
+    s["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
+    s["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(WINE_BUY_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return jsonify({"status": "ok", "settings": s})
+
+
+@app.route("/api/transport/wine-buy/status")
+def api_wine_buy_status():
+    try:
+        with open(WINE_BUY_STATUS_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({})
+
+
+@app.route("/api/transport/wine-buy/preview", methods=["POST"])
+def api_wine_buy_preview():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(os.path.join(LOGS_DIR, ".force_wine_buy"), "w").close()
+    return jsonify({"ok": True, "message": "Preview de compra agendado (≤60s)."})
+
+
 @app.route("/api/military/refresh", methods=["POST"])
 def api_military_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)
