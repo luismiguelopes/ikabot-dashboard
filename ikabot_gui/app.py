@@ -1453,7 +1453,7 @@ def api_loot_stats():
 
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
-_DEFAULT_WINE_SETTINGS = {"enabled": False, "thresholdHours": 12, "targetHours": 48,
+_DEFAULT_WINE_SETTINGS = {"enabled": True, "thresholdHours": 12, "targetHours": 48,
                           "donorReserveHours": 96}
 
 

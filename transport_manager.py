@@ -40,7 +40,8 @@ _WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserv
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
 _DEFAULT_WINE_SETTINGS = {
-    "enabled":           False,
+    "enabled":           True,  # on by default: a wine-out costs population, so the safe
+                                # default is to balance. A saved setting still overrides this.
     "thresholdHours":    12,   # act when a city's wine runway drops below this
     "targetHours":       48,   # top the city up to this many hours of consumption
     "donorReserveHours": 96,   # non-producing city lends only what exceeds this runway
