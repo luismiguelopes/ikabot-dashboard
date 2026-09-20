@@ -1,8 +1,11 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
-Estado: **P0-P3 concluídos** (P0-P2 em 2026-06-11, P3 em 2026-06-12). Army e fleet
-dispatch validados in-game ✅; auto-attack e deploy para cidade própria por validar.
-Testes: 62/62 a passar (db, queue, attack_queue, espionage_parsers, military_parser).
+Estado (2026-09-20): **P0-P7 concluídos** + **P8 (vinho)** e **P9 (infra de arranque/
+imagem/sessão)**. Bot em produção no **ikabot 7.6.2** (pinado por digest), sessão
+persistente, self-healing e backups activos. **272 testes a passar.**
+Dívidas de validação in-game em aberto: deploy para cidade própria; reescrita do farm
+nunca correu supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar
+itens antigos que o referem.
 
 ---
 
@@ -308,10 +311,90 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
 
 ## P7 — Bugs conhecidos por corrigir (2026-07-17)
 
-- [ ] **P7.1 Timeout de SPYING cego ao downtime.** O timeout de 6h dispara mesmo com a
-      missão viva (WAITING/EXECUTING) — visto com Polis: bot desligado 50h, missão
-      executou 18:12:28 e o farm desistiu 18:12:45 deitando fora o relatório. Verificar
-      o estado da missão antes de desistir.
-- [ ] **P7.2 SPYING encravado congela a fila do farm.** `has_due_farm` em SPYING só
-      acorda com relatório pronto e `next_farm_eta` devolve None → o timeout nunca corre
-      e a cabeça bloqueia os restantes alvos (Barra-Multy H 3 ficou 5 dias à espera).
+- [x] **P7.1 Timeout de SPYING cego ao downtime.** ✅ — o farm deixou de abortar uma
+      missão viva pelo relógio de parede: consulta `has_live_mission()` (espionage) antes
+      de desistir; o timeout naive de 6h passou a um backstop de **13h** acima do
+      auto-terminalizar da própria espionagem (12h/2h → FAILED). Já não deita relatórios fora.
+- [x] **P7.2 SPYING encravado congela a fila do farm.** ✅ — `_spy_is_stuck()` liberta a
+      cabeça SPYING quando não há missão viva (após uma folga de 12min) e `next_farm_eta`
+      deixou de devolver None em SPYING → a fila não bloqueia mais nos restantes alvos.
+
+> **Residual (aberto):** os timeouts do *lado da espionagem* (12h/2h) ainda são cegos ao
+> downtime — causam **re-espião**, não perda de relatório (o pior ficou resolvido acima).
+
+---
+
+## P8 — Estratégia de vinho (2026-09-19/20)
+
+O império não produz vinho (todas as cidades são de mármore), por isso o stock só desce.
+Resolvido em dois planos complementares.
+
+### P8.1 ✅ Balanceador de vinho (F9) — redistribui o que existe
+- `transport_manager.process_wine_balancer`: quando a autonomia cai abaixo de
+  `thresholdHours`, enche até `targetHours` — primeiro de produtoras
+  (`wineProductionPerHour > 0`), senão de consumidoras com folga (runway ≥ `donorReserveHours`).
+- **Correcções (2026-09-19):** (1) cidade vazia (consumo 0, produção 0, runway -1) já NÃO é
+  tratada como dadora — evitava-se roubar-lhe os últimos pingos; (2) gatilho por stock: as
+  vazias são abastecidas (estimadas pela mediana das irmãs), que o runway -1 escondia.
+  **Ligado por defeito.** `wine_settings.json` + `/api/transport/wine`.
+
+### P8.2 ✅ Comprador de mercado (F10) — repõe o que falta
+- `transport_manager.process_wine_buyer`: compra vinho das ofertas de outros jogadores
+  para manter o alvo por cidade; o balanceador espalha. Papéis separados: comprar vs distribuir.
+- **Travões (única função que gasta ouro):** `maxPricePerUnit`, `goldFloor`,
+  `maxSpendPerCycle`, `dryRun` — off + dry-run por defeito.
+- **Banda morta** (`refillBelowHours`): só compra quando uma cidade cai abaixo do mínimo e
+  enche até ao alvo de uma vez → lotes ocasionais, não compras constantes.
+- Cede sempre barcos ao farm (`apply_ship_reserve`); "Prever agora" via `.force_wine_buy`.
+  Reutiliza `buyResources`/`market`. `/api/transport/wine-buy[/status|/preview]`.
+  Validado live (dry-run e compra real). Testes: `tests/test_wine.py`, `tests/test_wine_buy.py`.
+
+---
+
+## P9 — Infra de arranque, imagem e sessão (2026-09-09 → 2026-09-20)
+
+- **P9.1 ✅ Arranque determinístico (`bot_launcher.py`).** Substituiu a navegação por números
+  de menu (`21 7 1 …`), que partia a cada reordenação de menus do upstream. Login via
+  `Session()`, lança `empireFunction` por referência, entrega o menu no PID1 (`docker attach`).
+- **P9.2 ✅ Patches cirúrgicos.** Fim do shadowing de `planRoutes.py`/`loadCustomModule.py`
+  (congelavam e partiam com updates — ex.: 7.6.0 acrescentou `splitCargoBetweenFleets`). O
+  launcher injecta em runtime só as funções alteradas (`planroutes_overrides.py`,
+  `loadcustommodule_overrides.py`). Adições do upstream já não partem.
+- **P9.3 ✅ Imagem pinada por digest (stable/beta).** Stable actual **7.6.2** (`22310e03…`);
+  `:latest` é beta (diff stock → check imports offline → 1 arranque live → promover).
+  Histórico: 7.5.1 → 7.6.0 → 7.6.1 → 7.6.2.
+- **P9.4 ✅ Sessão persistente (volume `ikabot_home` em `~/.ikabot`).** Sobrevive a
+  `force-recreate`/promoção → deploys reutilizam a sessão (menos logins, menos dependência
+  do serviço externo do blackbox).
+- **P9.5 ✅ Recuperação de login.** Com o blackbox externo em baixo: semear cookies do
+  browser (`gf-token-production` + `ikariam`/`PHPSESSID`) em `~/.ikabot/users/<email>.json`.
+
+---
+
+## Backlog / próximos passos (auditoria 2026-09-20)
+
+Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também o roadmap partilhável.
+
+### Segurança
+- [ ] **B1 Autenticação no dashboard (era P6.9).** 21 rotas de acção abertas na LAN/Tailscale.
+      **Risco nº1** com acesso externo. Token partilhado ou basic auth no Flask + proxy Vite.
+
+### Fechar a feature de vinho
+- [ ] **B2 Modo crítico do comprador.** Furar a reserva do farm só quando uma cidade está a
+      zero (hoje cede sempre → "sem navios livres" bloqueia a compra com o farm activo).
+- [ ] **B3 Aviso de coerência na UI** quando o alvo do comprador > reserva de dador (empoça).
+- [ ] **B4 Auto-preview ao Guardar** no comprador.
+
+### Funcionalidades
+- [ ] **B5 Generalizar o comprador a outros recursos** (mármore/cristal/enxofre).
+- [ ] **B6 Vista unificada "estratégia de vinho"** (runway, produção vs consumo, histórico de compras/ouro).
+
+### Residuais / manutenção
+- [ ] **B7 Timeouts da espionagem downtime-aware** (residual do P7 — causa re-espião).
+- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas).
+- [ ] **B9 `conftest.py`/`pytest.ini`** para fixar o path dos testes.
+- [ ] **B10 Split do chunk do frontend** (Vite: 653KB num só ficheiro).
+
+### Dívidas de validação in-game
+- [ ] Deploy para cidade própria (DispatchTab → destino "própria" → deployArmy type=10).
+- [ ] Reescrita do farm supervisionada live.
