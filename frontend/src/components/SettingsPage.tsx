@@ -4,6 +4,7 @@ import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
 import { ALERT_DEFAULTS, MATERIALS } from '../constants'
 import { PageHeader } from './ui/PageHeader'
 import { Card } from './ui/Card'
+import { LogoutButton } from './AuthGate'
 import type { AlertThresholds, OwnCity } from '../types'
 
 const SPY_ORIGIN_KEY = 'spy_default_origin_city'
@@ -731,6 +732,12 @@ export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, default
       {tab === 'construcao'   && <ConstrucaoTab />}
       {tab === 'espionagem'   && <EspionagemTab />}
       {tab === 'notificacoes' && <NotificacoesTab notifEnabled={notifEnabled} onToggleNotif={handleToggleNotif} />}
+
+      {tab === 'geral' && (
+        <div className="mt-4">
+          <LogoutButton />
+        </div>
+      )}
     </div>
   )
 }

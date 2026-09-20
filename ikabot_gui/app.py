@@ -1,7 +1,10 @@
 from flask import (Flask, render_template, jsonify, request, Response,
-                   send_from_directory, stream_with_context)
+                   send_from_directory, stream_with_context, session)
+from datetime import timedelta
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import sys
 import time
@@ -156,6 +159,84 @@ def load_all_data():
 
 # P6.11: Flask serves the production React build (./frontend/dist mounted at /gui/dist),
 # replacing the permanent Vite dev-server container. Explicit /api routes always win over
+# ── Dashboard authentication (B1) ─────────────────────────────────────────────
+# Opt-in: set DASHBOARD_PASSWORD in .env to require a login for every action route.
+# With no password set, the dashboard stays open (and logs a warning), so nobody is
+# accidentally locked out. Only /api/* is gated — the SPA shell carries no data.
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
+AUTH_ENABLED = bool(DASHBOARD_PASSWORD)
+_SECRET_PATH = os.path.join(LOGS_DIR, ".dashboard_secret")
+
+
+def _load_dashboard_secret():
+    """Stable signing key so logins survive restarts: env first, else a persisted random."""
+    env = os.getenv("DASHBOARD_SECRET", "").strip()
+    if env:
+        return env
+    try:
+        with open(_SECRET_PATH) as f:
+            s = f.read().strip()
+        if s:
+            return s
+    except (FileNotFoundError, OSError):
+        pass
+    s = secrets.token_hex(32)
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        with open(_SECRET_PATH, "w") as f:
+            f.write(s)
+        os.chmod(_SECRET_PATH, 0o600)
+    except OSError:
+        pass
+    return s
+
+
+app.secret_key = _load_dashboard_secret()
+app.permanent_session_lifetime = timedelta(days=30)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+if not AUTH_ENABLED:
+    print("[gui] AVISO: dashboard SEM autenticação — define DASHBOARD_PASSWORD no .env "
+          "para exigir login nas acções.", flush=True)
+
+_AUTH_OPEN_PATHS = {"/api/login", "/api/logout", "/api/auth-status"}
+
+
+@app.before_request
+def _auth_gate():
+    if not AUTH_ENABLED:
+        return
+    p = request.path
+    if not p.startswith("/api/") or p in _AUTH_OPEN_PATHS:
+        return
+    if not session.get("auth"):
+        return jsonify({"error": "auth_required"}), 401
+
+
+@app.route("/api/auth-status")
+def api_auth_status():
+    return jsonify({"enabled": AUTH_ENABLED,
+                    "authed": (not AUTH_ENABLED) or bool(session.get("auth"))})
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    if not AUTH_ENABLED:
+        return jsonify({"ok": True, "enabled": False})
+    data = request.get_json(silent=True) or {}
+    if hmac.compare_digest(str(data.get("password", "")), DASHBOARD_PASSWORD):
+        session["auth"] = True
+        session.permanent = True
+        return jsonify({"ok": True})
+    time.sleep(0.6)  # slow down brute force
+    return jsonify({"ok": False, "error": "wrong_password"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
 # the catch-all; unknown paths fall back to index.html (SPA routing).
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 

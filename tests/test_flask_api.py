@@ -208,3 +208,32 @@ def test_farm_readd_keeps_measured_stats(monkeypatch, tmp_path):
     t = db_manager.farm_get("900")
     assert t["last_loot"] == 777777
     assert t["last_troop_journey"] == 1234
+
+
+# ── Dashboard authentication (B1) ─────────────────────────────────────────────
+def test_auth_disabled_is_open(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "AUTH_ENABLED", False)
+    assert c.get("/api/auth-status").get_json() == {"enabled": False, "authed": True}
+    assert c.get("/api/transport/wine").status_code == 200   # reachable without login
+
+
+def test_auth_required_blocks_without_login(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "AUTH_ENABLED", True)
+    monkeypatch.setattr(flask_app, "DASHBOARD_PASSWORD", "s3cret")
+    assert c.get("/api/transport/wine").status_code == 401
+    assert c.get("/api/auth-status").get_json() == {"enabled": True, "authed": False}
+
+
+def test_login_logout_flow(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "AUTH_ENABLED", True)
+    monkeypatch.setattr(flask_app, "DASHBOARD_PASSWORD", "s3cret")
+    assert c.post("/api/login", json={"password": "nope"}).status_code == 401
+    assert c.get("/api/transport/wine").status_code == 401
+    assert c.post("/api/login", json={"password": "s3cret"}).status_code == 200
+    assert c.get("/api/auth-status").get_json()["authed"] is True
+    assert c.get("/api/transport/wine").status_code == 200     # session carried
+    assert c.post("/api/logout").status_code == 200
+    assert c.get("/api/transport/wine").status_code == 401
