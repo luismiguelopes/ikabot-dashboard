@@ -43,6 +43,7 @@ interface WineBuySettings {
   dryRun:           boolean
   targetHours:      number
   refillBelowHours: number
+  criticalHours:    number
   maxPricePerUnit:  number
   goldFloor:        number
   maxSpendPerCycle: number
@@ -155,6 +156,7 @@ export function TransportTab() {
       const json = await res.json()
       if (json.settings) setWineBuy(json.settings)
       setWineBuySaved(true)
+      handlePreviewWineBuy()   // B4: refresh the plan against the new settings
     } catch { /* ignore */ } finally {
       setWineBuySaving(false)
     }
@@ -676,7 +678,7 @@ export function TransportTab() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-w-2xl">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_target')}</label>
                   <input type="number" min={1} max={336} value={wineBuy.targetHours}
@@ -688,6 +690,13 @@ export function TransportTab() {
                   <input type="number" min={1} max={wineBuy.targetHours}
                     value={Math.min(wineBuy.refillBelowHours ?? 48, wineBuy.targetHours)}
                     onChange={e => setWineBuy({ ...wineBuy, refillBelowHours: Math.max(1, Math.min(wineBuy.targetHours, Number(e.target.value))) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_critical')}</label>
+                  <input type="number" min={1} max={wineBuy.refillBelowHours ?? 48}
+                    value={Math.min(wineBuy.criticalHours ?? 6, wineBuy.refillBelowHours ?? 48)}
+                    onChange={e => setWineBuy({ ...wineBuy, criticalHours: Math.max(1, Math.min(wineBuy.refillBelowHours ?? 48, Number(e.target.value))) })}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                 </div>
                 <div>
@@ -709,6 +718,24 @@ export function TransportTab() {
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                 </div>
               </div>
+
+              {/* B3: coherence warnings vs the balancer */}
+              {wineBuy.enabled && (() => {
+                const warns: string[] = []
+                if (wine && !wine.enabled) warns.push(t('winebuy_warn_balancer'))
+                const donor = wine?.donorReserveHours ?? 96
+                if (wine && wine.enabled && wineBuy.targetHours > donor)
+                  warns.push(`${t('winebuy_warn_target')} (${wineBuy.targetHours}h > ${donor}h)`)
+                return warns.length ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 space-y-1">
+                    {warns.map((w, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <i className="fa-solid fa-triangle-exclamation mt-0.5 text-amber-500" /><span>{w}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null
+              })()}
 
               {/* Preview / last run */}
               {wineBuyStatus && (

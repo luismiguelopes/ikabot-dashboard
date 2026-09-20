@@ -575,6 +575,8 @@ _DEFAULT_WINE_BUY_SETTINGS = {
     "refillBelowHours": 48,      # deadband: only start buying once a city drops below this,
                                  # then fill to targetHours in one batch (=targetHours -> no
                                  # deadband, tops up every cycle). Avoids constant tiny buys.
+    "criticalHours":    6,       # a city below this many hours is a wine emergency: the buyer
+                                 # then bypasses the farm ship reserve (like the balancer).
     "maxPricePerUnit":  15,      # never buy above this gold/unit (offers are player-priced)
     "goldFloor":        100000,  # never let gold drop below this
     "maxSpendPerCycle": 200000,  # cap gold spent per run
@@ -598,6 +600,7 @@ def save_wine_buy_settings(data):
     settings["dryRun"]           = bool(data.get("dryRun", True))
     settings["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
     settings["refillBelowHours"] = max(1, min(settings["targetHours"], int(data.get("refillBelowHours", 48))))
+    settings["criticalHours"]    = max(1, min(settings["refillBelowHours"], int(data.get("criticalHours", 6))))
     settings["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
     settings["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
     settings["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
@@ -618,6 +621,7 @@ def _wine_buy_deficit(resources, own, settings):
     # instead of topping every city up to target every single cycle.
     refill_below = int(settings.get("refillBelowHours", target_h))
     refill_below = max(1, min(target_h, refill_below))
+    crit_h = max(1, min(refill_below, int(settings.get("criticalHours", 6))))
     ignored_ids = {str(c) for c in settings.get("ignoreCityIds", [])}
     ignored_names = {name for name, c in own.items()
                      if str(c.get("cityId")) in ignored_ids}
@@ -626,7 +630,7 @@ def _wine_buy_deficit(resources, own, settings):
                     if int(d.get("wineConsumptionPerHour", 0) or 0) > 0)
     median = active[len(active) // 2] if active else 0
 
-    total, detail = 0, []
+    total, detail, critical = 0, [], False
     for name, d in resources.items():
         if name in ignored_names:
             continue
@@ -638,12 +642,14 @@ def _wine_buy_deficit(resources, own, settings):
             continue
         if stock >= eff_cons * refill_below:
             continue  # still inside the deadband — leave it alone
+        if stock < eff_cons * crit_h:
+            critical = True  # wine emergency -> allowed to bypass the farm ship reserve
         need = max(0, eff_cons * target_h - stock)
         if need > 0:
             total += need
             detail.append((name, need))
     detail.sort(key=lambda x: -x[1])
-    return total, detail
+    return total, detail, critical
 
 
 def _write_wine_buy_status(status):
@@ -696,7 +702,7 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
     except (FileNotFoundError, json.JSONDecodeError):
         return
 
-    deficit, detail = _wine_buy_deficit(resources, own, settings)
+    deficit, detail, critical = _wine_buy_deficit(resources, own, settings)
     dry = True if force_preview else bool(settings.get("dryRun", True))
     if deficit <= 0:
         _write_wine_buy_status({"dryRun": dry, "deficit": 0, "bought": 0, "spent": 0,
@@ -734,12 +740,17 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
         return
     if ship_cap <= 0:
         return
-    # Yield trade ships to the farm — the buyer is a background top-up, never urgent.
-    try:
-        from farm_manager import apply_ship_reserve
-        ships = apply_ship_reserve(ships, "wine-buy")
-    except Exception:
-        pass
+    # Yield trade ships to the farm — the buyer is a background top-up. EXCEPT when a
+    # city is in a wine emergency (below criticalHours): then it may use the reserved
+    # ships too, since a wine-out costs population (same stance as the balancer).
+    if critical:
+        logger.info("[wine-buy] ruptura crítica de vinho — a usar também os navios reservados ao farm")
+    else:
+        try:
+            from farm_manager import apply_ship_reserve
+            ships = apply_ship_reserve(ships, "wine-buy")
+        except Exception:
+            pass
     if not dry and ships <= 0:
         logger.info("[wine-buy] sem navios livres (reservados p/ farm) — a saltar")
         _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
@@ -810,6 +821,6 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
     _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": bought,
                             "spent": spent, "avgPrice": avg, "cheapest": cheapest,
                             "gold": gold, "goldFloor": gold_floor, "note": note,
-                            "buys": buys[:20], "topCities": detail[:8]})
+                            "critical": critical, "buys": buys[:20], "topCities": detail[:8]})
     logger.info("[wine-buy] %s: %d vinho por %d ouro (défice %d, preço médio %s)",
                 "dry-run" if dry else "comprado", bought, spent, deficit, avg)

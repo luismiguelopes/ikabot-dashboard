@@ -22,7 +22,7 @@ def _offer(seller, city, amount, price):
             "position": "0", "type": "1", "resource": "1"}
 
 
-def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, ships=100):
+def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, ships=100, reserve_all=False):
     import queue_processor as qp
     import farm_manager as fm
     import empire_utils
@@ -49,15 +49,17 @@ def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, shi
     monkeypatch.setattr(tm, "WINE_BUY_STATUS_PATH", str(tmp_path / "status.json"))
 
     st = {"enabled": True, "dryRun": False, "targetHours": 72, "refillBelowHours": 48,
-          "maxPricePerUnit": 15, "goldFloor": 100000, "maxSpendPerCycle": 200000,
-          "ignoreCityIds": []}
+          "criticalHours": 6, "maxPricePerUnit": 15, "goldFloor": 100000,
+          "maxSpendPerCycle": 200000, "ignoreCityIds": []}
     st.update(settings or {})
     monkeypatch.setattr(tm, "get_wine_buy_settings", lambda: st)
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
     monkeypatch.setattr(qp, "_load_resources_json", lambda: resources)
     monkeypatch.setattr(pedir, "getShipCapacity", lambda s: (500, 2500), raising=False)
     monkeypatch.setattr(naval, "getAvailableShips", lambda s: ships, raising=False)
-    monkeypatch.setattr(fm, "apply_ship_reserve", lambda n, label, now=None: n)
+    # reserve_all: the farm reserves every trade ship (returns 0 to logistics)
+    monkeypatch.setattr(fm, "apply_ship_reserve",
+                        lambda n, label, now=None: (0 if reserve_all else n))
     monkeypatch.setattr(tm, "_set_market_resource", lambda s, c, r: None)
     monkeypatch.setattr(tm.time, "sleep", lambda *a, **k: None)
 
@@ -142,3 +144,25 @@ def test_deadband_refills_to_target_when_below_low_water(monkeypatch, tmp_path):
                          {"dryRun": False, "targetHours": 72, "refillBelowHours": 48})
     assert status["bought"] == 300 * (72 - 40)       # 9600
     assert len(calls) == 1 and calls[0] == (8, 9600)
+
+
+def test_noncritical_yields_ships_to_farm(monkeypatch, tmp_path):
+    """Not critical (30h left, above criticalHours 6): with the farm holding every ship,
+    the buyer yields and buys nothing this cycle."""
+    resources = {"A": _city(300, 300 * 30)}          # 30h: below refill 48, above critical 6
+    offers = [_offer("Seller", "A", 50000, 8)]
+    calls, status = _run(monkeypatch, tmp_path, resources, offers,
+                         {"dryRun": False}, reserve_all=True)
+    assert calls == [] and status["bought"] == 0
+    assert "navios" in status["note"]
+
+
+def test_critical_bypasses_ship_reserve(monkeypatch, tmp_path):
+    """Critical (3h left, below criticalHours 6): the buyer uses the reserved ships too."""
+    resources = {"A": _city(300, 300 * 3)}           # 3h < critical 6 -> emergency
+    offers = [_offer("Seller", "A", 50000, 8)]
+    calls, status = _run(monkeypatch, tmp_path, resources, offers,
+                         {"dryRun": False}, reserve_all=True)
+    assert status["critical"] is True
+    assert status["bought"] == 300 * 72 - 300 * 3    # filled to target despite the reserve
+    assert len(calls) == 1
