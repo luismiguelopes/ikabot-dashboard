@@ -571,7 +571,10 @@ WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
 _DEFAULT_WINE_BUY_SETTINGS = {
     "enabled":          False,   # opt-in: this is the only feature that spends gold
     "dryRun":           True,    # start safe: log the plan, buy nothing
-    "targetHours":      72,      # keep this many hours of wine per city (empire target)
+    "targetHours":      72,      # fill a city up to this many hours of wine
+    "refillBelowHours": 48,      # deadband: only start buying once a city drops below this,
+                                 # then fill to targetHours in one batch (=targetHours -> no
+                                 # deadband, tops up every cycle). Avoids constant tiny buys.
     "maxPricePerUnit":  15,      # never buy above this gold/unit (offers are player-priced)
     "goldFloor":        100000,  # never let gold drop below this
     "maxSpendPerCycle": 200000,  # cap gold spent per run
@@ -594,6 +597,7 @@ def save_wine_buy_settings(data):
     settings["enabled"]          = bool(data.get("enabled", False))
     settings["dryRun"]           = bool(data.get("dryRun", True))
     settings["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
+    settings["refillBelowHours"] = max(1, min(settings["targetHours"], int(data.get("refillBelowHours", 48))))
     settings["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
     settings["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
     settings["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
@@ -609,6 +613,11 @@ def _wine_buy_deficit(resources, own, settings):
     of targetHours of consumption. Emptied cities (live consumption 0) are sized from
     the sister cities' median consumption, exactly like the balancer."""
     target_h = int(settings["targetHours"])
+    # Deadband low-water mark: a city is only bought for once it drops below refill_below
+    # hours of consumption, then filled to target_h — so we buy big batches occasionally
+    # instead of topping every city up to target every single cycle.
+    refill_below = int(settings.get("refillBelowHours", target_h))
+    refill_below = max(1, min(target_h, refill_below))
     ignored_ids = {str(c) for c in settings.get("ignoreCityIds", [])}
     ignored_names = {name for name, c in own.items()
                      if str(c.get("cityId")) in ignored_ids}
@@ -627,6 +636,8 @@ def _wine_buy_deficit(resources, own, settings):
         eff_cons = cons if cons > 0 else (median if prod == 0 else 0)
         if eff_cons <= 0:
             continue
+        if stock >= eff_cons * refill_below:
+            continue  # still inside the deadband — leave it alone
         need = max(0, eff_cons * target_h - stock)
         if need > 0:
             total += need

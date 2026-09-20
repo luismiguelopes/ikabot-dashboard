@@ -1487,8 +1487,9 @@ def api_wine_post():
 WINE_BUY_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_buy_settings.json")
 WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
 _DEFAULT_WINE_BUY_SETTINGS = {"enabled": False, "dryRun": True, "targetHours": 72,
-                              "maxPricePerUnit": 15, "goldFloor": 100000,
-                              "maxSpendPerCycle": 200000, "ignoreCityIds": []}
+                              "refillBelowHours": 48, "maxPricePerUnit": 15,
+                              "goldFloor": 100000, "maxSpendPerCycle": 200000,
+                              "ignoreCityIds": []}
 
 
 @app.route("/api/transport/wine-buy")
@@ -1510,6 +1511,7 @@ def api_wine_buy_post():
     s["enabled"]          = bool(data.get("enabled", False))
     s["dryRun"]           = bool(data.get("dryRun", True))
     s["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
+    s["refillBelowHours"] = max(1, min(s["targetHours"], int(data.get("refillBelowHours", 48))))
     s["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
     s["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
     s["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))

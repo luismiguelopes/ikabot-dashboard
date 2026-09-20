@@ -42,6 +42,7 @@ interface WineBuySettings {
   enabled:          boolean
   dryRun:           boolean
   targetHours:      number
+  refillBelowHours: number
   maxPricePerUnit:  number
   goldFloor:        number
   maxSpendPerCycle: number
@@ -675,11 +676,18 @@ export function TransportTab() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_target')}</label>
                   <input type="number" min={1} max={336} value={wineBuy.targetHours}
                     onChange={e => setWineBuy({ ...wineBuy, targetHours: Math.max(1, Number(e.target.value)) })}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{t('winebuy_refill')}</label>
+                  <input type="number" min={1} max={wineBuy.targetHours}
+                    value={Math.min(wineBuy.refillBelowHours ?? 48, wineBuy.targetHours)}
+                    onChange={e => setWineBuy({ ...wineBuy, refillBelowHours: Math.max(1, Math.min(wineBuy.targetHours, Number(e.target.value))) })}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                 </div>
                 <div>

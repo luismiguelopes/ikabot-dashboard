@@ -48,8 +48,9 @@ def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, shi
     monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(own_path))
     monkeypatch.setattr(tm, "WINE_BUY_STATUS_PATH", str(tmp_path / "status.json"))
 
-    st = {"enabled": True, "dryRun": False, "targetHours": 72, "maxPricePerUnit": 15,
-          "goldFloor": 100000, "maxSpendPerCycle": 200000, "ignoreCityIds": []}
+    st = {"enabled": True, "dryRun": False, "targetHours": 72, "refillBelowHours": 48,
+          "maxPricePerUnit": 15, "goldFloor": 100000, "maxSpendPerCycle": 200000,
+          "ignoreCityIds": []}
     st.update(settings or {})
     monkeypatch.setattr(tm, "get_wine_buy_settings", lambda: st)
     monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
@@ -120,3 +121,24 @@ def test_no_deficit_is_a_noop(monkeypatch, tmp_path):
     offers = [_offer("Seller", "A", 50000, 8)]
     calls, status = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False})
     assert calls == [] and status["bought"] == 0 and status["deficit"] == 0
+
+
+def test_deadband_skips_city_above_low_water(monkeypatch, tmp_path):
+    """Inside the deadband (stock >= refillBelowHours of consumption): buy nothing,
+    even though the city is below the fill target — avoids constant tiny top-ups."""
+    resources = {"A": _city(300, 300 * 50)}          # 50h; below target 72 but above refill 48
+    offers = [_offer("Seller", "A", 50000, 8)]
+    calls, status = _run(monkeypatch, tmp_path, resources, offers,
+                         {"dryRun": False, "targetHours": 72, "refillBelowHours": 48})
+    assert calls == [] and status["bought"] == 0 and status["deficit"] == 0
+
+
+def test_deadband_refills_to_target_when_below_low_water(monkeypatch, tmp_path):
+    """Once below the low-water mark, buy a full batch up to the target (not just back
+    to the low-water mark)."""
+    resources = {"A": _city(300, 300 * 40)}          # 40h < refill 48 -> buy up to 72h
+    offers = [_offer("Seller", "A", 50000, 8)]
+    calls, status = _run(monkeypatch, tmp_path, resources, offers,
+                         {"dryRun": False, "targetHours": 72, "refillBelowHours": 48})
+    assert status["bought"] == 300 * (72 - 40)       # 9600
+    assert len(calls) == 1 and calls[0] == (8, 9600)
