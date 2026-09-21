@@ -228,6 +228,37 @@ def _recent_return_loot(t):
     return None
 
 
+def _returned_since_scout(t):
+    """Total loot brought home since the last scout (last_spy_at). Raids only happen after a
+    scout's report, so this is exactly what we've drained from the scouted warehouse."""
+    since = int(t.get("last_spy_at", 0) or 0)
+    if since <= 0:
+        return 0
+    name = str(t.get("target_city_name", "") or "")
+    total = 0
+    try:
+        from db_manager import get_loot_log
+        for row in get_loot_log(limit=30, target=name):
+            if int(row.get("ts", 0) or 0) < since:
+                continue
+            if name and name.lower() not in str(row.get("from_city", "")).lower():
+                continue
+            total += sum(int(row.get(k, 0) or 0)
+                         for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+    except Exception:
+        return 0
+    return total
+
+
+def _estimated_warehouse(t):
+    """How much loot is likely in the target RIGHT NOW: the scouted warehouse minus what we've
+    already brought home since that scout. Ignores regeneration, so it's conservative — it may
+    re-scout a touch early, which is far cheaper than sending the whole army round-trip for the
+    scraps of an already-drained target (F1). Falls back to the scouted value if unknown."""
+    scouted = int(t.get("last_loot", 0) or 0)
+    return max(0, scouted - _returned_since_scout(t))
+
+
 # ── Ship reservation ───────────────────────────────────────────────────────────
 # Trade ships ("transporters") are the SAME pool used to pillage and to move resources
 # between own cities. Internal logistics (consolidation, wine top-ups, construction
@@ -795,34 +826,35 @@ def process_farm_targets(session, in_active_hours=True):
             first_scout = int(t.get("last_spy_at", 0)) == 0
 
             # ── Direct raid on a safe target (no scout) ─────────────────────
-            # Gate also on the ACTUAL loot the last raid brought home: last_loot is the stale
-            # scouted warehouse total, so without this the bot keeps hammering a target it has
-            # already drained (e.g. troops came back with 5k while last_loot still reads 268k)
-            # until the periodic re-spy. A real return below min_loot → re-spy now to confirm
-            # drainage (the SPYING branch then disables it) instead of attacking on old intel.
+            # A target counts as DRAINED (→ re-scout, don't raid on stale intel) when EITHER
+            # signal says so: (a) the ESTIMATED warehouse — scouted last_loot minus loot already
+            # brought home since that scout — has dropped below min_loot (cumulative drainage,
+            # catches the wasteful LAST raid one step early); or (b) the last real return was
+            # itself below min_loot (troops carry min(warehouse, capacity), so a tiny return
+            # proves the warehouse is near-empty NOW even if the scout still reads 268k). Both
+            # are needed: the estimate misses a suddenly-small warehouse, the last return misses
+            # a steady drain that hasn't dipped below the bar yet. Together they stop the bot
+            # sending the whole army round-trip for scraps (F1 / the 5k-return-vs-268k-scout bug).
+            est = _estimated_warehouse(t)
+            recent = _recent_return_loot(t)
+            drained = est < min_loot or (recent is not None and recent < min_loot)
             if (not first_scout and not _next_round_needs_spy(t)
                     and int(t.get("is_fleet_target", 0)) == 0
-                    and int(t.get("last_loot", 0)) >= min_loot):
-                recent = _recent_return_loot(t)
-                confirmed = None
-                if recent is not None and recent < min_loot:
-                    logger.info("[farm] %s: último saque real %d < %d (drenado) — a re-espiar "
-                                "para confirmar em vez de atacar com intel antiga", name, recent, min_loot)
-                else:
-                    # Live inactivity check at the coordinates immediately before the raid
-                    # (user rule): False → target gone; None → scout instead of blind attack.
-                    confirmed = _confirm_inactive(session, t)
-                    if confirmed is False:
-                        _disable_active_target(t)
-                        continue
-                    if confirmed == "vacation":
-                        _skip_vacation_target(t)
-                        continue
-                    if confirmed is None:
-                        logger.info("[farm] %s: inactividade não confirmada em tempo real — "
-                                    "a re-espiar antes de atacar", name)
+                    and not drained):
+                # Live inactivity check at the coordinates immediately before the raid
+                # (user rule): False → target gone; None → scout instead of blind attack.
+                confirmed = _confirm_inactive(session, t)
+                if confirmed is False:
+                    _disable_active_target(t)
+                    continue
+                if confirmed == "vacation":
+                    _skip_vacation_target(t)
+                    continue
+                if confirmed is None:
+                    logger.info("[farm] %s: inactividade não confirmada em tempo real — "
+                                "a re-espiar antes de atacar", name)
                 if confirmed is True:
-                    res = _enqueue_attack(t, int(t.get("last_loot", 0)), 0)
+                    res = _enqueue_attack(t, est, 0)   # size troops to the realistic remaining loot
                     if res:
                         farm_update(tid, {
                             "state": "ATTACKING", "attack_return_at": res["return_at"],
@@ -832,7 +864,7 @@ def process_farm_targets(session, in_active_hours=True):
                             "enemy_return_at": res["enemy_return_at"],
                             "last_troop_journey": res["troop_journey"],
                         })
-                        logger.info("⚔️ [farm] %s: ataque directo (alvo seguro, sem re-espionagem)", name)
+                        logger.info("⚔️ [farm] %s: ataque directo (~%d estimado, sem re-espionagem)", name, est)
                         continue
                     # Origin has no free troops/ships right now (still returning) — retry when
                     # they land, don't burn a scout.
@@ -841,6 +873,16 @@ def process_farm_targets(session, in_active_hours=True):
                     logger.info("[farm] %s: sem tropas/navios livres na origem — nova tentativa ~%dmin",
                                 name, max(0, (eta - now) // 60))
                     continue
+            elif (not first_scout and not _next_round_needs_spy(t)
+                    and int(t.get("is_fleet_target", 0)) == 0
+                    and int(t.get("last_loot", 0)) >= min_loot and drained):
+                # Scouted loot still looks rich but the target is drained — re-scout instead of
+                # sending a raid that would scrape the bottom (F1).
+                reason = ("último regresso real %d" % recent
+                          if recent is not None and recent < min_loot
+                          else "armazém estimado %d" % est)
+                logger.info("[farm] %s: %s < %d (drenado) — a re-espiar em vez de atacar "
+                            "a última vaga por migalhas", name, reason, min_loot)
 
             # ── Periodic / first scout ──────────────────────────────────────
             # First contact and fleet targets need the full garrison; a safe target's periodic

@@ -938,3 +938,27 @@ def test_attack_queue_vacation_fails_fast(monkeypatch, tmp_path):
     assert removed == ["i1"]                              # removed on 1st failure
     t = db_manager.farm_get("38319")
     assert t["state"] == "IDLE" and t["next_run_at"] >= now + 23 * 3600
+
+
+def test_drained_by_estimate_respies_even_if_last_return_healthy(monkeypatch, tmp_path):
+    """F1 cumulative path: the last raid still returned >= min_loot, but we've already taken
+    most of the scouted warehouse, so the ESTIMATE is below the bar → re-spy, not one more
+    wasteful raid (this is what the last-return-only check missed)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
+                         "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 5})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 0, "last_attack_at": now - 100})
+    # four healthy returns since the scout summing to 260k → est = 8k (< 50k); newest is 60k (healthy)
+    for i, amt in enumerate([70000, 70000, 60000, 60000]):
+        db_manager.log_loot({"ts": now - 40 + i, "fromCity": "Pais da Grama", "fromPlayer": "P",
+                             "toCity": "Baphomet", "resources": [amt, 0, 0, 0, 0], "returnKey": "k%d" % i})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]      # re-spied, did NOT attack directly
+    assert db_manager.farm_get("100")["state"] == "SPYING"
