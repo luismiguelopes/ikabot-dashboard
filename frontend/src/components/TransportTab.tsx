@@ -5,6 +5,7 @@ import { useLiveClock } from '../hooks/useLiveClock'
 import { MATERIALS } from '../constants'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
+import { WinePanorama } from './WinePanorama'
 import type { OwnCity } from '../types'
 
 interface PendingTransport {
@@ -569,6 +570,9 @@ export function TransportTab() {
           </div>
         </Card>
       </div>
+
+      {/* ── Wine panorama (B6) ────────────────────────────────────────────── */}
+      <WinePanorama resourcesData={resourcesData} wine={wine} buyStatus={wineBuyStatus} />
 
       {/* ── Wine balancer (F9) ────────────────────────────────────────────── */}
       <Card className="mb-4">
