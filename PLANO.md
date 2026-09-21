@@ -395,10 +395,24 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
 - [x] **B6 Vista unificada "estratégia de vinho".** ✅ — card "Vinho num relance" (runway por
       cidade vs thresholds, totais do império, estado do comprador).
 
+### Farm
+- [ ] **F1 Última vaga de cada alvo raspa o fundo (loot desperdiçado).** O farm martela o alvo
+      com base no `last_loot` **escotado (stale)** e só pára **depois** de um regresso real ficar
+      abaixo de `min_loot` (a lógica de re-espia em `farm_manager.py:806` actua *depois* da vaga
+      desperdiçada). Resultado: a última vaga de cada sequência traz quase sempre <50k, às vezes
+      ~1000 — uma ida-e-volta do exército inteiro por migalhas. **Fix:** estimar a drenagem pelos
+      regressos reais (`_recent_return_loot` / soma dos regressos desde a última escota) e
+      re-espiar/pausar **antes** de enviar uma vaga cujo loot previsto < `min_loot`. Reportado pelo
+      utilizador 2026-09-21.
+
 ### Residuais / manutenção
 - [x] **B7 Timeouts da espionagem downtime-aware.** ✅ — `record_startup_downtime()` +
       `active_elapsed()` (empire_utils) descontam o tempo offline; os 3 timeouts usam-no.
-- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas). *(por fazer — refactor, baixo valor)*
+- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas). *(inspeccionado 2026-09-21: os grupos
+      coesos — contagem de espiões, missões, relatórios — estão todos entrelaçados pelo mesmo store
+      de missões `_load_missions`/`_save_missions`, e o módulo é importado por 4 sítios. Um split
+      limpo e valioso não é seguro para um módulo crítico nunca validado live; ganho baixo. Recomendação:
+      **saltar** como o B5, ou só uma extracção mínima simbólica.)*
 - [x] **B9 `pytest.ini`** ✅ — `pythonpath = . ikabot` + `testpaths`; o comando documentado
       corre sozinho.
 - [x] **B10 Split do chunk do frontend** ✅ — `manualChunks` (react + chart.js); app 653→314KB.
