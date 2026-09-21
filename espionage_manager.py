@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 
-from empire_utils import LOGS_DIR, logger
+from empire_utils import LOGS_DIR, logger, active_elapsed
 from espionage_parsers import (
     _parse_safehouse_page, _parse_active_spy_missions, _parse_arrival_countdown,
     _parse_spy_session_id, _parse_reports_from_html, _parse_garrison_troops,
@@ -904,7 +904,7 @@ def check_spy_arrivals(session):
                         m["targetCityName"], spy_id,
                         max(0, (missions[i]["executeAfter"] - int(now)) // 60))
             changed = True
-        elif now - m.get("dispatchedAt", 0) > 43200:  # 12h no arrival → failed
+        elif active_elapsed(m.get("dispatchedAt", 0), now) > 43200:  # 12h active no arrival → failed (B7: discounts downtime)
             missions[i]["state"] = "FAILED"
             missions[i]["error"] = "Sem chegada detectada após 12h — possivelmente capturado"
             logger.warning("[espionage] %s: sem chegada após 12h → FAILED", m["targetCityName"])
@@ -1078,7 +1078,7 @@ def collect_mission_results(session):
             changed = True
             break
 
-        if not matched and now - m.get("executedAt", 0) > 7200:
+        if not matched and active_elapsed(m.get("executedAt", 0), now) > 7200:  # B7: discount downtime
             missions[i]["state"] = "FAILED"
             missions[i]["error"] = "Relatório não encontrado após 2h"
             logger.warning("[espionage] %s: relatório ausente após 2h → FAILED", m["targetCityName"])
@@ -1195,7 +1195,7 @@ def collect_garrison_results(session):
             changed = True
             break
 
-        if not matched and now - m.get("garrisonExecutedAt", 0) > 7200:
+        if not matched and active_elapsed(m.get("garrisonExecutedAt", 0), now) > 7200:  # B7: discount downtime
             missions[i]["state"] = "DONE"
             missions[i]["garrisonResult"] = {"error": "Relatório garrison não encontrado após 2h"}
             logger.warning("[espionage] %s: relatório garrison ausente após 2h → DONE com só armazém",

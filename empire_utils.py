@@ -65,6 +65,7 @@ def is_paused():
 QUEUE_JSON_PATH           = os.path.join(LOGS_DIR, "building_queue.json")
 QUEUE_SETTINGS_PATH       = os.path.join(LOGS_DIR, "queue_settings.json")
 LAST_ALIVE_JSON_PATH      = os.path.join(LOGS_DIR, "last_alive.json")
+DOWNTIME_WINDOWS_PATH     = os.path.join(LOGS_DIR, "downtime_windows.json")
 EMPIRE_SCAN_STATUS_PATH   = os.path.join(LOGS_DIR, "empire_scan_status.json")
 FORCE_EMPIRE_FLAG         = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG          = os.path.join(LOGS_DIR, ".force_queue_check")
@@ -632,3 +633,75 @@ def validate_configs():
         pass
     return warnings
 
+
+
+# ── Downtime-aware timeouts (B7) ──────────────────────────────────────────────
+# Espionage timeouts (12h no-arrival, 2h no-report) are wall-clock. If the bot was
+# offline for hours, that wall-clock elapsed without the bot doing anything, and a
+# still-live mission would be failed on resume (the Polis case). Record offline
+# windows and let timeouts discount the time the bot spent down.
+_DOWNTIME_MIN_GAP = 300            # ignore gaps under 5 min (normal cadence noise)
+_dt_cache = {"ts": 0.0, "windows": None}
+
+
+def _load_downtime_windows():
+    try:
+        with open(DOWNTIME_WINDOWS_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, OSError, ValueError):
+        return []
+
+
+def _get_downtime_windows():
+    """Cached read (≤60s) — active_elapsed is called per-mission in the espionage loop."""
+    now = time.time()
+    if _dt_cache["windows"] is None or now - _dt_cache["ts"] > 60:
+        _dt_cache["windows"] = _load_downtime_windows()
+        _dt_cache["ts"] = now
+    return _dt_cache["windows"]
+
+
+def record_startup_downtime():
+    """Call ONCE at bot startup, before the heartbeat overwrites last_alive.json. If the
+    previous run's last heartbeat is more than a few minutes old the bot was offline —
+    record that window so espionage timeouts can discount it."""
+    try:
+        with open(LAST_ALIVE_JSON_PATH) as f:
+            prev = int(json.load(f).get("lastAlive", 0))
+    except (FileNotFoundError, OSError, ValueError):
+        return
+    now = int(time.time())
+    if prev <= 0 or now - prev < _DOWNTIME_MIN_GAP:
+        return
+    windows = _load_downtime_windows()
+    windows.append({"start": prev, "end": now})
+    cutoff = now - 14 * 86400          # nothing older than any mission lifetime matters
+    windows = [w for w in windows if int(w.get("end", 0)) >= cutoff][-200:]
+    try:
+        with open(DOWNTIME_WINDOWS_PATH, "w") as f:
+            json.dump(windows, f)
+    except OSError:
+        pass
+    _dt_cache["windows"] = windows
+    _dt_cache["ts"] = time.time()
+    logger.info("[downtime] janela offline de %d min registada (timeouts vão descontá-la)",
+                (now - prev) // 60)
+
+
+def active_elapsed(since_ts, now=None):
+    """Wall-clock elapsed since `since_ts` MINUS the recorded downtime overlapping
+    [since_ts, now]. Use instead of `now - since_ts` for timeouts that must not fire on
+    time the bot spent offline."""
+    if now is None:
+        now = time.time()
+    since_ts = int(since_ts or 0)
+    if since_ts <= 0:
+        return now - since_ts
+    down = 0
+    for w in _get_downtime_windows():
+        lo = max(int(w.get("start", 0)), since_ts)
+        hi = min(int(w.get("end", 0)), now)
+        if hi > lo:
+            down += hi - lo
+    return (now - since_ts) - down

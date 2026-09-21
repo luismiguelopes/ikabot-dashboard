@@ -17,7 +17,7 @@ from empire_utils import (
     SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
     FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm, logger,
     health_guard, throttle_session, record_success, record_failure,
-    validate_configs, migrate_legacy_configs,
+    validate_configs, migrate_legacy_configs, record_startup_downtime,
 )
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
@@ -61,6 +61,13 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     try:
         from telegram_notifier import notify_started
         notify_started(1)
+    except Exception:
+        pass
+
+    # B7: record any offline gap now, before the heartbeat below overwrites last_alive.json,
+    # so espionage timeouts can discount time the bot spent down.
+    try:
+        record_startup_downtime()
     except Exception:
         pass
 
