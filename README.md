@@ -8,15 +8,29 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 
 | Container | Description |
 |---|---|
-| `ikabot` | Runs the ikabot automation bot with custom modules injected via volume mounts |
-| `ikabot-gui` | Flask REST API + SSE stream (internal port 5000) |
-| `frontend` | Vite dev server serving the React/TypeScript SPA on port 5001, proxying `/api/*` to `ikabot-gui` |
+| `ikabot` | Runs the ikabot automation bot with custom modules injected via volume mounts. Started deterministically by `bot_launcher.py` (no menu-number navigation); the interactive menu stays available over `docker attach`. |
+| `ikabot-gui` | Flask — serves the REST API + SSE stream **and** the production React build (`frontend/dist`) on host port **5001**. Optional password auth (set `DASHBOARD_PASSWORD` in `.env`). |
+| `ikabot-autoheal` | Watches the `ikabot` healthcheck and restarts it if the heartbeat goes stale. |
+
+> Since 2026-07 there is **no separate `frontend` container**: the Flask app serves the built SPA. Frontend changes require `cd frontend && npx vite build`. The bot image is **pinned by digest** (stable channel, currently ikabot 7.6.3) — `:latest` is treated as beta and promoted deliberately after validation.
+
+## Notable capabilities
+
+- **Empire dashboard** — per-city resources, buildings, movements, world scan, espionage, combat dispatch, calculators; alerts and thresholds stored server-side; pt/en.
+- **Farming (F4)** — per-target state machine (SQLite `farm_targets`), event-driven cadence tuned to real round-trip time, ship reserve, live inactivity confirmation before every action.
+- **Wine strategy** — the empire produces no wine, so:
+  - **Balancer (F9)** redistributes existing wine (and rescues emptied cities);
+  - **Market buyer (F10)** buys wine from other players' offers within hard guards — price ceiling, gold floor, per-cycle spend cap, a refill deadband, a dry-run, and a critical mode that borrows the farm's reserved ships in a wine emergency;
+  - a **"wine at a glance"** panorama shows per-city runway, empire totals and buyer status.
+- **Robustness** — surgical runtime patches (no shadowing of stock files), persistent login session on a volume, digest-pinned image with a stable/beta promotion flow, self-healing, daily SQLite backups, and downtime-aware espionage timeouts.
+- **Anti-detection** — randomised delays before/between game requests, active-hours gating (`SCAN_ACTIVE_HOURS` / `QUEUE_ACTIVE_HOURS`).
+- **Tests** — `pytest` (`pytest.ini` sets the paths); 284 passing as of 2026-09.
 
 ### How it works
 
 `empireFunction.py` runs as a background process inside the ikabot container. Every hour (configurable) it:
 
-1. Writes `last_alive.json` at the very start of each iteration — if the process crashes mid-cycle this timestamp goes stale and the dashboard shows a "Bot offline" warning after 90 minutes.
+1. Writes `last_alive.json` at the very start of each iteration — if the process crashes mid-cycle this timestamp goes stale and the dashboard shows a "Bot offline" warning after `BOT_OFFLINE_SECS` (default 30 min); the container healthcheck + autoheal use the same threshold.
 2. Decides whether to run a **full empire cycle** based on `SCAN_ACTIVE_HOURS`:
    - Within active hours: runs every `EMPIRE_UPDATE_INTERVAL` (default 1h ± 5 min jitter)
    - Outside active hours: runs every `SCAN_NIGHT_INTERVAL` (default 4h) — reduces nightly HTTP activity to a heartbeat scan
@@ -72,6 +86,8 @@ QUEUE_ACTIVE_HOURS=8-23
 SCAN_ACTIVE_HOURS=8-23
 SCAN_NIGHT_INTERVAL=4h
 LOG_LANG=en
+# Optional: require a login for the dashboard's action routes
+DASHBOARD_PASSWORD=choose-a-password
 ```
 
 3. Start the containers:
@@ -90,6 +106,8 @@ Duration variables accept `Nd` (days), `Nh` (hours), `Nm` (minutes), `Ns` (secon
 |---|---|---|
 | `IKABOT_EMAIL` | — | Ikariam account email |
 | `IKABOT_PASSWORD` | — | Ikariam account password |
+| `DASHBOARD_PASSWORD` | *(unset)* | If set, the dashboard requires this password to log in (protects every `/api/*` action route). Unset = open dashboard. |
+| `BOT_OFFLINE_SECS` | `1800` | Single source for "bot offline": healthcheck, autoheal, Telegram watchdog and the sidebar badge |
 | `EMPIRE_UPDATE_INTERVAL` | `1h` | Interval between full empire data cycles (within active scan hours) |
 | `BUILDING_COSTS_UPDATE_INTERVAL` | `3d` | Interval between building cost refreshes |
 | `WORLD_SCAN_UPDATE_INTERVAL` | `7d` | Interval between world scans |

@@ -1,7 +1,7 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
 Estado (2026-09-20): **P0-P7 concluídos** + **P8 (vinho)** e **P9 (infra de arranque/
-imagem/sessão)**. Bot em produção no **ikabot 7.6.2** (pinado por digest), sessão
+imagem/sessão)**. Bot em produção no **ikabot 7.6.3** (pinado por digest), sessão
 persistente, self-healing e backups activos. **272 testes a passar.**
 Dívidas de validação in-game em aberto: deploy para cidade própria; reescrita do farm
 nunca correu supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar
@@ -360,9 +360,10 @@ Resolvido em dois planos complementares.
   (congelavam e partiam com updates — ex.: 7.6.0 acrescentou `splitCargoBetweenFleets`). O
   launcher injecta em runtime só as funções alteradas (`planroutes_overrides.py`,
   `loadcustommodule_overrides.py`). Adições do upstream já não partem.
-- **P9.3 ✅ Imagem pinada por digest (stable/beta).** Stable actual **7.6.2** (`22310e03…`);
+- **P9.3 ✅ Imagem pinada por digest (stable/beta).** Stable actual **7.6.3** (`ee94a86…`);
   `:latest` é beta (diff stock → check imports offline → 1 arranque live → promover).
-  Histórico: 7.5.1 → 7.6.0 → 7.6.1 → 7.6.2.
+  Histórico: 7.5.1 → 7.6.0 → 7.6.1 → 7.6.2 → 7.6.3 (esta corrige o timeout do blackbox token:
+  configurável em vez do hang de 900s).
 - **P9.4 ✅ Sessão persistente (volume `ikabot_home` em `~/.ikabot`).** Sobrevive a
   `force-recreate`/promoção → deploys reutilizam a sessão (menos logins, menos dependência
   do serviço externo do blackbox).
