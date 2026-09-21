@@ -371,30 +371,37 @@ Resolvido em dois planos complementares.
 
 ---
 
-## Backlog / próximos passos (auditoria 2026-09-20)
+## Backlog / próximos passos (auditoria 2026-09-20; progresso 2026-09-21)
 
 Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também o roadmap partilhável.
 
 ### Segurança
-- [ ] **B1 Autenticação no dashboard (era P6.9).** 21 rotas de acção abertas na LAN/Tailscale.
-      **Risco nº1** com acesso externo. Token partilhado ou basic auth no Flask + proxy Vite.
+- [x] **B1 Autenticação no dashboard (era P6.9).** ✅ — auth opt-in: `DASHBOARD_PASSWORD` no
+      `.env` liga um `before_request` que protege todas as rotas `/api/*` (cookie de sessão
+      assinado, secret persistente, 30 dias, HttpOnly+SameSite). AuthGate no frontend + logout.
 
 ### Fechar a feature de vinho
-- [ ] **B2 Modo crítico do comprador.** Furar a reserva do farm só quando uma cidade está a
-      zero (hoje cede sempre → "sem navios livres" bloqueia a compra com o farm activo).
-- [ ] **B3 Aviso de coerência na UI** quando o alvo do comprador > reserva de dador (empoça).
-- [ ] **B4 Auto-preview ao Guardar** no comprador.
+- [x] **B2 Modo crítico do comprador.** ✅ — abaixo de `criticalHours` (default 6) o comprador
+      fura a reserva do farm (como o balanceador); acima, cede como antes.
+- [x] **B3 Aviso de coerência na UI.** ✅ — o card avisa se o balanceador está desligado ou se
+      o alvo do comprador excede a reserva de dador.
+- [x] **B4 Auto-preview ao Guardar.** ✅ — guardar dispara o dry-run e actualiza o plano.
 
 ### Funcionalidades
-- [ ] **B5 Generalizar o comprador a outros recursos** (mármore/cristal/enxofre).
-- [ ] **B6 Vista unificada "estratégia de vinho"** (runway, produção vs consumo, histórico de compras/ouro).
+- [~] **B5 Generalizar o comprador a outros recursos.** DESCARTADO (2026-09-21) — os outros
+      recursos não têm consumo/hora no `resources.json` (modelo "horas" não aplica) e são
+      produzidos; comprar é marginal. Sem interesse.
+- [x] **B6 Vista unificada "estratégia de vinho".** ✅ — card "Vinho num relance" (runway por
+      cidade vs thresholds, totais do império, estado do comprador).
 
 ### Residuais / manutenção
-- [ ] **B7 Timeouts da espionagem downtime-aware** (residual do P7 — causa re-espião).
-- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas).
-- [ ] **B9 `conftest.py`/`pytest.ini`** para fixar o path dos testes.
-- [ ] **B10 Split do chunk do frontend** (Vite: 653KB num só ficheiro).
+- [x] **B7 Timeouts da espionagem downtime-aware.** ✅ — `record_startup_downtime()` +
+      `active_elapsed()` (empire_utils) descontam o tempo offline; os 3 timeouts usam-no.
+- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas). *(por fazer — refactor, baixo valor)*
+- [x] **B9 `pytest.ini`** ✅ — `pythonpath = . ikabot` + `testpaths`; o comando documentado
+      corre sozinho.
+- [x] **B10 Split do chunk do frontend** ✅ — `manualChunks` (react + chart.js); app 653→314KB.
 
-### Dívidas de validação in-game
+### Dívidas de validação in-game *(precisam de sessão supervisionada — não é trabalho de código)*
 - [ ] Deploy para cidade própria (DispatchTab → destino "própria" → deployArmy type=10).
 - [ ] Reescrita do farm supervisionada live.
