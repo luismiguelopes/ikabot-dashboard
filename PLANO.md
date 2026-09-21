@@ -396,19 +396,17 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
       cidade vs thresholds, totais do império, estado do comprador).
 
 ### Farm
-- [ ] **F1 Última vaga de cada alvo raspa o fundo (loot desperdiçado).** O farm martela o alvo
-      com base no `last_loot` **escotado (stale)** e só pára **depois** de um regresso real ficar
-      abaixo de `min_loot` (a lógica de re-espia em `farm_manager.py:806` actua *depois* da vaga
-      desperdiçada). Resultado: a última vaga de cada sequência traz quase sempre <50k, às vezes
-      ~1000 — uma ida-e-volta do exército inteiro por migalhas. **Fix:** estimar a drenagem pelos
-      regressos reais (`_recent_return_loot` / soma dos regressos desde a última escota) e
-      re-espiar/pausar **antes** de enviar uma vaga cujo loot previsto < `min_loot`. Reportado pelo
-      utilizador 2026-09-21.
+- [x] **F1 Última vaga de cada alvo raspa o fundo (loot desperdiçado).** ✅ 2026-09-21 —
+      `_estimated_warehouse()` = `last_loot` escotado − loot já trazido desde a escota
+      (`_returned_since_scout`). Um alvo é *drenado* (→ re-espia, e dimensiona a vaga ao loot real)
+      quando **qualquer** sinal dispara: a estimativa cai abaixo de `min_loot` (drenagem cumulativa,
+      apanha a vaga desperdiçada 1 raid antes) **ou** o último regresso real < `min_loot` (armazém
+      subitamente pequeno, que a estimativa não apanha). 7 testes novos; suite 291.
 
 ### Residuais / manutenção
 - [x] **B7 Timeouts da espionagem downtime-aware.** ✅ — `record_startup_downtime()` +
       `active_elapsed()` (empire_utils) descontam o tempo offline; os 3 timeouts usam-no.
-- [ ] **B8 Split do `espionage_manager.py`** (1871 linhas). *(inspeccionado 2026-09-21: os grupos
+- [~] **B8 Split do `espionage_manager.py`** SALTADO (2026-09-21). *(os grupos
       coesos — contagem de espiões, missões, relatórios — estão todos entrelaçados pelo mesmo store
       de missões `_load_missions`/`_save_missions`, e o módulo é importado por 4 sítios. Um split
       limpo e valioso não é seguro para um módulo crítico nunca validado live; ganho baixo. Recomendação:
