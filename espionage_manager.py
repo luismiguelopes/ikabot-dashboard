@@ -464,11 +464,19 @@ def process_dispatch_queue(session):
         available    = city_counts.get("available")
         dispatchable = in_defense if in_defense is not None else available
         if dispatchable is not None and dispatchable < num_agents:
-            error = f"Espiões insuficientes: {dispatchable} na cidade, {num_agents} pedidos"
-            logger.warning("[espionage] pre-check falhou para %s: %s",
-                           item["targetPlayerName"], error)
-            _append_failed_mission(item, error)
-            continue
+            if dispatchable >= 1:
+                # Envia com os que houver em vez de falhar a missão inteira.
+                logger.info("[espionage] %s (%s): pedidos %d agentes, só há %d na cidade "
+                            "— a enviar com %d",
+                            item["targetPlayerName"], item["targetCityName"],
+                            num_agents, dispatchable, dispatchable)
+                num_agents = dispatchable
+            else:
+                error = f"Espiões insuficientes: {dispatchable} na cidade, {num_agents} pedidos"
+                logger.warning("[espionage] pre-check falhou para %s: %s",
+                               item["targetPlayerName"], error)
+                _append_failed_mission(item, error)
+                continue
 
         ok, result = _dispatch_spy(
             session,
