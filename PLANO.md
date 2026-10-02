@@ -1,11 +1,11 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
-Estado (2026-09-20): **P0-P7 concluídos** + **P8 (vinho)** e **P9 (infra de arranque/
-imagem/sessão)**. Bot em produção no **ikabot 7.6.3** (pinado por digest), sessão
-persistente, self-healing e backups activos. **272 testes a passar.**
-Dívidas de validação in-game em aberto: deploy para cidade própria; reescrita do farm
-nunca correu supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar
-itens antigos que o referem.
+Estado (2026-10-02): **P0-P9 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
+descartado conscientemente (B5, B8 saltados). Bot em produção no **ikabot 7.6.3** (pinado
+por digest `62a6d1f`), sessão persistente, self-healing e backups activos. **291 testes a passar.**
+Trabalho de código: nada pendente. Em aberto só **dívidas de validação in-game** (precisam de
+sessão supervisionada, não é código): deploy para cidade própria; reescrita do farm nunca correu
+supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
 
 ---
 
@@ -209,7 +209,8 @@ features.
       frota emparelhava com as células do exército. Validado contra Baphomet in-game.
       Bónus: 1 pedido HTTP por cidade (era 2) e refresh manual via
       `POST /api/military/refresh` (P4.4 ✅).
-- [ ] Validar a primeira vaga do auto-attack (agora usa sendArmyPlunderSea).
+- [x] ~~Validar a primeira vaga do auto-attack~~ — OBSOLETO: o auto-attack foi
+      descontinuado (P6.2, 2026-07-03). O farm é o único sistema de ataque automático.
 - [ ] Validar deploy para cidade própria (após 1 ciclo do império, para o islandId
       aparecer no own_cities.json): dispatch com destino "própria" → deployArmy type=10.
 - [ ] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
@@ -273,9 +274,8 @@ Auditoria a frio de todo o projecto (lógica + UI + infra) com o P5 concluído e
       sinais existentes (itens pendentes das 4 filas SQLite, flags `.force_*` activas
       — desaparecer = o bot pegou no pedido —, últimos dispatches do attack_log com
       ✓/✗ e erro). Cartão "Actividade do bot" na HomePage (poll 15s; oculto se vazio).
-- [ ] **P6.9 Autenticação simples no dashboard.** Flask/Vite servem na LAN sem login —
-      qualquer dispositivo na rede pode lançar ataques/pausar/apagar. Token partilhado
-      ou basic auth no Flask (e proxy do Vite) chega.
+- [x] **P6.9 Autenticação simples no dashboard.** ✅ 2026-09-21 — concluído como **B1**:
+      auth opt-in via `DASHBOARD_PASSWORD` no `.env`, `before_request` protege `/api/*`.
 - [x] **P6.10 Split da MundoPage.** ✅ 2026-07-03 — "Combate" é página própria no
       sidebar (`CombatPage.tsx`: dispatch/farm/histórico via DispatchTab); MundoPage
       ficou só world scan (1637→296 linhas) com os componentes extraídos para ficheiros
@@ -402,6 +402,13 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
       quando **qualquer** sinal dispara: a estimativa cai abaixo de `min_loot` (drenagem cumulativa,
       apanha a vaga desperdiçada 1 raid antes) **ou** o último regresso real < `min_loot` (armazém
       subitamente pequeno, que a estimativa não apanha). 7 testes novos; suite 291.
+
+### Espionagem
+- [x] **F11 Dispatch de espiões falhava quando pedia mais agentes do que os disponíveis.**
+      ✅ 2026-10-02 — diagnóstico das missões "Missão falhada" na MundoPage (546 falhas em 1042):
+      a maior fatia evitável (~110) era pedir N agentes com só M<N na cidade → missão inteira FAILED.
+      Agora o pre-check faz cap ao disponível e **envia com os que houver** (≥1); só falha a 0 espiões.
+      (As restantes falhas são type=11 do servidor ou risco normal do jogo — capturado/sem relatório.)
 
 ### Residuais / manutenção
 - [x] **B7 Timeouts da espionagem downtime-aware.** ✅ — `record_startup_downtime()` +
