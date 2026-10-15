@@ -50,8 +50,9 @@ def _common(monkeypatch):
 def test_army_plunder_payload(monkeypatch):
     _common(monkeypatch)
     # Captured plunder form: 3 unit types, upkeep mandatory. 315 is offered but not sent.
-    monkeypatch.setattr(am, "_fetch_plunder_upkeep",
-                        lambda *a, **k: {"303": "5", "304": "3", "315": "0"})
+    # The form also declares the function (sea here = cross-island target).
+    monkeypatch.setattr(am, "_fetch_plunder_form",
+                        lambda *a, **k: ({"303": "5", "304": "3", "315": "0"}, "sendArmyPlunderSea"))
     s = _CaptureSession()
 
     ok = am._send_army_plunder(s, origin_id=1, target_id=20477, island_id=30816,
@@ -74,6 +75,37 @@ def test_army_plunder_payload(monkeypatch):
     assert p["cargo_army_315_upkeep"] == "0"
     # no un-stripped key leaked through
     assert "cargo_army_s303" not in p
+
+
+def test_army_plunder_same_island_uses_land_function(monkeypatch):
+    # Regression: a same-island target's form declares sendArmyPlunderLand. Hardcoding the
+    # sea function made the troops leave and return without pillaging. The function must be
+    # taken from the form, so a same-island raid actually goes out as a land pillage.
+    _common(monkeypatch)
+    monkeypatch.setattr(am, "_fetch_plunder_form",
+                        lambda *a, **k: ({"303": "5"}, "sendArmyPlunderLand"))
+    s = _CaptureSession()
+
+    ok = am._send_army_plunder(s, origin_id=1, target_id=28109, island_id=558,
+                               units={"s303": 152}, transporters=338)
+    assert ok is True
+    p = s.params
+    assert p["function"] == "sendArmyPlunderLand"      # land, not Sea — taken from the form
+    assert p["templateView"] == "plunder"
+    assert p["transporter"] == 338                      # ships still carry the loot
+    assert p["cargo_army_303"] == 152
+
+
+def test_army_plunder_falls_back_to_sea_when_form_unreadable(monkeypatch):
+    # If the form can't be read (function None), default to the sea function (prior behaviour).
+    _common(monkeypatch)
+    monkeypatch.setattr(am, "_fetch_plunder_form", lambda *a, **k: ({"303": "5"}, None))
+    s = _CaptureSession()
+
+    ok = am._send_army_plunder(s, origin_id=1, target_id=20477, island_id=30816,
+                               units={"s303": 10}, transporters=50)
+    assert ok is True
+    assert s.params["function"] == "sendArmyPlunderSea"
 
 
 def test_fleet_blockade_payload(monkeypatch):

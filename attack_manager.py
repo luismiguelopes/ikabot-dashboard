@@ -116,9 +116,19 @@ def fetch_troop_journey(session, ikabot_config, origin_id, target_id):
     return max(units.values()) if units else None
 
 
-def _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id):
-    """Fetch the plunder form for a player city.
-    Returns dict of {unit_id: upkeep_str} using the IDs the game expects (e.g. '303', not 's303')."""
+def _fetch_plunder_form(session, ikabot_config, origin_id, target_id):
+    """Fetch the plunder (pillage) form for a player city.
+
+    Returns (upkeep, function):
+      upkeep   — {unit_id: upkeep_str} using the IDs the game expects ('303', not 's303')
+      function — the real POST function name the game's own form carries. This is
+                 self-discovered (same approach as the blockade form) because it is NOT
+                 constant: a target on a DIFFERENT island → 'sendArmyPlunderSea' (troops
+                 cross the water on transport ships), a target on the SAME island →
+                 'sendArmyPlunderLand' (troops march overland). Sending the sea function
+                 to a same-island target is accepted by the game but the army just makes a
+                 pointless round trip and pillages nothing — so we must send whatever the
+                 form declares. None if the form can't be read (caller falls back)."""
     import re
     try:
         raw = session.post(params={
@@ -134,11 +144,14 @@ def _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id):
         upkeep = {}
         for m in re.finditer(r'name=\\"cargo_army_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"', raw):
             upkeep[m.group(1)] = m.group(2)
-        logger.info("[attack] plunder form: %d tipo(s) de unidade", len(upkeep))
-        return upkeep
+        fn_m = re.search(r'name=\\"function\\"[^>]*value=\\"(\w+)\\"', raw)
+        function = fn_m.group(1) if fn_m else None
+        logger.info("[attack] plunder form: %d tipo(s) de unidade, function=%s",
+                    len(upkeep), function)
+        return upkeep, function
     except Exception as e:
-        logger.warning("[attack] _fetch_plunder_upkeep falhou: %s", e)
-        return {}
+        logger.warning("[attack] _fetch_plunder_form falhou: %s", e)
+        return {}, None
 
 
 def _fetch_deployment_upkeep(session, ikabot_config, origin_id, target_id, deployment, cargo_prefix):
@@ -272,33 +285,41 @@ def _cap_to_available_ships(requested, session=None):
 
 
 def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters):
-    """Player pillage via sendArmyPlunderSea. deployArmy does NOT work here — it only
-    stations troops in own/allied cities. Accepts unit IDs with or without the CSS
-    's' prefix (military.json stores 's303', the game API expects '303').
+    """Player pillage. The POST function is taken from the game's own form:
+    'sendArmyPlunderSea' for a target on another island (troops ride transport ships),
+    'sendArmyPlunderLand' for one on the SAME island (troops march overland). Hardcoding
+    the sea function sent same-island raids on a pointless round trip that pillaged nothing
+    — the game accepts it but the army just leaves and returns. deployArmy does NOT work
+    here either — it only stations troops in own/allied cities. Accepts unit IDs with or
+    without the CSS 's' prefix (military.json stores 's303', the game API expects '303').
     Returns True on success, False on rejection, or _DEFER when there are no free ships
     (the previous raid's transporters haven't returned yet)."""
     import ikabot.config as ikabot_config
 
     origin_id = str(origin_id)
 
-    # Sea pillage needs transporters; with none free the POST is doomed (type=11). Bail
-    # out before the form fetch so it can be retried once the ships are back.
+    # Transporters carry the loot (500 per ship) for both land and sea raids; with none
+    # free the POST is doomed (type=11). Bail out before the form fetch so it can be
+    # retried once the ships are back.
     capped = _cap_to_available_ships(transporters, session)
     if int(transporters) > 0 and capped <= 0:
-        logger.info("[attack] sendArmyPlunderSea adiado — 0 navios livres (a regressar)")
+        logger.info("[attack] pilhagem adiada — 0 navios livres (a regressar)")
         return _DEFER
 
     _change_to_origin_city(session, ikabot_config, origin_id)
 
-    # Upkeep values are mandatory — the server rejects the POST without them
-    upkeep_map = _fetch_plunder_upkeep(session, ikabot_config, origin_id, target_id)
+    # Upkeep values are mandatory — the server rejects the POST without them. The same
+    # form also declares the right function (land vs sea); fall back to the sea function
+    # only if the form can't be read.
+    upkeep_map, form_fn = _fetch_plunder_form(session, ikabot_config, origin_id, target_id)
+    function = form_fn or "sendArmyPlunderSea"
 
     units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
                  for uid, cnt in units.items()}
 
     params = {
         "action":            "transportOperations",
-        "function":          "sendArmyPlunderSea",
+        "function":          function,
         "actionRequest":     ikabot_config.actionRequest,
         "islandId":          str(island_id),
         "destinationCityId": str(target_id),
@@ -316,13 +337,13 @@ def _send_army_plunder(session, origin_id, target_id, island_id, units, transpor
     for uid, cnt in units_api.items():
         params[f"cargo_army_{uid}"] = cnt
 
-    logger.info("[attack] sendArmyPlunderSea %s → %s: %d unidade(s), transporter=%d",
-                origin_id, target_id, sum(units_api.values()), capped)
+    logger.info("[attack] %s %s → %s: %d unidade(s), transporter=%d",
+                function, origin_id, target_id, sum(units_api.values()), capped)
     try:
         resp = session.post(params=params)
-        return _parse_attack_feedback(resp, "sendArmyPlunderSea", ikabot_config)
+        return _parse_attack_feedback(resp, function, ikabot_config)
     except Exception as e:
-        logger.error("[attack] sendArmyPlunderSea exception: %s", e, exc_info=True)
+        logger.error("[attack] %s exception: %s", function, e, exc_info=True)
         return False
 
 
