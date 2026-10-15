@@ -4,6 +4,7 @@ export interface CitySpyCounts { available: number | null; inDefense: number | n
 export interface FarmTarget {
   target_city_id: string; enabled: boolean; state: string; next_run_at: number
   interval_hours: number; total_raids: number; last_loot: number; respy_every: number
+  mode?: string; low_raids?: number
 }
 export interface LootStat {
   from_player: string; raids: number; last_ts: number; total: number

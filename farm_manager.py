@@ -38,6 +38,11 @@ _SPY_TIMEOUT_SECS = 13 * 3600
 # silently-failed dispatch doesn't pin the whole queue for the full 6h timeout.
 _SPY_STUCK_GRACE = 12 * 60
 _RELAUNCH_DELAY_RANGE = (1, 15)   # random minutes after troops return before next raid
+# Loop mode (F12): a target in mode='loop' is drained aggressively — relaunched a handful of
+# SECONDS after its ships dock (jitter, never zero — the anti-detection floor still applies via
+# the throttled session) instead of the 1-15 min farm cadence, and with no periodic re-spy.
+_LOOP_RELAUNCH_DELAY_RANGE = (30, 120)   # seconds between loop waves
+_LOOP_DRY_STRIKES = 2                    # consecutive real returns < min_loot → dry → disable
 _SEA_BATTLE_MARGIN_SECS = 20 * 60  # extra troop delay when the blockade must FIGHT combat
                                    # ships (rounds are ~15 min) instead of scaring flee ones
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
@@ -94,6 +99,11 @@ def _next_round_needs_spy(t):
     """True if the round after the current raid will re-scout: the periodic re-spy cadence
     is due, the target currently shows a fleet, or it's a known fleet-target (its fleet
     flees and returns, so we must always re-scout to know if the port is clean)."""
+    # Loop mode (F12) suppresses the PERIODIC re-spy cadence — it hammers on real-return intel
+    # alone — but a present/known fleet still forces a re-scout (blind troops bounce off warships).
+    if str(t.get("mode", "farm")) == "loop":
+        return (int(t.get("last_enemy_ships", 0)) > 0
+                or int(t.get("is_fleet_target", 0)) == 1)
     respy_every = max(1, int(t.get("respy_every", 3)))
     return (int(t.get("raids_since_spy", 0)) >= respy_every
             or int(t.get("last_enemy_ships", 0)) > 0
@@ -516,7 +526,11 @@ def _queue_head(targets):
     now = int(time.time())
     due = [t for t in targets if now >= int(t.get("next_run_at", 0) or 0)]
     pool = due or targets
-    return max(pool, key=lambda t: (_priority_score(t), int(t.get("last_loot", 0) or 0),
+    # Loop targets (F12) jump the queue ahead of regular farm targets: a drain campaign is
+    # meant to finish fast, so it gets first claim on the single working slot (and, via the
+    # ship reserve, on trade ships) until it dries up.
+    return max(pool, key=lambda t: (1 if str(t.get("mode", "farm")) == "loop" else 0,
+                                    _priority_score(t), int(t.get("last_loot", 0) or 0),
                                     -int(t.get("created_at", 0) or 0)))
 
 
@@ -838,6 +852,12 @@ def process_farm_targets(session, in_active_hours=True):
             est = _estimated_warehouse(t)
             recent = _recent_return_loot(t)
             drained = est < min_loot or (recent is not None and recent < min_loot)
+            if str(t.get("mode", "farm")) == "loop":
+                # Loop mode never re-scouts for drainage (its dry test is the consecutive
+                # real-return count in the ATTACKING branch) → always raid directly. Size the
+                # wave to the last real haul so transporters match what's actually there.
+                drained = False
+                est = max(est, int(recent or 0))
             if (not first_scout and not _next_round_needs_spy(t)
                     and int(t.get("is_fleet_target", 0)) == 0
                     and not drained):
@@ -1104,6 +1124,50 @@ def process_farm_targets(session, in_active_hours=True):
                     farm_update(tid, {"state": "SPYING", "respy_launched_at": 0})
                     logger.info("[farm] %s: tropas em casa — a avaliar o relatório antecipado", name)
                     continue
+                # ── Loop mode (F12): hammer until dry ───────────────────────────
+                # The troops are home with a REAL return recorded (bounce/None handled above).
+                # Count consecutive returns below min_loot; once _LOOP_DRY_STRIKES in a row the
+                # warehouse is empty → disable the target (one-shot drain) and hide it. A good
+                # haul resets the counter. Otherwise relaunch in seconds (fleet still forces a
+                # re-scout via next_action='spy').
+                if str(t.get("mode", "farm")) == "loop":
+                    recent = _recent_return_loot(t)
+                    min_loot = int(t.get("min_loot", 50000))
+                    if recent is not None and recent < min_loot:
+                        low = int(t.get("low_raids", 0) or 0) + 1
+                        if low >= _LOOP_DRY_STRIKES:
+                            logger.info("[loop] %s: %d regressos seguidos < %d — alvo seco, loop terminado",
+                                        name, low, min_loot)
+                            try:
+                                from telegram_notifier import notify_farm_drained
+                                notify_farm_drained(name, t.get("target_player", ""), recent)
+                            except Exception:
+                                pass
+                            try:
+                                from espionage_manager import _auto_mark_ignored
+                                _auto_mark_ignored(tid, t.get("target_player", ""),
+                                                   t.get("island_x", ""), t.get("island_y", ""),
+                                                   f"Seco pelo loop — regresso {recent} < {min_loot}")
+                            except Exception:
+                                pass
+                            farm_update(tid, {"state": "IDLE", "enabled": 0,
+                                              "low_raids": low, "next_action": "attack"})
+                            continue
+                        farm_update(tid, {"low_raids": low})
+                        logger.info("[loop] %s: regresso %d < %d (%d/%d para secar)",
+                                    name, recent, min_loot, low, _LOOP_DRY_STRIKES)
+                    elif recent is not None and int(t.get("low_raids", 0) or 0) != 0:
+                        farm_update(tid, {"low_raids": 0})   # good haul resets the dry counter
+
+                    need_spy = _next_round_needs_spy(t)
+                    delay = random.randint(*_LOOP_RELAUNCH_DELAY_RANGE)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
+                                      "next_action": "spy" if need_spy else "attack",
+                                      "raids_since_spy": 0 if need_spy else int(t.get("raids_since_spy", 0))})
+                    logger.info("[loop] %s: próxima vaga em %ds (%s)",
+                                name, delay, "spy" if need_spy else "attack")
+                    continue
+
                 respy_every = max(1, int(t.get("respy_every", 3)))
                 rss = int(t.get("raids_since_spy", 0))
                 # Re-spy if it's time, or if the target ever showed a fleet (needs fresh intel)

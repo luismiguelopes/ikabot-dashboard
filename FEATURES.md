@@ -254,6 +254,22 @@ Novo separador "Transportes" em Movimentos (e "Despacho" renomeado para "Ataque"
   Selector de tipo de barco (2026-06-13): comércio / cargueiros / ambos. No modo
   "ambos" envia primeiro com transporters e o restante grande com cargueiros.
 
+### F13. Loop de drenagem (ataque agressivo até secar) ✅ IMPLEMENTADO 2026-10-15
+Botão **"Adicionar ao loop"** no MundoPage (ao lado de "Adicionar ao farm"). Reutiliza o
+motor do farm (`farm_targets` com nova coluna `mode='loop'`), mas ataca o alvo vaga após
+vaga até o secar:
+- **Cadência agressiva**: relança 30-120s (jitter) após a frota regressar, em vez dos
+  1-15 min do farm. Os delays aleatórios da sessão mantêm-se (anti-detecção); corre só
+  dentro das horas activas (gate `in_active_hours` do `process_farm_targets`).
+- **Sem re-espia periódica**: `_next_round_needs_spy` devolve False em loop (ataque directo
+  sobre intel de regresso real); uma frota presente/conhecida ainda força re-scout+bloqueio.
+- **Secar**: `low_raids` conta regressos reais consecutivos abaixo de `min_loot`; ao 2.º
+  (`_LOOP_DRY_STRIKES`) desactiva o alvo (one-shot), notifica e esconde-o nos ignorados.
+- **Prioridade**: `_queue_head` coloca o alvo em loop à frente dos restantes alvos do farm
+  (e, via reserve de navios, à frente da logística); um raid em curso nunca é interrompido.
+- Loadout de tropas/frota = o configurado no farm (`farm_army`/`farm_fleet`).
+- Schema v12 (`mode`, `low_raids`); API `/api/farm/add` aceita `mode`.
+
 ## Já implementadas (referência)
 
 - ✅ F5 Notificação Telegram de regresso com saque — 2026-06-15

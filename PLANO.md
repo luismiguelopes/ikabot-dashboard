@@ -1,8 +1,11 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
-Estado (2026-10-02): **P0-P9 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
-descartado conscientemente (B5, B8 saltados). Bot em produção no **ikabot 7.7.1** (pinado
-por digest `bcde4870`), sessão persistente, self-healing e backups activos. **291 testes a passar.**
+Estado (2026-10-15): **P0-P9 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
+descartado conscientemente (B5, B8 saltados). Extras recentes: supervisor do worker (relança o
+bot em segundos em vez de ~36 min via autoheal), credenciais por env em vez de argv, e **F13 —
+loop de drenagem** (ataque agressivo a um alvo até secar; ver FEATURES.md). Bot em produção no
+**ikabot 7.7.1** (pinado por digest `bcde4870`), sessão persistente, self-healing e backups activos.
+**291 testes a passar.**
 Trabalho de código: nada pendente. Em aberto só **dívidas de validação in-game** (precisam de
 sessão supervisionada, não é código): deploy para cidade própria; reescrita do farm nunca correu
 supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.

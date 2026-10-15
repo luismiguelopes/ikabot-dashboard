@@ -1257,6 +1257,7 @@ def api_farm_add():
             "respyEvery":     max(1, min(50, int(data.get("respyEvery", 3)))),
             "fleetLeadMin":   max(1, min(120, int(data.get("fleetLeadMin", 5)))),
             "disperseMin":    max(1, min(1440, int(data.get("disperseMin", 240)))),
+            "mode":           "loop" if str(data.get("mode", "farm")) == "loop" else "farm",
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

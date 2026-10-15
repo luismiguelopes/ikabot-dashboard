@@ -162,6 +162,19 @@ def _run_migrations(conn):
             except Exception:
                 pass
         conn.execute("INSERT INTO schema_version (version) VALUES (11)")
+    if current < 12:
+        # v12 = loop mode (F12): a target set to mode='loop' is hammered aggressively
+        # (short relaunch, no periodic re-spy) until it dries up. low_raids counts consecutive
+        # real returns below min_loot so the loop auto-disables the target once it's drained.
+        for ddl in (
+            "ALTER TABLE farm_targets ADD COLUMN mode TEXT DEFAULT 'farm'",
+            "ALTER TABLE farm_targets ADD COLUMN low_raids INTEGER DEFAULT 0",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (12)")
     conn.commit()
 
 
@@ -431,6 +444,7 @@ _FARM_UPDATE_COLS = {
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
+    "mode", "low_raids",
 }
 
 
@@ -452,8 +466,8 @@ def farm_add(target):
                 INSERT INTO farm_targets
                 (target_city_id, target_city_name, target_player, island_id,
                  island_x, island_y, enabled, interval_hours, min_loot, max_enemy_ships,
-                 respy_every, fleet_lead_min, disperse_min, state, next_run_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
+                 respy_every, fleet_lead_min, disperse_min, mode, state, next_run_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', 0, ?)
                 ON CONFLICT(target_city_id) DO UPDATE SET
                     target_city_name=excluded.target_city_name,
                     target_player=excluded.target_player,
@@ -466,7 +480,8 @@ def farm_add(target):
                     max_enemy_ships=excluded.max_enemy_ships,
                     respy_every=excluded.respy_every,
                     fleet_lead_min=excluded.fleet_lead_min,
-                    disperse_min=excluded.disperse_min
+                    disperse_min=excluded.disperse_min,
+                    mode=excluded.mode
             """, (
                 str(target["targetCityId"]), target.get("targetCityName", ""),
                 target.get("targetPlayer", ""), str(target.get("islandId", "")),
@@ -478,6 +493,7 @@ def farm_add(target):
                 int(target.get("respyEvery", 3)),
                 int(target.get("fleetLeadMin", 5)),
                 int(target.get("disperseMin", 240)),
+                "loop" if str(target.get("mode", "farm")) == "loop" else "farm",
                 now,
             ))
     finally:

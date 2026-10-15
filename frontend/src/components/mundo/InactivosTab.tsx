@@ -155,18 +155,18 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     return () => clearInterval(id)
   }, [])
 
-  async function handleAddFarm(p: EnrichedPlayer) {
+  async function handleAddFarm(p: EnrichedPlayer, mode: 'farm' | 'loop' = 'farm') {
     if (!p.cityId) return
     const res = await fetch('/api/farm/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targetCityId: p.cityId, targetCityName: p.cityName, targetPlayer: p.playerName,
-        islandId: p.islandId, islandX: p.islandX, islandY: p.islandY,
+        islandId: p.islandId, islandX: p.islandX, islandY: p.islandY, mode,
       }),
     }).catch(() => null)
     if (res && res.ok) {
       setFarmIds(prev => new Set([...prev, String(p.cityId)]))
-      setToast({ msg: `${t('farm_add')}: ${p.cityName}`, ok: true })
+      setToast({ msg: `${t(mode === 'loop' ? 'loop_add' : 'farm_add')}: ${p.cityName}`, ok: true })
       setTimeout(() => setToast(null), 4000)
     }
     loadFarm()
@@ -570,13 +570,15 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               const fc = f.state === 'ATTACKING' ? 'text-red-600'
                                 : f.state === 'SPYING' ? 'text-blue-600' : 'text-amber-700'
                               return (
-                                <div className="bg-white rounded-lg border border-indigo-200 px-4 py-3 flex items-center gap-3 flex-wrap">
-                                  <span className="text-xs font-semibold text-indigo-700 flex items-center gap-1.5">
-                                    <i className="fa-solid fa-seedling" /> {t('farm_title')}
+                                <div className={`bg-white rounded-lg border px-4 py-3 flex items-center gap-3 flex-wrap ${f.mode === 'loop' ? 'border-rose-200' : 'border-indigo-200'}`}>
+                                  <span className={`text-xs font-semibold flex items-center gap-1.5 ${f.mode === 'loop' ? 'text-rose-700' : 'text-indigo-700'}`}>
+                                    <i className={`fa-solid ${f.mode === 'loop' ? 'fa-repeat' : 'fa-seedling'}`} /> {f.mode === 'loop' ? t('loop_title') : t('farm_title')}
                                   </span>
                                   <span className={`text-xs font-medium ${fc}`}>{t(`farm_state_${f.state}`)}</span>
                                   <span className="text-[11px] text-slate-400">
-                                    {t('farm_interval', { n: String(f.interval_hours) })} · {t('farm_raids')}: {f.total_raids}
+                                    {f.mode === 'loop'
+                                      ? t('farm_raids') + ': ' + f.total_raids
+                                      : t('farm_interval', { n: String(f.interval_hours) }) + ' · ' + t('farm_raids') + ': ' + f.total_raids}
                                   </span>
                                   <div className="ml-auto flex items-center gap-3">
                                     <button onClick={() => farmAction(String(p.cityId), { runNow: true })}
@@ -605,13 +607,22 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                     <i className="fa-solid fa-seedling" /> {t('farm_in')}
                                   </span>
                                 ) : (
-                                  <button
-                                    onClick={() => handleAddFarm(p)}
-                                    title={t('farm_add')}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors"
-                                  >
-                                    <i className="fa-solid fa-seedling" /> {t('farm_add')}
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => handleAddFarm(p)}
+                                      title={t('farm_add')}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors"
+                                    >
+                                      <i className="fa-solid fa-seedling" /> {t('farm_add')}
+                                    </button>
+                                    <button
+                                      onClick={() => handleAddFarm(p, 'loop')}
+                                      title={t('loop_add_hint')}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition-colors"
+                                    >
+                                      <i className="fa-solid fa-repeat" /> {t('loop_add')}
+                                    </button>
+                                  </>
                                 )
                               )}
                               <button
