@@ -58,8 +58,9 @@ services:
     # Deterministic startup: bot_launcher spawns empireFunction by reference and
     # then hands PID 1 the normal interactive menu (docker attach still works).
     # No hardcoded menu indices -> an upstream :latest menu reorder can't break it.
-    command: >
-      python3 /ikabot/bot_launcher.py ${IKABOT_EMAIL} ${IKABOT_PASSWORD}
+    # Credentials come from the environment (IKABOT_EMAIL / IKABOT_PASSWORD via the
+    # env_file above), NOT argv — keeps the password out of `ps`/cmdline/`docker inspect .Args`.
+    command: python3 /ikabot/bot_launcher.py
     ports:
       - "43357:43357"
       - "43573:43573"

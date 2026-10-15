@@ -193,10 +193,19 @@ def _run():
     # ika cookie file exists.
     init()
 
-    # argv -> predetermined_input (email, password), ints where possible, so
+    # Credentials -> predetermined_input (email, then password), ints where possible, so
     # Session() can pop them exactly as it does from the normal command line.
-    config.has_params = len(sys.argv) > 1
-    for arg in sys.argv[1:]:
+    # Prefer the environment (IKABOT_EMAIL / IKABOT_PASSWORD, already injected via the
+    # compose env_file) over argv: passing the password as an argument left it in the
+    # process argv — visible in `ps`, /proc/<pid>/cmdline and `docker inspect .Args` to
+    # anything that could see the process. argv is still honoured as a fallback for manual
+    # or legacy runs. (docker inspect .Config.Env still shows the env value; argv was the
+    # broader, more casually-readable exposure this removes.)
+    creds = sys.argv[1:]
+    if not creds:
+        creds = [v for v in (os.environ.get("IKABOT_EMAIL"), os.environ.get("IKABOT_PASSWORD")) if v]
+    config.has_params = len(creds) > 0
+    for arg in creds:
         try:
             config.predetermined_input.append(int(arg))
         except ValueError:
