@@ -230,11 +230,24 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
             smart_sleep(last_full_cycle_time, next_full_jitter, session)
 
-        except (SystemExit, KeyboardInterrupt):
+        except (SystemExit, KeyboardInterrupt) as exc:
             # Fatal: the game session gave up (re-login/network exhausted → sys.exit) or a
             # manual stop. Alert loudly before dying so it's attributed immediately, not 30 min
-            # later via the offline watchdog. With the container healthcheck + autoheal, the
-            # worker's death restarts the whole container, recovering automatically.
+            # later via the offline watchdog. bot_launcher's supervisor respawns us within
+            # seconds (a game-side session rotation re-logs in from the persisted cookie), so a
+            # one-off rotation no longer means a 30+ min outage; the container healthcheck +
+            # autoheal stays as the backstop if PID 1 itself ever wedges.
+            # Log the exit type to bot.log first: the stock session rotates via sys.exit(1) with
+            # no bot.log trace of its own, so without this a rotation death looks like a silent
+            # vanish (exactly what made the 2026-10 outages undiagnosable from bot.log alone).
+            try:
+                logger.error(lm("worker_fatal_exit", reason=type(exc).__name__))
+            except Exception:
+                try:
+                    logger.error("[worker] saída fatal (%s) — sessão rodada/encerramento; empireFunction a terminar."
+                                 % type(exc).__name__)
+                except Exception:
+                    pass
             try:
                 from telegram_notifier import notify_bot_fatal
                 notify_bot_fatal()

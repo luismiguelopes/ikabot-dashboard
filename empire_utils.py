@@ -230,6 +230,10 @@ _LM = {
         "en": "[empire] Error during data extraction:",
         "pt": "[empire] Erro durante extracção de dados:",
     },
+    "worker_fatal_exit": {
+        "en": "[worker] fatal exit ({reason}) — session rotated/shutdown; empireFunction terminating (supervisor will respawn).",
+        "pt": "[worker] saída fatal ({reason}) — sessão rodada/encerramento; empireFunction a terminar (o supervisor vai relançar).",
+    },
     "queue_cycle_start": {
         "en": "[build] Processing building queue...",
         "pt": "[build] A processar fila de construção...",
