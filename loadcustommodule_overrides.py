@@ -28,13 +28,15 @@ def loadCustomModule(session, event, stdin_fd, predetermined_input):
     predetermined_input : multiprocessing.managers.SyncManager.list
     """
     # Fix for Linux: Reopen stdin to ensure terminal interaction works in threads
+    # closefd=False so replacing/GC'ing this stdin object never closes the shared
+    # fd 0 (the operator's `docker attach` tty) — matches upstream's 7.7.1 fix.
     if sys.platform != "win32":
         try:
             sys.stdin = open('/dev/tty', 'r')
         except Exception:
-            sys.stdin = os.fdopen(stdin_fd)
+            sys.stdin = os.fdopen(stdin_fd, closefd=False)
     else:
-        sys.stdin = os.fdopen(stdin_fd)
+        sys.stdin = os.fdopen(stdin_fd, closefd=False)
 
     config.predetermined_input = predetermined_input
 

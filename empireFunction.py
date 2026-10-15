@@ -39,6 +39,24 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
 
     event.set()
 
+    # The worker is fully autonomous and must NEVER read the interactive terminal.
+    # bot_launcher spawns us sharing PID 1's tty (stdin_fd), so any stock path that
+    # calls enter()/input() from inside the worker — notably
+    # session.__printSessionRotated() when the game rotates our session — would block
+    # reading the SAME stdin the operator's `docker attach` menu uses. Two readers on
+    # one tty corrupts the attach and detaches the operator at random while idle
+    # (the drop whose timing tracks game-side session rotation, not keypresses).
+    # Point our stdin at /dev/null so those reads get EOF instantly and never touch
+    # the tty. os.dup2 only rewrites THIS process's fd 0 (we are a separate process),
+    # so PID 1's menu keeps the real terminal. stdout/stderr stay on the tty -> logs
+    # remain visible under `docker attach`.
+    try:
+        _devnull = open(os.devnull, "r")
+        os.dup2(_devnull.fileno(), 0)
+        sys.stdin = _devnull
+    except Exception:
+        pass
+
     # P5.3: route all downstream game I/O through one rate-limiter (floor between requests).
     session = throttle_session(session)
 
