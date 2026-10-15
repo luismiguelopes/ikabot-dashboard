@@ -1,8 +1,8 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
 Estado (2026-10-02): **P0-P9 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
-descartado conscientemente (B5, B8 saltados). Bot em produção no **ikabot 7.6.3** (pinado
-por digest `62a6d1f`), sessão persistente, self-healing e backups activos. **291 testes a passar.**
+descartado conscientemente (B5, B8 saltados). Bot em produção no **ikabot 7.7.1** (pinado
+por digest `bcde4870`), sessão persistente, self-healing e backups activos. **291 testes a passar.**
 Trabalho de código: nada pendente. Em aberto só **dívidas de validação in-game** (precisam de
 sessão supervisionada, não é código): deploy para cidade própria; reescrita do farm nunca correu
 supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
@@ -360,10 +360,12 @@ Resolvido em dois planos complementares.
   (congelavam e partiam com updates — ex.: 7.6.0 acrescentou `splitCargoBetweenFleets`). O
   launcher injecta em runtime só as funções alteradas (`planroutes_overrides.py`,
   `loadcustommodule_overrides.py`). Adições do upstream já não partem.
-- **P9.3 ✅ Imagem pinada por digest (stable/beta).** Stable actual **7.6.3** (`ee94a86…`);
+- **P9.3 ✅ Imagem pinada por digest (stable/beta).** Stable actual **7.7.1** (`bcde4870…`);
   `:latest` é beta (diff stock → check imports offline → 1 arranque live → promover).
-  Histórico: 7.5.1 → 7.6.0 → 7.6.1 → 7.6.2 → 7.6.3 (esta corrige o timeout do blackbox token:
-  configurável em vez do hang de 900s).
+  Histórico: 7.5.1 → 7.6.0 → 7.6.1 → 7.6.2 → 7.6.3 → 7.7.1. O salto 7.6.3→7.7.1 (2026-10-15)
+  foi um refactor amplo (decorador `@configurator` novo, feature `CONSTRUCTION_FREE_SPEEDUP`
+  opcional/off); validado: planRoutes idêntico, APIs consumidas compatíveis, import offline +
+  patches cirúrgicos OK, arranque live limpo.
 - **P9.4 ✅ Sessão persistente (volume `ikabot_home` em `~/.ikabot`).** Sobrevive a
   `force-recreate`/promoção → deploys reutilizam a sessão (menos logins, menos dependência
   do serviço externo do blackbox).

@@ -12,7 +12,7 @@ services:
     # session are unchanged since 7.6.2, so the surgical overrides bind untouched; 7.6.3
     # also makes the blackbox-token request time out fast (configurable) instead of hanging.
     # Previous stable: 7.6.2 @sha256:22310e03b324f2bdd5fb3b415608ee68b8e9094c737af10cc63bd1b0c57173b1
-    image: ghcr.io/luismiguelopes/ikabot@sha256:e0cea2f46dfb0c5611e98cf9f77f94ca53af8ad8c3b68c08e7fd115bc2b33df8
+    image: ghcr.io/luismiguelopes/ikabot@sha256:bcde48707af2fc58d8e13e974d30b29b79320ad2b92b6da459268732d79f527f
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
