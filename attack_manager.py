@@ -731,18 +731,26 @@ def _calc_travel_secs(origin_x, origin_y, target_x, target_y):
 def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False,
                           required_units=None):
     """Closest own city with troops (and fleet if needs_fleet). Returns (name, id, x, y) or None.
-    If required_units (a set of unit ids) is given, the city must have at least one of
-    those specific units in stock — so a fixed farm loadout isn't launched from a city
-    that can't actually field it."""
+    If required_units (a set of unit ids) is given, the city should have at least one of
+    those specific units in stock — so a fixed farm loadout isn't launched from a city that
+    can't field it.
+
+    required_units is matched against military_data, which is the 8h military cache. That
+    cache LAGS the loadout units cycling through raids: when a raid's troops are out, the
+    cache can show the origin without them for hours, and a strict gate would then refuse to
+    raid even after they are long home (seen with Polis: live s303=113 while the cache, last
+    written before the troops returned, had none). So the match is a PREFERENCE, not a hard
+    filter: if no city has the required units in the (stale) cache, fall back to the nearest
+    city with any troops and let the caller's live per-city refresh discover the real counts."""
     try:
         with open(OWN_CITIES_PATH) as f:
             own_cities = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
-    by_city   = (military_data or {}).get("byCityName", {})
-    best      = None
-    best_dist = float("inf")
+    by_city = (military_data or {}).get("byCityName", {})
+    preferred = None; preferred_dist = float("inf")   # has the required loadout units (cache)
+    fallback  = None; fallback_dist  = float("inf")   # has any troops (cache) — stale-safe net
 
     for city in own_cities:
         name = city.get("name", "")
@@ -754,20 +762,23 @@ def _get_best_origin_city(target_x, target_y, military_data, needs_fleet=False,
         troops = mil.get("troops", {})
         fleet  = mil.get("fleet", {})
 
-        if required_units:
-            if not any(troops.get(uid, {}).get("amount", 0) > 0 for uid in required_units):
-                continue
-        elif not any(v.get("amount", 0) > 0 for v in troops.values()):
+        if not any(v.get("amount", 0) > 0 for v in troops.values()):
             continue
         if needs_fleet and not any(v.get("amount", 0) > 0 for v in fleet.values()):
             continue
 
         dist = _calc_travel_secs(cx, cy, target_x, target_y)
-        if dist < best_dist:
-            best_dist = dist
-            best = (name, cid, cx, cy)
+        if dist < fallback_dist:
+            fallback_dist = dist
+            fallback = (name, cid, cx, cy)
+        if required_units and any(troops.get(uid, {}).get("amount", 0) > 0 for uid in required_units):
+            if dist < preferred_dist:
+                preferred_dist = dist
+                preferred = (name, cid, cx, cy)
 
-    return best
+    if not required_units:
+        return fallback
+    return preferred or fallback
 
 
 def _build_fleet_units(city_name, military_data):

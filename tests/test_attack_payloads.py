@@ -147,6 +147,43 @@ def test_deploy_army_keeps_css_unit_ids(monkeypatch):
     assert "cargo_army_303" not in p
 
 
+def _write_own_cities(tmp_path, monkeypatch, cities):
+    import json as _json
+    p = tmp_path / "own.json"
+    p.write_text(_json.dumps(cities))
+    monkeypatch.setattr(am, "OWN_CITIES_PATH", str(p))
+
+
+def test_origin_falls_back_when_stale_cache_lacks_loadout(tmp_path, monkeypatch):
+    # Regression: the 8h military cache lagged the loadout units cycling through raids, so the
+    # origin's troops looked empty for the loadout and the farm raided nothing even after the
+    # troops were long home. The loadout match must be a preference, not a hard filter: fall
+    # back to the nearest city with any troops so the caller's live refresh can find them.
+    _write_own_cities(tmp_path, monkeypatch, [
+        {"name": "Polis", "cityId": "1", "x": 50, "y": 50},
+        {"name": "Far",   "cityId": "2", "x": 0,  "y": 0},
+    ])
+    # Cache: Polis has troops but NOT the loadout unit s303 (stale); Far has none.
+    military = {"byCityName": {"Polis": {"troops": {"s302": {"amount": 100}}, "fleet": {}}}}
+    best = am._get_best_origin_city(50, 50, military, required_units={"s303"})
+    assert best is not None and best[0] == "Polis"   # not refused despite stale cache
+
+
+def test_origin_prefers_city_that_has_the_loadout(tmp_path, monkeypatch):
+    # When the cache DOES show the loadout somewhere, prefer that city over a closer one
+    # that can't field it.
+    _write_own_cities(tmp_path, monkeypatch, [
+        {"name": "Near", "cityId": "1", "x": 50, "y": 50},
+        {"name": "Mid",  "cityId": "2", "x": 55, "y": 55},
+    ])
+    military = {"byCityName": {
+        "Near": {"troops": {"s999": {"amount": 100}}, "fleet": {}},   # troops, but not loadout
+        "Mid":  {"troops": {"s303": {"amount": 40}},  "fleet": {}},   # has the loadout unit
+    }}
+    best = am._get_best_origin_city(50, 50, military, required_units={"s303"})
+    assert best[0] == "Mid"
+
+
 def test_deploy_fleet_has_no_transporter(monkeypatch):
     _common(monkeypatch)
     monkeypatch.setattr(am, "_fetch_deployment_upkeep", lambda *a, **k: {"s401": "1"})
