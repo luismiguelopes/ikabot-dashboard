@@ -209,3 +209,38 @@ def test_with_retry_raises_after_exhausting():
         assert False, "should have raised"
     except ValueError:
         pass
+
+
+# ── Build-step watchdog (SIGALRM) ────────────────────────────────────────────
+# A stock upgrade step that blocks the worker (socket read OR waitForConstruction's wait())
+# froze the heartbeat and got the container restarted by autoheal. The watchdog must interrupt
+# any such block, restore the prior SIGALRM handler, and no-op cleanly when disabled.
+import signal
+import time as _time
+from queue_processor import _build_step_watchdog, _BuildStepTimeout
+
+
+def test_build_step_watchdog_interrupts_a_block():
+    t0 = _time.time()
+    tripped = False
+    try:
+        with _build_step_watchdog(1):
+            _time.sleep(10)  # stands in for a wedged socket/wait()
+    except _BuildStepTimeout:
+        tripped = True
+    assert tripped, "watchdog should have fired on the long block"
+    assert _time.time() - t0 < 3, "should interrupt near the 1s cap, not run the full sleep"
+
+
+def test_build_step_watchdog_restores_handler_and_passes_through():
+    prev = signal.getsignal(signal.SIGALRM)
+    with _build_step_watchdog(5):
+        _time.sleep(0.02)  # completes well inside the cap → no trip
+    assert signal.getsignal(signal.SIGALRM) is prev, "prior SIGALRM handler must be restored"
+
+
+def test_build_step_watchdog_disabled_is_a_noop():
+    prev = signal.getsignal(signal.SIGALRM)
+    with _build_step_watchdog(0):  # disabled → never arms the alarm
+        pass
+    assert signal.getsignal(signal.SIGALRM) is prev

@@ -290,6 +290,10 @@ _LM = {
         "en": "[build] {city}: POST response: {resp}",
         "pt": "[build] {city}: resposta POST: {resp}",
     },
+    "queue_step_timeout": {
+        "en": "[build] {city}: upgrade step exceeded {secs}s watchdog (worker was blocking) — abandoning this cycle, will retry.",
+        "pt": "[build] {city}: passo de upgrade passou o watchdog de {secs}s (worker bloqueado) — a abandonar este ciclo, tenta de novo.",
+    },
     "queue_done": {
         "en": "[build] Building queue cycle done.",
         "pt": "[build] Ciclo da fila de construção concluído.",

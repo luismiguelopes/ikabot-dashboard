@@ -1,10 +1,12 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import contextlib
 import json
 import math
 import os
 import random
+import signal
 import sys
 import time
 
@@ -25,6 +27,51 @@ from ikabot.config import actionRequest
 
 
 _RESOURCES_ENG = ['Wood', 'Wine', 'Marble', 'Crystal', 'Sulfur']
+
+# Wall-clock cap for a single building-upgrade step. The stock expandBuilding runs
+# synchronously on the worker and can block without issuing any game request (e.g.
+# waitForConstruction's wait() loop), so the per-request socket timeout never fires and the
+# heartbeat goes stale — the healthcheck then flags the container unhealthy and autoheal
+# restarts it (seen 2026-10-16: a 34-min freeze on a Polis warehouse step). SIGALRM interrupts
+# the block whatever its cause (socket read OR a wait()/sleep), so the worker recovers on its
+# own instead of needing a restart; the queue retries the step next cycle. 0 disables it.
+BUILD_STEP_TIMEOUT_SECS = int(os.getenv("BUILD_STEP_TIMEOUT_SECS", "150"))
+
+
+class _BuildStepTimeout(Exception):
+    """Raised by the SIGALRM watchdog when an upgrade step outruns BUILD_STEP_TIMEOUT_SECS."""
+
+
+@contextlib.contextmanager
+def _build_step_watchdog(secs):
+    """Interrupt the wrapped block after `secs` seconds via SIGALRM.
+
+    Only arms when SIGALRM is available (Unix) and we're on the main thread — setitimer
+    raises elsewhere. The previous handler/timer is saved and restored so we never clobber
+    another alarm. A no-op (secs<=0 or unsupported) simply runs the block unguarded.
+    """
+    if secs <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _fire(signum, frame):
+        raise _BuildStepTimeout()
+
+    try:
+        prev_handler = signal.signal(signal.SIGALRM, _fire)
+    except (ValueError, OSError):
+        # not the main thread → can't arm; run unguarded rather than crash the cycle
+        yield
+        return
+    prev_timer = signal.setitimer(signal.ITIMER_REAL, secs)[0] if hasattr(signal, "setitimer") else 0
+    try:
+        yield
+    finally:
+        if hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, 0)  # disarm ours
+        signal.signal(signal.SIGALRM, prev_handler)
+        if prev_timer and hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, prev_timer)  # restore any pre-existing alarm
 
 
 # ── Queue persistence ─────────────────────────────────────────────────────────
@@ -985,7 +1032,16 @@ def process_building_queue(session, ids, cities):
         from ikabot.function.constructionList import expandBuilding as _expandBuilding
         target_for_expand = dict(target_b)
         target_for_expand["upgradeTo"] = target_b["level"] + 1
-        _expandBuilding(session, city_id, target_for_expand, False)
+        try:
+            with _build_step_watchdog(BUILD_STEP_TIMEOUT_SECS):
+                _expandBuilding(session, city_id, target_for_expand, False)
+        except _BuildStepTimeout:
+            # The worker was blocking inside the stock upgrade path (socket or wait()). Bail out
+            # so the heartbeat resumes and autoheal doesn't restart us; the queue retries next cycle.
+            logger.warning(lm("queue_step_timeout", city=city_name, secs=BUILD_STEP_TIMEOUT_SECS))
+            next_item["failedAttempts"] = next_item.get("failedAttempts", 0) + 1
+            changed = True
+            continue
 
         time.sleep(random.randint(1, 4))
         html2 = session.get("view=city&cityId={}".format(city_id))
