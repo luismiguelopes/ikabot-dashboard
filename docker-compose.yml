@@ -46,6 +46,7 @@ services:
       # shadowing whole stock files, so upstream additions can't break our imports.
       - ./planroutes_overrides.py:/ikabot/planroutes_overrides.py
       - ./loadcustommodule_overrides.py:/ikabot/loadcustommodule_overrides.py
+      - ./healthcheck.py:/ikabot/healthcheck.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
       # Sessão persistente: ~/.ikabot guarda os cookies de login (7.6.1). Num volume,
@@ -71,7 +72,10 @@ services:
     labels:
       - autoheal=true
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time,sys,os; sys.exit(0 if time.time()-json.load(open('/tmp/ikalogs/last_alive.json'))['lastAlive'] < int(os.environ.get('BOT_OFFLINE_SECS','1800')) else 1)\""]
+      # Freeze-aware: stale heartbeat restarts the container, EXCEPT right after a host-sleep
+      # freeze (a long gap since the check last ran) — then the worker gets a grace pass so a
+      # laptop waking in the morning doesn't trigger a pointless restart (which drops attach).
+      test: ["CMD-SHELL", "python3 /ikabot/healthcheck.py"]
       interval: 2m
       timeout: 20s
       retries: 3

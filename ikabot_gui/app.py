@@ -44,6 +44,25 @@ LAST_ALIVE_JSON_PATH    = os.path.join(LOGS_DIR, "last_alive.json")
 # P6.6: single source for "bot offline" — the docker healthcheck, the Telegram watchdog and
 # the sidebar badge all use this value (env-overridable via docker-compose).
 BOT_OFFLINE_SECS = int(os.environ.get("BOT_OFFLINE_SECS", "1800"))
+
+# Nightly quiet window for the Telegram "bot offline" alert (local hours, [start, end)).
+# When the host (e.g. a laptop) sleeps overnight the whole stack freezes and resumes in the
+# morning with a stale heartbeat — a predictable, benign gap we don't want to be paged for.
+# An outage that BEGAN inside this window is suppressed (keyed on the last heartbeat's hour,
+# i.e. when the bot actually went quiet). A daytime outage still alerts. start==end disables.
+# Wrap-around (e.g. 23→7) is supported. Env-overridable.
+OFFLINE_QUIET_START = int(os.environ.get("OFFLINE_QUIET_START", "0"))
+OFFLINE_QUIET_END   = int(os.environ.get("OFFLINE_QUIET_END", "7"))
+
+
+def _in_quiet_window(ts):
+    """True if the local hour of `ts` falls in [OFFLINE_QUIET_START, OFFLINE_QUIET_END)."""
+    if OFFLINE_QUIET_START == OFFLINE_QUIET_END:
+        return False                      # disabled
+    h = time.localtime(ts).tm_hour
+    if OFFLINE_QUIET_START < OFFLINE_QUIET_END:
+        return OFFLINE_QUIET_START <= h < OFFLINE_QUIET_END
+    return h >= OFFLINE_QUIET_START or h < OFFLINE_QUIET_END   # wrap-around (e.g. 23→7)
 EMPIRE_SCAN_STATUS_PATH = os.path.join(LOGS_DIR, "empire_scan_status.json")
 SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
 SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
@@ -2000,7 +2019,11 @@ def _offline_watch_loop():
             import telegram_notifier as _tg
             offline_min = int((time.time() - last_alive) / 60)
             if (time.time() - last_alive) > BOT_OFFLINE_SECS:
-                _tg.notify_bot_offline(offline_min)
+                # Suppress alerts for outages that began during the nightly quiet window
+                # (host asleep → benign). The flag isn't armed, so the morning recovery
+                # won't fire a spurious clear either.
+                if not _in_quiet_window(last_alive):
+                    _tg.notify_bot_offline(offline_min)
             else:
                 _tg.clear_bot_offline()
         except Exception:
