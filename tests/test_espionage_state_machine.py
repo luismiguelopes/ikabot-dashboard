@@ -73,7 +73,7 @@ def test_execute_warehouse_success(monkeypatch):
     h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
     monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
-    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: True)
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (True, "ok"))
     em.execute_waiting_missions(session=object())
     m = h["missions"][0]
     assert m["state"] == "EXECUTING_WAREHOUSE"
@@ -103,7 +103,7 @@ def test_execute_rejected_retries_then_fails(monkeypatch):
     h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
     monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
-    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: False)
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (False, "rejected"))
 
     # First rejection: the spy is kept, mission re-armed for a retry (not FAILED).
     em.execute_waiting_missions(session=object())
@@ -116,6 +116,20 @@ def test_execute_rejected_retries_then_fails(monkeypatch):
         em.execute_waiting_missions(session=object())
     assert h["missions"][0]["state"] == "FAILED"
     assert h["missions"][0]["warehouseRetries"] >= em._WAREHOUSE_MAX_RETRIES
+
+
+def test_execute_no_feedback_fails_fast(monkeypatch):
+    """When the server only re-renders the tab with no feedback at all, the mission did not
+    run and retrying the identical call doesn't help — so it fails immediately (no retry
+    cycle), without stranding the spy (spy stays stationed, mission stays reusable)."""
+    h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (False, "no_feedback"))
+    em.execute_waiting_missions(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "FAILED"           # no retry loop for a pure re-render
+    assert m["warehouseRetries"] == 0
 
 
 # ── collect_mission_results: EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON/DONE/FAILED
@@ -211,7 +225,7 @@ def test_garrison_executes(monkeypatch):
     h = _patch(monkeypatch, [_mission(state="WAITING_FOR_GARRISON", garrisonExecuteAfter=_now() - 1)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
     monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
-    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: True)
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (True, "ok"))
     em.execute_garrison_missions(session=object())
     assert h["missions"][0]["state"] == "EXECUTING_GARRISON"
 
@@ -227,7 +241,7 @@ def test_garrison_rejected_done_with_warehouse(monkeypatch):
     h = _patch(monkeypatch, [_mission(state="WAITING_FOR_GARRISON", garrisonExecuteAfter=_now() - 1)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
     monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
-    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: False)
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (False, "rejected"))
     em.execute_garrison_missions(session=object())
     m = h["missions"][0]
     assert m["state"] == "DONE"

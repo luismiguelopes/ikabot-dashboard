@@ -754,7 +754,15 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
 
 def _execute_spy_mission(session, origin_city_id, target_city_id, position,
                          spy_session_id, num_agents, mission_type, num_decoys=0):
-    """POST executeMission. Returns True on success (provideFeedback type=10)."""
+    """POST executeMission. Returns (ok, reason):
+      (True,  "ok")          provideFeedback type=10 — the mission ran.
+      (False, "rejected")    a provideFeedback came back but not type=10 (e.g. type=11):
+                             a real server rejection that may be transient → worth a retry.
+      (False, "no_feedback") the server only re-rendered the tab with no provideFeedback at
+                             all — the mission silently did NOT run (spy busy / nothing to
+                             inspect at a city being attacked). Retrying the identical call
+                             almost never helps (seen live: 3 retries all no-op'd).
+      (False, "exception")   the request or parse blew up."""
     import ikabot.config as ikabot_config
     params = {
         "action":           "Espionage",
@@ -790,19 +798,25 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
                     ikabot_config.actionRequest = tok
                 break
 
+        saw_feedback = False
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "provideFeedback":
+                saw_feedback = True
                 feedback = entry[1]
                 if isinstance(feedback, list):
                     for fb in feedback:
                         if isinstance(fb, dict) and fb.get("type") == 10:
-                            return True
-        logger.warning("[espionage] executeMission tipo=%d sem type=10 — raw: %s",
+                            return True, "ok"
+        if saw_feedback:
+            logger.warning("[espionage] executeMission tipo=%d rejeitado (feedback sem type=10) — raw: %s",
+                           mission_type, resp[:300])
+            return False, "rejected"
+        logger.warning("[espionage] executeMission tipo=%d sem feedback (re-render, missão não executou) — raw: %s",
                        mission_type, resp[:300])
-        return False
+        return False, "no_feedback"
     except Exception as e:
         logger.error("[espionage] executeMission exception: %s", e)
-        return False
+        return False, "exception"
 
 
 
@@ -971,7 +985,7 @@ def execute_waiting_missions(session):
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
 
         time.sleep(random.randint(5, 15))
-        ok = _execute_spy_mission(
+        ok, reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
             spy_id, m.get("numAgents", 1), MISSION_WAREHOUSE,
         )
@@ -985,11 +999,21 @@ def execute_waiting_missions(session):
             missions[i]["spySessionId"] = spy_id
             missions[i]["warehouseRetries"] = 0
             logger.info("[espionage] missão armazém executada → %s", m["targetCityName"])
+        elif reason == "no_feedback":
+            # The server just re-rendered the safehouse tab without running the mission —
+            # the spy is busy or there's nothing to inspect (common at a city we're
+            # attacking). Retrying the identical call doesn't help (seen live: 3 identical
+            # retries all no-op'd), so give up this round immediately. The spy stays
+            # stationed (spy_count > 0 above), so the mission is still reusable/recallable.
+            missions[i]["state"] = "FAILED"
+            missions[i]["error"] = "executeMission sem feedback — missão não executou (espião continua estacionado)"
+            missions[i]["warehouseRetries"] = 0
+            logger.info("[espionage] %s: warehouse não executou (re-render sem feedback) → FAILED "
+                        "(espião continua estacionado, reutilizável)", m["targetCityName"])
         else:
-            # The spy is confirmed stationed (spy_count > 0 just above), so a transient
-            # type=11 rejection must NOT discard it to terminal FAILED (that stranded the
-            # spy abroad and forced a fresh dispatch). Bounce back to WAITING_AT_CITY with
-            # backoff and retry; only give up after a few attempts.
+            # A genuine rejection with feedback (type=11) or a transient exception: the spy
+            # is confirmed stationed (spy_count > 0), so don't discard it on the first
+            # failure — bounce back to WAITING_AT_CITY with backoff and retry a few times.
             retries = missions[i].get("warehouseRetries", 0) + 1
             missions[i]["warehouseRetries"] = retries
             if retries >= _WAREHOUSE_MAX_RETRIES:
@@ -1156,7 +1180,7 @@ def execute_garrison_missions(session):
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
 
         time.sleep(random.randint(5, 15))
-        ok = _execute_spy_mission(
+        ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
             spy_id, m.get("numAgents", 1), MISSION_GARRISON,
         )
