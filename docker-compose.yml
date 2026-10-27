@@ -1,18 +1,22 @@
 
 services:
   ikabot:
-    # STABLE channel — pinned to a validated digest (ikabot 7.6.3).
+    # STABLE channel — pinned to a validated digest (ikabot 7.7.2).
     # Our anti-detection tweaks are injected surgically at runtime by bot_launcher
     # (see planroutes_overrides.py / loadcustommodule_overrides.py), so additive
     # upstream changes no longer break us. Promotion flow: test :latest as "beta"
     # (diff stock files, re-run the offline import check, one live boot), then pin
     # its digest here as the next stable.
     # The login caches sessions in ~/.ikabot (persisted on the ikabot_home volume),
-    # so redeploys reuse the cookie instead of a fresh login. planRoutes/loadCustomModule/
-    # session are unchanged since 7.6.2, so the surgical overrides bind untouched; 7.6.3
-    # also makes the blackbox-token request time out fast (configurable) instead of hanging.
-    # Previous stable: 7.6.2 @sha256:22310e03b324f2bdd5fb3b415608ee68b8e9094c737af10cc63bd1b0c57173b1
-    image: ghcr.io/luismiguelopes/ikabot@sha256:bcde48707af2fc58d8e13e974d30b29b79320ad2b92b6da459268732d79f527f
+    # so redeploys reuse the cookie instead of a fresh login. 7.7.1 -> 7.7.2 (validated
+    # 2026-10-27): planRoutes byte-identical (main override intact); loadCustomModule
+    # swapped an inline processList block for session.updateProcessEntry(), but we
+    # whole-replace that function so it lands regardless; session.py additive
+    # (updateProcessEntry/IkariamErrorPage/__isSessionAlive, setSessionData gains
+    # keep_process_list=True with a safe default) — public API untouched; config.py
+    # version-string only. Offline import check clean.
+    # Previous stable: 7.7.1 @sha256:bcde48707af2fc58d8e13e974d30b29b79320ad2b92b6da459268732d79f527f
+    image: ghcr.io/luismiguelopes/ikabot@sha256:6224352eaa5f8d474d4d42b256d1814c7197a5b340fd2bd7ff154fdd714bf11f
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
