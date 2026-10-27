@@ -1821,7 +1821,10 @@ def api_espionage_force_warehouse():
             return jsonify({"ok": True})
         if m.get("state") in ("EXECUTING_WAREHOUSE", "EXECUTING_GARRISON"):
             return jsonify({"ok": True, "message": "Missão já em execução"})
-        if m.get("state") == "DONE":
+        # DONE = spy parked after a clean run; FAILED = a run was abandoned but the spy may
+        # still be stationed (transient rejection / missing report). Re-arm either one — the
+        # bot re-fetches the safehouse and only acts if the spy is really there.
+        if m.get("state") in ("DONE", "FAILED"):
             if not m.get("originCityId"):
                 # Synthetic imported mission — no real spy stationed, cannot re-execute
                 return jsonify({"error": "Missão importada sem espião activo — usa o dispatch normal"}), 400
@@ -1830,6 +1833,8 @@ def api_espionage_force_warehouse():
             missions[i]["garrisonResult"] = None
             missions[i]["garrisonExecutedAt"] = None
             missions[i]["garrisonExecuteAfter"] = None
+            missions[i]["warehouseRetries"] = 0
+            missions[i]["error"] = None
             data["missions"] = missions
             _save_json(SPY_MISSIONS_PATH, data)
             return jsonify({"ok": True})
@@ -1848,8 +1853,11 @@ def api_espionage_recall_spy():
     missions = data.get("missions", [])
     now      = int(time.time())
     changed  = False
+    # FAILED included: a failed run often leaves the spy stranded in the target safehouse,
+    # and this is the only way to bring it home (the recall processor treats "already home"
+    # as success, so recalling a genuinely-gone spy is harmless).
     recallable = {"TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
-                  "WAITING_FOR_GARRISON", "EXECUTING_GARRISON", "DONE"}
+                  "WAITING_FOR_GARRISON", "EXECUTING_GARRISON", "DONE", "FAILED"}
     for i, m in enumerate(missions):
         if str(m.get("targetCityId", "")) != city_id:
             continue

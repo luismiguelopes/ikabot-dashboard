@@ -933,6 +933,13 @@ def check_spy_arrivals(session):
         _save_missions(data)
 
 
+# A confirmed-stationed spy (spy_count > 0) that hits a transient server rejection on
+# executeMission is retried a few times before the mission is given up for dead, instead
+# of being discarded to terminal FAILED on the first type=11 (which stranded the spy
+# abroad and forced a fresh dispatch — see reexecute_stationed_spy / the GUI re-exec).
+_WAREHOUSE_MAX_RETRIES = 3
+
+
 def execute_waiting_missions(session):
     """WAITING_AT_CITY → EXECUTING: execute warehouse inspection after executeAfter."""
     data = _load_missions()
@@ -976,10 +983,30 @@ def execute_waiting_missions(session):
                                                  else random.randint(60, 300))
             missions[i]["missionType"] = "warehouse"
             missions[i]["spySessionId"] = spy_id
+            missions[i]["warehouseRetries"] = 0
             logger.info("[espionage] missão armazém executada → %s", m["targetCityName"])
         else:
-            missions[i]["state"] = "FAILED"
-            missions[i]["error"] = "executeMission rejeitado pelo servidor"
+            # The spy is confirmed stationed (spy_count > 0 just above), so a transient
+            # type=11 rejection must NOT discard it to terminal FAILED (that stranded the
+            # spy abroad and forced a fresh dispatch). Bounce back to WAITING_AT_CITY with
+            # backoff and retry; only give up after a few attempts.
+            retries = missions[i].get("warehouseRetries", 0) + 1
+            missions[i]["warehouseRetries"] = retries
+            if retries >= _WAREHOUSE_MAX_RETRIES:
+                missions[i]["state"] = "FAILED"
+                missions[i]["error"] = ("executeMission rejeitado pelo servidor (%dx) — "
+                                        "espião pode continuar estacionado" % retries)
+                logger.warning("[espionage] %s: warehouse rejeitado %dx → FAILED",
+                               m["targetCityName"], retries)
+            else:
+                backoff = random.randint(90, 240) * retries
+                missions[i]["state"] = "WAITING_AT_CITY"
+                missions[i]["executeAfter"] = now + backoff
+                missions[i]["error"] = ("executeMission rejeitado — retry %d/%d em %ds"
+                                        % (retries, _WAREHOUSE_MAX_RETRIES, backoff))
+                logger.info("[espionage] %s: warehouse rejeitado (tentativa %d/%d) — "
+                            "novo attempt em %ds (espião estacionado)",
+                            m["targetCityName"], retries, _WAREHOUSE_MAX_RETRIES, backoff)
         changed = True
 
     if changed:
@@ -1281,7 +1308,12 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
         st = m.get("state")
         if st in _ACTIVE:
             return True   # a spy op is already running for this target — don't dispatch
-        if st == "DONE":
+        # DONE = spy parked after a clean run. FAILED = a run was abandoned, but the spy
+        # may still be sitting in the safehouse (a transient executeMission rejection, or
+        # a report that never arrived — NOT the same as "detected/gone"). In both cases we
+        # re-arm the mission and let execute_waiting_missions re-fetch the safehouse: if the
+        # spy is truly gone it fails there with spy_count==0, so this never attacks a ghost.
+        if st in ("DONE", "FAILED"):
             offset = random.randint(30, 90) if fast else random.randint(5, 15) * 60
             missions[i]["state"] = "WAITING_AT_CITY"
             missions[i]["executeAfter"] = now + offset
@@ -1289,13 +1321,15 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
             missions[i]["fast"] = bool(fast)
             missions[i]["needGarrison"] = bool(need_garrison)
             missions[i]["missionType"] = None
+            missions[i]["warehouseRetries"] = 0
+            missions[i]["error"] = None
             for k in ("result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
                       "garrisonCollectAfter", "collectAfter", "executedAt"):
                 missions[i][k] = None
             data["missions"] = missions
             _save_missions(data)
-            logger.info("[espionage] re-execução nos espiões estacionados → %s",
-                        m.get("targetCityName"))
+            logger.info("[espionage] re-execução nos espiões estacionados (%s) → %s",
+                        st, m.get("targetCityName"))
             return True
     return False
 

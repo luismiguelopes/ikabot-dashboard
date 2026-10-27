@@ -443,7 +443,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <i className="fa-solid fa-file-lines" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
-                          {(['WAITING_AT_CITY','EXECUTING_WAREHOUSE','WAITING_FOR_GARRISON','EXECUTING_GARRISON','DONE'].includes(p.mission?.state ?? '')) ? (
+                          {(['WAITING_AT_CITY','EXECUTING_WAREHOUSE','WAITING_FOR_GARRISON','EXECUTING_GARRISON','DONE'].includes(p.mission?.state ?? '')
+                            || (p.mission?.state === 'FAILED' && p.mission?.originCityId)) ? (
                             <button
                               onClick={() => handleForceWarehouse(p)}
                               title={t('btn_force_warehouse')}
@@ -452,7 +453,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <i className="fa-solid fa-magnifying-glass" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
-                          {(p.mission?.originCityId && !['FAILED','RECALLED'].includes(p.mission?.state ?? '')) ? (
+                          {(p.mission?.originCityId && !['RECALLED'].includes(p.mission?.state ?? '')) ? (
                             <button
                               onClick={() => handleRecallSpy(p)}
                               title={t('btn_recall_spy')}

@@ -96,13 +96,26 @@ def test_execute_spy_gone_fails(monkeypatch):
     assert h["missions"][0]["state"] == "FAILED"
 
 
-def test_execute_rejected_fails(monkeypatch):
+def test_execute_rejected_retries_then_fails(monkeypatch):
+    """A transient executeMission rejection on a confirmed-stationed spy (spy_count>0)
+    must NOT discard it on the first failure: it bounces back to WAITING_AT_CITY for a
+    retry, and only gives up to FAILED after _WAREHOUSE_MAX_RETRIES attempts."""
     h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
     monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
     monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: False)
+
+    # First rejection: the spy is kept, mission re-armed for a retry (not FAILED).
     em.execute_waiting_missions(session=object())
+    assert h["missions"][0]["state"] == "WAITING_AT_CITY"
+    assert h["missions"][0]["warehouseRetries"] == 1
+
+    # Keep rejecting until the retry budget is exhausted → FAILED.
+    for _ in range(em._WAREHOUSE_MAX_RETRIES):
+        h["missions"][0]["executeAfter"] = _now() - 10  # make it due again
+        em.execute_waiting_missions(session=object())
     assert h["missions"][0]["state"] == "FAILED"
+    assert h["missions"][0]["warehouseRetries"] >= em._WAREHOUSE_MAX_RETRIES
 
 
 # ── collect_mission_results: EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON/DONE/FAILED
@@ -388,3 +401,27 @@ def test_sync_does_not_duplicate_known_stationed_spies(monkeypatch):
     assert len(h["missions"]) == 3                       # only the truly unknown 400 added
     assert ("400", "WAITING_AT_CITY") in states
     assert h["missions"][2].get("syntheticFromSafehouse") is True
+
+
+# ── reexecute_stationed_spy: reuse a parked spy instead of sending a fresh one ────
+
+def test_reexecute_rearms_a_failed_mission(monkeypatch):
+    """A FAILED mission whose spy may still be stationed (real origin + safehouse) is
+    re-armed to WAITING_AT_CITY so the next cycle re-checks the safehouse, instead of
+    being treated as 'no spy there' and forcing a fresh dispatch."""
+    h = _patch(monkeypatch, [_mission(state="FAILED", targetCityId="100",
+                                       error="executeMission rejeitado pelo servidor",
+                                       result={"success": True}, warehouseRetries=3)])
+    assert em.reexecute_stationed_spy("100") is True
+    m = h["missions"][0]
+    assert m["state"] == "WAITING_AT_CITY"
+    assert m["warehouseRetries"] == 0
+    assert m["result"] is None and m["error"] is None
+
+
+def test_reexecute_skips_imported_mission_without_origin(monkeypatch):
+    """A synthetic/imported FAILED mission has no real stationed spy — reuse is impossible,
+    so the caller must fall through to a fresh dispatch (returns False)."""
+    h = _patch(monkeypatch, [_mission(state="FAILED", targetCityId="100", originCityId=None)])
+    assert em.reexecute_stationed_spy("100") is False
+    assert h["missions"][0]["state"] == "FAILED"
