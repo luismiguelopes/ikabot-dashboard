@@ -95,6 +95,18 @@ def early_respy_enabled():
     return bool(_load_farm_settings().get("earlyRespyEnabled", True))
 
 
+def _early_report_max_age_secs():
+    """How old a pipelined re-spy report may be before a FLEET target stops trusting it.
+    When the troops' return is delayed for hours (overnight downtime / inactive hours), a
+    "clean port" reading taken during the fleet's dispersal goes stale — the driven-off
+    warships are long back — and sending troops on it is a blind raid. Default 2h, override
+    via farm settings `earlyReportMaxAgeMins`."""
+    try:
+        return max(600, int(_load_farm_settings().get("earlyReportMaxAgeMins", 120)) * 60)
+    except Exception:
+        return 7200
+
+
 def _next_round_needs_spy(t):
     """True if the round after the current raid will re-scout: the periodic re-spy cadence
     is due, the target currently shows a fleet, or it's a known fleet-target (its fleet
@@ -651,6 +663,15 @@ def process_farm_targets(session, in_active_hours=True):
             troop_j = int(t.get("last_troop_journey", 0))
             if troop_j <= 0 or now + troop_j + 300 >= ret_at:
                 need_fleet = True   # fleet back too soon (or timing unknown) → re-blockade
+        # Defence in depth for the stale-intel case: on a known fleet-target whose dispersed
+        # fleet has ALREADY returned (enemy_return_at in the past) AND whose scout is no longer
+        # fresh, a 0-ship reading is not credible — the warships are back. Clear the port with
+        # a blockade instead of sending troops blind. A genuinely fresh scout (spy_age ~0) is
+        # trusted and skips this, so it never over-blockades a port that is really empty.
+        if (enemy_ships == 0 and int(t.get("is_fleet_target", 0)) == 1
+                and ret_at and ret_at <= now
+                and now - int(t.get("last_spy_at", 0) or 0) > _early_report_max_age_secs()):
+            need_fleet = True
 
         origin = _get_best_origin_city(ix, iy, military, needs_fleet=need_fleet,
                                        required_units=required)
@@ -1118,9 +1139,26 @@ def process_farm_targets(session, in_active_hours=True):
                                    name, delay // 60)
                     continue
                 if int(t.get("respy_launched_at", 0)) > 0:
-                    # An early re-spy is already in flight/done — hand straight to the
-                    # SPYING evaluator (attacks as soon as the report + ships are ready),
+                    # An early re-spy is already in flight/done — normally hand straight to
+                    # the SPYING evaluator (attacks as soon as the report + ships are ready),
                     # skipping the IDLE backoff and a redundant second scout.
+                    # FLEET-TARGET FRESHNESS GUARD: the early report is only trustworthy while
+                    # the driven-off fleet is still dispersed. If the troops' return dragged on
+                    # (overnight downtime) so the fleet has had time to come back
+                    # (enemy_return_at in the past) or the scout is simply stale, that "clean
+                    # port" reading is worthless — don't send troops blind into a re-garrisoned
+                    # port (seen live at Braavos). Force a fresh full scout instead.
+                    ret_at  = int(t.get("enemy_return_at", 0) or 0)
+                    spy_age = now - int(t.get("last_spy_at", 0) or 0)
+                    if int(t.get("is_fleet_target", 0)) == 1 and (
+                            (ret_at and ret_at <= now)
+                            or spy_age > _early_report_max_age_secs()):
+                        farm_update(tid, {"state": "IDLE", "next_run_at": now,
+                                          "next_action": "spy", "respy_launched_at": 0})
+                        logger.info("[farm] %s: relatório antecipado obsoleto (frota pode ter "
+                                    "regressado / scout com %dmin) — re-espionagem completa "
+                                    "antes de atacar", name, max(0, spy_age // 60))
+                        continue
                     farm_update(tid, {"state": "SPYING", "respy_launched_at": 0})
                     logger.info("[farm] %s: tropas em casa — a avaliar o relatório antecipado", name)
                     continue
