@@ -439,3 +439,25 @@ def test_reexecute_skips_imported_mission_without_origin(monkeypatch):
     h = _patch(monkeypatch, [_mission(state="FAILED", targetCityId="100", originCityId=None)])
     assert em.reexecute_stationed_spy("100") is False
     assert h["missions"][0]["state"] == "FAILED"
+
+
+# ── Mission retention: _save_missions prunes old terminal history ───────────────
+
+def test_save_prunes_old_terminal_missions(monkeypatch, tmp_path):
+    """_save_missions drops terminal missions older than the retention window but keeps
+    in-flight ones, recent terminals, and timestamp-less entries regardless of age."""
+    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: {"missionRetentionDays": 30})
+    now = _now()
+    old = now - 40 * 86400
+    recent = now - 2 * 86400
+    em._save_missions({"missions": [
+        _mission(state="DONE", targetCityName="VelhoDone", dispatchedAt=old),
+        _mission(state="FAILED", targetCityName="VelhoFailed", executedAt=old),
+        _mission(state="RECALLED", targetCityName="VelhoRecalled", arrivedAt=old),
+        _mission(state="DONE", targetCityName="RecenteDone", executedAt=recent),
+        _mission(state="WAITING_AT_CITY", targetCityName="VivoAntigo", dispatchedAt=old),
+        _mission(state="DONE", targetCityName="SemData"),  # no timestamp → kept
+    ]})
+    names = {m["targetCityName"] for m in em._load_missions()["missions"]}
+    assert names == {"RecenteDone", "VivoAntigo", "SemData"}

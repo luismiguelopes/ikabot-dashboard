@@ -27,6 +27,13 @@ MISSION_MOVEMENTS = 7   # spy on troop/fleet movements (F4.b — enemy fleet ret
 
 _DEFAULT_GARRISON_THRESHOLD_TOTAL = 50000
 
+# Terminal missions (FAILED/DONE/RECALLED) older than this are history — pruned on every
+# save so spy_missions.json never grows unbounded (it had reached 1261 entries / 1.1 MB,
+# re-parsed on every cycle). In-flight missions are kept regardless of age. Override via
+# espionage_settings.json `missionRetentionDays`.
+_DEFAULT_MISSION_RETENTION_DAYS = 30
+_TERMINAL_STATES = ("FAILED", "DONE", "RECALLED")
+
 
 def _load_espionage_settings():
     try:
@@ -120,8 +127,35 @@ def _load_missions():
         return {"missions": []}
 
 
+def _mission_retention_secs():
+    try:
+        days = int(_load_espionage_settings().get("missionRetentionDays",
+                                                  _DEFAULT_MISSION_RETENTION_DAYS))
+    except Exception:
+        days = _DEFAULT_MISSION_RETENTION_DAYS
+    return max(1, days) * 86400
+
+
+def _prune_missions(missions):
+    """Drop terminal missions older than the retention window; keep every in-flight one
+    regardless of age. Timestamp = the mission's most recent activity."""
+    now = time.time()
+    retention = _mission_retention_secs()
+    kept = []
+    for m in missions:
+        if m.get("state") not in _TERMINAL_STATES:
+            kept.append(m)
+            continue
+        ts = int(m.get("executedAt") or m.get("arrivedAt") or m.get("dispatchedAt") or 0)
+        # No timestamp → can't date it, so keep it rather than guess it's ancient.
+        if ts == 0 or now - ts <= retention:
+            kept.append(m)
+    return kept
+
+
 def _save_missions(data):
     os.makedirs(LOGS_DIR, exist_ok=True)
+    data["missions"] = _prune_missions(data.get("missions", []))
     with open(SPY_MISSIONS_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
