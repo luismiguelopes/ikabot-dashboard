@@ -962,3 +962,74 @@ def test_drained_by_estimate_respies_even_if_last_return_healthy(monkeypatch, tm
 
     assert [q for q, _ in added] == ["spy_dispatch"]      # re-spied, did NOT attack directly
     assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_fleet_target_rejected_garrison_rescouts_not_attacks(monkeypatch, tmp_path):
+    """A fleet target whose garrison scout came back REJECTED carries no fleet intel, so the
+    farm must re-scout instead of raiding on the guess — troops would bounce off the local
+    fleet (Lançassolar 29/10). scout_fail_count bumps; nothing is queued."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
+        "garrisonResult": {"error": "executeMission garrison rejeitado"},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                    # nothing attacked
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "spy"
+    assert t["scout_fail_count"] == 1
+
+
+def test_fleet_target_skips_round_after_max_scout_fails(monkeypatch, tmp_path):
+    """Once the garrison scout has failed _MAX_SCOUT_FAILS times, skip the round (long
+    backoff) and reset the counter rather than looping forever."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0, "intervalHours": 8})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1,
+                                   "scout_fail_count": fm._MAX_SCOUT_FAILS - 1})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
+        "garrisonResult": {"error": "rejeitado"},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "spy"
+    assert t["scout_fail_count"] == 0                     # reset after the skip
+    assert t["next_run_at"] > int(time.time()) + 3600     # long backoff (interval), not minutes
+
+
+def test_fleet_target_clean_garrison_clears_scout_fails(monkeypatch, tmp_path):
+    """A garrison scout that actually returns troops data (even empty) is trusted: the attack
+    proceeds and any scout-failure streak is cleared."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1, "scout_fail_count": 2})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
+        "garrisonResult": {"troops": {}},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING" and t["scout_fail_count"] == 0

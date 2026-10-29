@@ -45,6 +45,8 @@ _LOOP_RELAUNCH_DELAY_RANGE = (30, 120)   # seconds between loop waves
 _LOOP_DRY_STRIKES = 2                    # consecutive real returns < min_loot → dry → disable
 _SEA_BATTLE_MARGIN_SECS = 20 * 60  # extra troop delay when the blockade must FIGHT combat
                                    # ships (rounds are ~15 min) instead of scaring flee ones
+_MAX_SCOUT_FAILS = 3               # consecutive garrison scouts without fleet intel on a
+                                   # fleet target before the farm skips the round outright
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
                                   # ready on arrival (re-spy rounds skip the post-return wait)
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
@@ -979,7 +981,12 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
 
             loot     = sum((m.get("result") or {}).get("resources", {}).values())
-            garrison = (m.get("garrisonResult") or {}).get("troops") or {}
+            gres     = m.get("garrisonResult") or {}
+            garrison = gres.get("troops") or {}
+            # A rejected/absent garrison scout carries NO fleet intel — it is not the same as
+            # "scouted and saw an empty port". Only a scout that actually returned troops data
+            # (error-free) tells us the port is clean.
+            garrison_known = ("troops" in gres) and (gres.get("error") is None)
             # Type-based decision: flee ships (lancha/reparador) are driven off by a blockade;
             # any other warship actually fights → too dangerous. combat ships beyond the
             # tolerated cap (max_enemy_ships, default 0) → skip + alert.
@@ -1028,6 +1035,33 @@ def process_farm_targets(session, in_active_hours=True):
             # 2 triremes). Flee ships run from the blockade; tolerated combat ships
             # (≤ max_enemy_ships) get fought by it — never ignored.
             enemy_ships = flee_ships + combat_ships
+
+            # FLEET TARGET + NO FLEET INTEL: the garrison scout came back rejected/empty, so we
+            # cannot tell whether the port is clean. Never raid on the guess — unescorted troops
+            # bounce off the local fleet and sail home for nothing (seen live: Lançassolar
+            # 29/10, "regressam porque perderiam num combate marítimo"). Re-scout instead; after
+            # a few straight failures skip the round rather than loop forever.
+            if int(t.get("is_fleet_target", 0)) == 1 and not garrison_known:
+                tries = int(t.get("scout_fail_count", 0)) + 1
+                if tries >= _MAX_SCOUT_FAILS:
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                                      "last_loot": loot, "scout_fail_count": 0,
+                                      "next_action": "spy"})
+                    logger.warning("[farm] %s: guarnição não confirmada %dx (scout rejeitado) — "
+                                   "a saltar a ronda, não arrisco tropas contra frota não vista",
+                                   name, tries)
+                else:
+                    wait = random.randint(3, 8) * 60
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                                      "last_loot": loot, "scout_fail_count": tries,
+                                      "next_action": "spy"})
+                    logger.info("[farm] %s: guarnição não confirmada (scout rejeitado) — "
+                                "re-espionagem em %dmin antes de atacar (alvo com frota)",
+                                name, wait // 60)
+                continue
+            # A clean scout clears the failure streak.
+            if int(t.get("scout_fail_count", 0)):
+                farm_update(tid, {"scout_fail_count": 0})
 
             # Don't launch while the previous raid's ships are still returning — keep
             # the fresh intel and retry directly in a few minutes once they're back.

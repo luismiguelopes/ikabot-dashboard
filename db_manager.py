@@ -175,6 +175,16 @@ def _run_migrations(conn):
             except Exception:
                 pass
         conn.execute("INSERT INTO schema_version (version) VALUES (12)")
+    if current < 13:
+        # v13 = scout_fail_count: consecutive garrison scouts that came back rejected/without
+        # fleet intel on a fleet target. The farm re-scouts instead of raiding blind while this
+        # is non-zero, and skips the round once it hits the cap (troops bounce off an unscouted
+        # fleet — seen live at Lançassolar).
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN scout_fail_count INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (13)")
     conn.commit()
 
 
@@ -444,7 +454,7 @@ _FARM_UPDATE_COLS = {
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
-    "mode", "low_raids",
+    "mode", "low_raids", "scout_fail_count",
 }
 
 
