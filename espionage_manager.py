@@ -15,9 +15,14 @@ from espionage_parsers import (
     _parse_movement_datetime, parse_fleet_movements, enemy_fleet_clean_window_secs,
     _alt_to_resource_key, _RESOURCE_ALT_MAP,
 )
+# Spy-count persistence layer lives in spy_counts.py (P11.4 extraction).
+# Re-exported here so existing callers' imports keep resolving unchanged.
+from spy_counts import (
+    SPY_COUNTS_PATH, _load_spy_counts, _save_spy_counts,
+    _fetch_city_spy_counts, get_spy_counts,
+)
 
 SPY_MISSIONS_PATH          = os.path.join(LOGS_DIR, "spy_missions.json")
-SPY_COUNTS_PATH            = os.path.join(LOGS_DIR, "spy_counts.json")
 OWN_CITIES_PATH            = os.path.join(LOGS_DIR, "own_cities.json")
 ESPIONAGE_SETTINGS_PATH    = os.path.join(LOGS_DIR, "espionage_settings.json")
 
@@ -198,20 +203,6 @@ def _queue_recall(item):
         return False
 
 
-def _load_spy_counts():
-    try:
-        with open(SPY_COUNTS_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"lastUpdated": 0, "byCityId": {}}
-
-
-def _save_spy_counts(data):
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(SPY_COUNTS_PATH, "w") as f:
-        json.dump(data, f, indent=2)
-
-
 # ── Safehouse HTML parsing ────────────────────────────────────────────────────
 
 
@@ -317,53 +308,6 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
         _save_missions(data)
 
 
-def _fetch_city_spy_counts(session, city_id, city_name, position):
-    """
-    GET the safehouse AJAX view and parse spy counts from the changeView HTML.
-    The response changeView[1][1] contains the full safehouse HTML with all counters.
-    Returns (counts_dict, html_str), or (None, "") on error.
-    """
-    import ikabot.config as ikabot_config
-
-    url = (
-        f"view=safehouse&cityId={city_id}&position={position}"
-        f"&backgroundView=city&currentCityId={city_id}"
-        f"&actionRequest={ikabot_config.actionRequest}&ajax=1"
-    )
-    try:
-        resp = session.get(url)
-        resp_data = json.loads(resp, strict=False)
-    except Exception as e:
-        logger.error("[espionage] GET safehouse %s falhou: %s", city_name, e)
-        return None, ""
-
-    # Refresh CSRF token
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
-
-    # changeView[1][1] contains the full safehouse building HTML with spy stats
-    html_content = ""
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "changeView":
-            inner = entry[1]
-            if isinstance(inner, list) and len(inner) > 1 and isinstance(inner[1], str):
-                html_content = inner[1]
-            break
-
-    if not html_content:
-        logger.warning("[espionage] safehouse %s: sem HTML no changeView (tipos: %s)",
-                       city_name, [e[0] if isinstance(e, list) else e for e in resp_data[:6]])
-        return None, ""
-
-    counts = _parse_safehouse_page(html_content, city_name)
-    counts["cityName"] = city_name
-    return counts, html_content
-
-
 # ── Public: fetch spy counts for all cities ───────────────────────────────────
 
 def fetch_spy_counts(session):
@@ -436,10 +380,6 @@ def count_in_field_by_city():
 
 def get_missions():
     return _load_missions()
-
-
-def get_spy_counts():
-    return _load_spy_counts()
 
 
 def has_pending_dispatch():
