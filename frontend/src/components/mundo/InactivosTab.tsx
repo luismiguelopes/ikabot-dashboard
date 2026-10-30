@@ -5,6 +5,7 @@ import { Card } from '../ui/Card'
 import { Td } from '../ui/TableCells'
 import { SpyModal } from './SpyModal'
 import { AttackModal } from './AttackModal'
+import { FarmSettings } from '../dispatch/FarmSettings'
 import type { WorldScanData, WorldScanPlayer, OwnCity } from '../../types'
 import type { CitySpyCounts, FarmTarget, LootStat, SpyMission } from './types'
 
@@ -138,6 +139,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   const [farmIds,     setFarmIds]     = useState<Set<string>>(new Set())
   const [farmByCity,  setFarmByCity]  = useState<Record<string, FarmTarget>>({})
   const [lootByPlayer, setLootByPlayer] = useState<Record<string, LootStat>>({})
+  const [showFarmSettings, setShowFarmSettings] = useState(false)
   const loadFarm = () => fetch('/api/farm').then(r => r.json())
     .then((d: FarmTarget[]) => {
       if (!Array.isArray(d)) return
@@ -374,6 +376,21 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
 
   return (
     <div>
+      <div className="mb-3">
+        <button
+          onClick={() => setShowFarmSettings(v => !v)}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+        >
+          <i className="fa-solid fa-seedling text-emerald-600" />
+          {t('farm_settings_title')}
+          <i className={`fa-solid fa-chevron-${showFarmSettings ? 'up' : 'down'} text-[10px]`} />
+        </button>
+        {showFarmSettings && (
+          <Card className="mt-2">
+            <FarmSettings />
+          </Card>
+        )}
+      </div>
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -658,6 +675,36 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                       ? t('farm_raids') + ': ' + f.total_raids
                                       : t('farm_interval', { n: String(f.interval_hours) }) + ' · ' + t('farm_raids') + ': ' + f.total_raids}
                                   </span>
+                                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-400">
+                                    <span className="flex items-center gap-1" title={t('farm_maxships_hint')}>
+                                      {t('farm_maxships')}
+                                      <input type="number" min={0} max={9999} value={f.max_enemy_ships ?? 0}
+                                        onChange={e => farmAction(String(p.cityId), { maxEnemyShips: Math.max(0, Number(e.target.value)) })}
+                                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right" />
+                                    </span>
+                                    <span className="flex items-center gap-1">
+                                      {t('farm_respy')}
+                                      <input type="number" min={1} max={50} value={f.respy_every ?? 1}
+                                        onChange={e => farmAction(String(p.cityId), { respyEvery: Math.max(1, Number(e.target.value)) })}
+                                        className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right" />
+                                    </span>
+                                    {f.is_fleet_target === 1 && (
+                                      <>
+                                        <span className="flex items-center gap-1" title={t('farm_fleetlead_hint')}>
+                                          {t('farm_fleetlead')}
+                                          <input type="number" min={1} max={120} value={f.fleet_lead_min ?? 5}
+                                            onChange={e => farmAction(String(p.cityId), { fleetLeadMin: Math.max(1, Number(e.target.value)) })}
+                                            className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right" />min
+                                        </span>
+                                        <span className="flex items-center gap-1" title={t('farm_disperse_hint')}>
+                                          {t('farm_disperse')}
+                                          <input type="number" min={1} max={1440} value={f.disperse_min ?? 240}
+                                            onChange={e => farmAction(String(p.cityId), { disperseMin: Math.max(1, Number(e.target.value)) })}
+                                            className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right" />min
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
                                   <div className="ml-auto flex items-center gap-3">
                                     <button onClick={() => farmAction(String(p.cityId), { runNow: true })}
                                             className="text-xs text-indigo-500 hover:text-indigo-700 font-medium" title={t('farm_runnow')}>

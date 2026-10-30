@@ -10,6 +10,9 @@ export interface FarmTarget {
   target_city_name?: string; target_player?: string
   island_id?: string | number; island_x?: number; island_y?: number
   last_troop_journey?: number  // round-trip basis for the loot/hour queue score
+  // Per-target tunables (editable inline, posted to /api/farm/update)
+  min_loot?: number; max_enemy_ships?: number
+  is_fleet_target?: number; fleet_lead_min?: number; disperse_min?: number
 }
 export interface LootStat {
   from_player: string; raids: number; last_ts: number; total: number
