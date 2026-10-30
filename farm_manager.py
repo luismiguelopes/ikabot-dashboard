@@ -787,15 +787,18 @@ def process_farm_targets(session, in_active_hours=True):
                 "enemy_return_at": new_enemy_return, "troop_journey": troop_travel,
                 "is_fleet_target": 1 if (is_fleet_target or enemy_ships > 0) else 0}
 
-    def _launch_respy(t, need_garrison=True):
+    def _launch_respy(t, need_garrison=True, force_fresh=False):
         """Re-scout a target: reuse spies already stationed there (fast, no travel, no
         spies burned), else dispatch fresh ones. `need_garrison=False` → warehouse-only
-        re-scout (safe target). Returns 'stationed'/'dispatched' on success, or None when
-        no spy origin is available."""
+        re-scout (safe target). `force_fresh=True` skips the parked spies (used once they
+        have been rejected _MAX_SCOUT_FAILS times — they are detected/dead) and dispatches
+        new ones. Returns 'stationed'/'dispatched' on success, or None when no spy origin
+        is available."""
         tid = t["target_city_id"]
-        from espionage_manager import reexecute_stationed_spy
-        if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison):
-            return "stationed"
+        if not force_fresh:
+            from espionage_manager import reexecute_stationed_spy
+            if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison):
+                return "stationed"
         origin = _pick_spy_origin(own_cities, spy_counts, t)
         if not origin:
             return None
@@ -936,13 +939,15 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
             need_garrison = (verdict == "garrison")
 
-            spy = _launch_respy(t, need_garrison=need_garrison)
+            spy = _launch_respy(t, need_garrison=need_garrison,
+                                force_fresh=bool(int(t.get("force_fresh_spy", 0) or 0)))
             if spy is None:
                 logger.info("[farm] %s: sem cidade com espiões — nova tentativa em 1h", name)
                 farm_update(tid, {"next_run_at": now + 3600})
                 continue
             farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now,
-                              "last_spy_at": now, "respy_launched_at": 0})
+                              "last_spy_at": now, "respy_launched_at": 0,
+                              "force_fresh_spy": 0})
             tag = "" if need_garrison else " (só armazém)"
             if spy == "stationed":
                 logger.info("[farm] %s: re-execução nos espiões já estacionados%s", name, tag)
@@ -956,10 +961,26 @@ def process_farm_targets(session, in_active_hours=True):
             if not m:
                 from espionage_manager import latest_failed_after
                 if latest_failed_after(tid, int(t.get("spy_dispatched_at", 0))):
-                    # the (reused or fresh) spy was detected/gone — retry soon with a dispatch
-                    wait = random.randint(5, 15) * 60
-                    logger.info("[farm] %s: espião falhou — nova espionagem em %dmin", name, wait // 60)
-                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait, "next_action": "spy"})
+                    # The (reused or fresh) spy was detected/gone. Count consecutive failures:
+                    # a target whose parked spies keep getting rejected (counter-espionage) must
+                    # not keep winning the queue head and re-arming them every few minutes — that
+                    # starves every other farm target (seen live: Jardim De Cima looped ~12h,
+                    # Valíria/Braavos never ran). Past the cap, back off a FULL interval so the
+                    # head advances, and force FRESH spies next time instead of the dead parked ones.
+                    fails = int(t.get("scout_fail_count", 0) or 0) + 1
+                    if fails >= _MAX_SCOUT_FAILS:
+                        farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                                          "next_action": "spy", "scout_fail_count": 0,
+                                          "force_fresh_spy": 1})
+                        logger.warning("[farm] %s: espionagem falhou %dx seguidas (espiões "
+                                       "estacionados rejeitados / contra-espionagem) — a saltar a "
+                                       "ronda e a forçar espiões novos na próxima", name, fails)
+                    else:
+                        wait = random.randint(5, 15) * 60
+                        logger.info("[farm] %s: espião falhou (%d/%d) — nova espionagem em %dmin",
+                                    name, fails, _MAX_SCOUT_FAILS, wait // 60)
+                        farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                                          "next_action": "spy", "scout_fail_count": fails})
                 elif _spy_is_stuck(t, now):
                     # No report, no failure, and no in-flight mission: the dispatch never took.
                     # Release the head now so the queue advances instead of blocking on it for

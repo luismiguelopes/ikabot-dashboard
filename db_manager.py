@@ -185,6 +185,17 @@ def _run_migrations(conn):
         except Exception:
             pass
         conn.execute("INSERT INTO schema_version (version) VALUES (13)")
+    if current < 14:
+        # v14 = force_fresh_spy: set after a fleet target's parked spies are rejected
+        # _MAX_SCOUT_FAILS times in a row (counter-espionage / dead stationed spies). The next
+        # re-scout then dispatches FRESH spies instead of re-arming the dead parked ones, so a
+        # target that can't be scouted stops looping on its stationed spies and holding the
+        # queue head (seen live at Jardim De Cima — starved every other farm target for ~12h).
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN force_fresh_spy INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (14)")
     conn.commit()
 
 
@@ -454,7 +465,7 @@ _FARM_UPDATE_COLS = {
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
-    "mode", "low_raids", "scout_fail_count",
+    "mode", "low_raids", "scout_fail_count", "force_fresh_spy",
 }
 
 

@@ -1033,3 +1033,68 @@ def test_fleet_target_clean_garrison_clears_scout_fails(monkeypatch, tmp_path):
     assert [q for q, _ in added] == ["attack"]
     t = db_manager.farm_get("100")
     assert t["state"] == "ATTACKING" and t["scout_fail_count"] == 0
+
+
+def test_failed_scout_counts_toward_cap_and_retries_soon(monkeypatch, tmp_path):
+    """A target whose spy mission FAILED (parked spies rejected / detected) retries soon but
+    now counts the failure, so it cannot loop on the queue head forever (Jardim De Cima 30/10)."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 8})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1})
+    missions = [{"state": "FAILED", "targetCityId": "100", "dispatchedAt": 1000,
+                 "error": "executeMission rejeitado"}]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "spy"
+    assert t["scout_fail_count"] == 1
+    assert t["force_fresh_spy"] == 0                      # not yet at the cap
+    assert t["next_run_at"] < int(time.time()) + 3600     # short retry (minutes)
+
+
+def test_failed_scout_at_cap_backs_off_and_forces_fresh(monkeypatch, tmp_path):
+    """Once the spy has failed _MAX_SCOUT_FAILS times in a row, back off a full interval (the
+    queue head advances to other targets) and flag a FRESH dispatch next time instead of
+    re-arming the dead parked spies — the loop that starved Valíria/Braavos is broken."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 8})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1,
+                                   "scout_fail_count": fm._MAX_SCOUT_FAILS - 1})
+    missions = [{"state": "FAILED", "targetCityId": "100", "dispatchedAt": 1000,
+                 "error": "executeMission rejeitado"}]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "spy"
+    assert t["scout_fail_count"] == 0                     # reset after the skip
+    assert t["force_fresh_spy"] == 1                      # fresh spies next round
+    assert t["next_run_at"] > int(time.time()) + 3600     # full interval, not minutes
+
+
+def test_force_fresh_spy_dispatches_new_not_stationed(monkeypatch, tmp_path):
+    """With force_fresh_spy set (parked spies proven dead), a due target dispatches FRESH spies
+    instead of re-arming the stationed ones, and clears the flag. Mirror of
+    test_farm_reuses_stationed_spy_instead_of_dispatch with the flag on."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40,
+                         "islandY": 50, "islandId": "7"})
+    db_manager.farm_update("100", {"next_run_at": 0, "next_action": "spy", "force_fresh_spy": 1})
+    stationed = [{"targetCityId": "100", "originCityId": "1", "safehousePosition": 3,
+                  "state": "DONE", "targetCityName": "Alvo"}]
+    added = _common_patches(monkeypatch, tmp_path, missions=stationed)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]   # fresh dispatch, NOT stationed reuse
+    t = db_manager.farm_get("100")
+    assert t["state"] == "SPYING" and t["force_fresh_spy"] == 0
