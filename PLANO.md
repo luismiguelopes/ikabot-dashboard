@@ -1,11 +1,13 @@
 # PLANO — ikabot (criado 2026-06-11, após auditoria completa do código)
 
-Estado (2026-10-15): **P0-P9 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
+Estado (2026-10-29): **P0-P10 concluídos** + backlog da auditoria (B1-B10, F1, F11) feito ou
 descartado conscientemente (B5, B8 saltados). Extras recentes: supervisor do worker (relança o
-bot em segundos em vez de ~36 min via autoheal), credenciais por env em vez de argv, e **F13 —
-loop de drenagem** (ataque agressivo a um alvo até secar; ver FEATURES.md). Bot em produção no
-**ikabot 7.7.1** (pinado por digest `bcde4870`), sessão persistente, self-healing e backups activos.
-**291 testes a passar.**
+bot em segundos em vez de ~36 min via autoheal), credenciais por env em vez de argv, **F13 —
+loop de drenagem** (ataque agressivo a um alvo até secar; ver FEATURES.md) e **P10 — robustez do
+farm e da espionagem** (fixes de intel obsoleta/rejeitada em alvos de frota, retenção de missões,
+watchdog de construção, imunidade ao sleep do host; ver secção P10). Bot em produção no
+**ikabot 7.7.2** (pinado por digest `6224352e`), sessão persistente, self-healing e backups activos.
+**305 testes a passar.**
 Trabalho de código: nada pendente. Em aberto só **dívidas de validação in-game** (precisam de
 sessão supervisionada, não é código): deploy para cidade própria; reescrita do farm nunca correu
 supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
@@ -377,6 +379,66 @@ Resolvido em dois planos complementares.
 
 ---
 
+## P10 — Robustez do farm, espionagem e arranque (2026-10-15 → 2026-10-29)
+
+Lote de correcções de fiabilidade saído de incidentes reais observados em produção (logs +
+feedback do utilizador). Sem features novas; endurece caminhos que gastavam tropas, barcos ou
+viagens à toa. Todos commitados em inglês e em produção.
+
+### Arranque e supervisão
+- [x] **P10.1 Worker não sequestra o `docker attach`** (`7f798d1`) — o worker autónomo herdava o
+      stdin do attach; o `enter()` na rotação de sessão sequestrava o terminal. Fix: stdin do
+      worker → `/dev/null`.
+- [x] **P10.2 Supervisor do worker** (`8cecb9f`) — relança o worker em segundos quando morre, em
+      vez de esperar ~36 min pelo autoheal. O autoheal fica como rede de segurança de último nível.
+- [x] **P10.3 Credenciais por env** (`74446c7`) — email/password lidos do ambiente, não do argv
+      (deixavam de aparecer no `ps`/process list).
+
+### Farm — intel de alvos de frota (gastava tropas/viagens)
+- [x] **P10.4 Pilhagem na mesma ilha fazia ida-e-volta morta** (`567707b`) — alvo na mesma ilha
+      usava o cálculo de viagem marítima; tropas iam e voltavam sem pilhar. Corrigido o modo de
+      viagem terrestre.
+- [x] **P10.5 Cache militar obsoleta bloqueava raids** (`d4c2ae3`) — depois de as tropas
+      regressarem, o `military.json` (cache 8h) ainda as dava como ausentes e o farm saltava a
+      ronda. O farm deixou de confiar na cache stale para decidir origem.
+- [x] **P10.6 Re-scout em intel antecipada obsoleta** (`c626f1e`) — um relatório antecipado (re-spy
+      em pipeline) de horas antes era usado para atacar um alvo de frota às cegas. Agora, se a frota
+      inimiga pode ter regressado (`enemy_return_at`) ou o scout tem mais de `earlyReportMaxAgeMins`
+      (2h), força re-espionagem completa antes de comprometer tropas. Guarda-redes equivalente em
+      `_enqueue_attack`.
+- [x] **P10.7 Scout de guarnição rejeitado ≠ porto limpo** (`5cccf8b`) — a decisão de frota lia-se
+      só do relatório de guarnição; um scout **rejeitado** (sem dados) era tratado como "0 navios"
+      → tropas-só → ricochete. Agora distingo relatório fiável (ataca) de rejeitado/ausente
+      (re-espia; ao fim de 3 falhas salta a ronda, nunca arrisca tropas contra frota não vista).
+      Nova coluna `scout_fail_count` (schema v13).
+
+### Espionagem — fiabilidade do store e das missões
+- [x] **P10.8 Espiões de missão falhada ficavam encalhados** (`0b1c362`) — uma missão FAILED
+      deixava os espiões estacionados inutilizáveis; agora voltam ao pool reutilizável.
+- [x] **P10.9 Re-exec de armazém falha rápido sem feedback** (`e9e3b44`) — quando o servidor não
+      devolve `provideFeedback`, a re-execução de armazém desiste depressa em vez de pendurar.
+- [x] **P10.10 Retenção de missões terminais** (`e20d9b3`) — o `spy_missions.json` crescia sem
+      limite (1261 missões observadas). `_prune_missions` no `_save_missions` corta terminais com
+      mais de `missionRetentionDays` (30d); missões vivas e sem timestamp preservadas. Purga manual
+      inicial 1261→184.
+
+### Infra / robustez geral
+- [x] **P10.11 Sleep do host não repagina nem reinicia** (`578c46c`) — o Mac a dormir criava
+      lacunas no heartbeat que disparavam alertas offline e restart ao acordar. Healthcheck
+      freeze-aware + janela nocturna de alerta tornam esses gaps benignos.
+- [x] **P10.12 Watchdog de passos de construção** (`a396c11`) — um `expandBuilding` síncrono do
+      stock podia pendurar o worker a meio de um build; watchdog SIGALRM em `queue_processor`
+      limita cada passo e auto-recupera.
+- [x] **P10.13 Promoção da imagem para 7.7.2 stable** (`982d9fa`, digest `6224352e`) — seguindo o
+      fluxo de validação habitual (diff stock → imports offline → arranque live → promover digest).
+
+> **Nota operacional recorrente (P10.6/P10.7):** os alvos com frota (`is_fleet_target=1`) são a
+> fonte de quase todos os desperdícios de tropas. A regra consolidada é: **nunca comprometer tropas
+> contra um alvo de frota sem intel de guarnição fiável e fresca**. Qualquer caminho novo que decida
+> enviar tropas a um fleet-target tem de passar por esta porta.
+
+---
+
 ## Backlog / próximos passos (auditoria 2026-09-20; progresso 2026-09-21)
 
 Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também o roadmap partilhável.
@@ -429,4 +491,43 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
 
 ### Dívidas de validação in-game *(precisam de sessão supervisionada — não é trabalho de código)*
 - [ ] Deploy para cidade própria (DispatchTab → destino "própria" → deployArmy type=10).
-- [ ] Reescrita do farm supervisionada live.
+- [ ] Reescrita do farm supervisionada live. *(parcialmente exercitada: os fixes P10.4–P10.7
+      saíram de incidentes reais em produção, logo o caminho de frota já corre live — falta uma
+      sessão supervisionada de ponta a ponta.)*
+
+---
+
+## P11 — Roadmap candidato (auditoria a frio 2026-10-29)
+
+Auditoria de todo o projecto com P0-P10 concluídos, 305 testes a passar, zero TODO/FIXME, build
+do frontend fresco e git limpo. **Veredicto: o projecto está maduro e estável** — não há bugs
+abertos nem trabalho de código pendente. O que resta é dívida de manutenibilidade, validação live
+e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
+
+### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
+- [ ] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** (~36× nos logs). O pre-check já
+      envia com os que houver (F11), mas pedir 10 com 2 disponíveis desperdiça rondas. Decidir:
+      baixar o nº de agentes por omissão **ou** treinar mais espiões nas cidades de origem.
+- [ ] **P11.2 Clusters "possivelmente capturado"** (HEFESTO×3, Jaka, Triplex do Lula). Contra-
+      espionagem do alvo. Decidir por alvo se vale continuar a espiar (queima espiões) ou marcar
+      ignorar.
+
+### B — Manutenibilidade *(dívida técnica real, risco baixo)*
+- [ ] **P11.3 Observabilidade e tamanho do `ikabot_gui/app.py`** (2049 linhas, 53 `except
+      Exception`). O bot tem `health_guard`/`health.json`; a camada Flask não tem equivalente — um
+      endpoint que engole um erro fica invisível. Candidato: split por blueprints + um wrapper de
+      erro uniforme que registe falhas. Maior ficheiro do projecto, sem plano até agora.
+- [ ] **P11.4 Reavaliar o split do `espionage_manager.py`** (1971 linhas; B8 foi saltado em
+      2026-09). Mudou o contexto: agora há `test_espionage_state_machine.py` (rede de segurança) e
+      o caminho de frota já corre live. Uma extracção mínima (contagem de espiões / fetch de counts)
+      é agora mais segura do que era. Continua opcional — só se o módulo voltar a doer.
+- [ ] **P11.5 Split do `DispatchTab.tsx`** (1229 linhas, maior componente). Dispatch manual + fila
+      + histórico + saque + farm num só ficheiro. Extrair sub-painéis como já se fez na MundoPage.
+
+### C — UX
+- [ ] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`). Fundir o pipeline do
+      Mundo com saque-por-alvo/histórico numa vista por alvo: espiei → saque visto → saque real
+      trazido → estado do farm + acções inline.
+
+### D — Validação in-game *(ver dívidas acima — a mesma lista)*
+- [ ] Deploy para cidade própria; sessão supervisionada de ponta a ponta do farm.

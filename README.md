@@ -12,7 +12,7 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 | `ikabot-gui` | Flask — serves the REST API + SSE stream **and** the production React build (`frontend/dist`) on host port **5001**. Optional password auth (set `DASHBOARD_PASSWORD` in `.env`). |
 | `ikabot-autoheal` | Watches the `ikabot` healthcheck and restarts it if the heartbeat goes stale. |
 
-> Since 2026-07 there is **no separate `frontend` container**: the Flask app serves the built SPA. Frontend changes require `cd frontend && npx vite build`. The bot image is **pinned by digest** (stable channel, currently ikabot 7.6.3) — `:latest` is treated as beta and promoted deliberately after validation.
+> Since 2026-07 there is **no separate `frontend` container**: the Flask app serves the built SPA. Frontend changes require `cd frontend && npx vite build`. The bot image is **pinned by digest** (stable channel, currently ikabot 7.7.2) — `:latest` is treated as beta and promoted deliberately after validation.
 
 ## Notable capabilities
 
@@ -24,7 +24,7 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
   - a **"wine at a glance"** panorama shows per-city runway, empire totals and buyer status.
 - **Robustness** — surgical runtime patches (no shadowing of stock files), persistent login session on a volume, digest-pinned image with a stable/beta promotion flow, self-healing, daily SQLite backups, and downtime-aware espionage timeouts.
 - **Anti-detection** — randomised delays before/between game requests, active-hours gating (`SCAN_ACTIVE_HOURS` / `QUEUE_ACTIVE_HOURS`).
-- **Tests** — `pytest` (`pytest.ini` sets the paths); 284 passing as of 2026-09.
+- **Tests** — `pytest` (`pytest.ini` sets the paths); 305 passing as of 2026-10.
 
 ### How it works
 
@@ -61,7 +61,7 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 - 3–7s between `changeCurrentCity` and `loadTransportersWithFreight`; 12–30s between consecutive transport fleets.
 - `SCAN_ACTIVE_HOURS` suppresses the full empire scan outside a configurable time window, eliminating the most obvious bot signal (regular hourly HTTP activity at 3 AM).
 
-The `ikabot-gui` Flask app reads from SQLite and exposes REST endpoints and a Server-Sent Events stream (`/api/stream`). The SSE stream pushes live updates to the browser within ~2 seconds of any data file changing. The `frontend` Vite dev server (port 5001) proxies all `/api/*` requests to Flask and hot-reloads on file changes.
+The `ikabot-gui` Flask app reads from SQLite and exposes REST endpoints and a Server-Sent Events stream (`/api/stream`). The SSE stream pushes live updates to the browser within ~2 seconds of any data file changing. In production Flask serves the built SPA (`frontend/dist`) directly on host port **5001**; during frontend development the Vite dev server proxies all `/api/*` requests to Flask and hot-reloads on file changes.
 
 ## Requirements
 
@@ -127,7 +127,7 @@ docker compose up -d --build  # rebuild after editing ikabot_gui/app.py or addin
 docker compose down           # stop all containers
 ```
 
-Volume-mounted files (`empireFunction.py` and all sibling modules, `planRoutes_patched.py`) take effect immediately — no rebuild needed.
+Volume-mounted modules (`empireFunction.py` and all siblings) need no image rebuild, but editing any `.py` requires restarting **both** the `ikabot` and `ikabot-gui` containers (Python module cache + unreliable bind-mount reload) — `docker compose up -d --force-recreate <service>` if a plain restart doesn't pick up the change.
 
 ## API Endpoints
 
@@ -164,14 +164,23 @@ Volume-mounted files (`empireFunction.py` and all sibling modules, `planRoutes_p
 | `/api/espionage/dispatch` | POST | Queue a spy dispatch `{originCityId, targetCityId, islandId, targetPlayerName, targetCityName, islandX, islandY, numAgents}` |
 | `/api/espionage/settings` | GET | Garrison inspection thresholds |
 | `/api/espionage/settings` | POST | Save garrison thresholds `{garrisonThresholds: {wood, wine, marble, glass, sulfur}}` |
-| `/api/espionage/attack-queue` | GET | Pending manual attack queue |
+| `/api/espionage/attack-queue` | GET | Pending manual attack queue (SQLite `shared_queue`) |
 | `/api/espionage/attack-queue/add` | POST | Add manual attack `{originCityId, targetCityId, islandId, units, transporters, …}` |
 | `/api/espionage/attack-queue/cancel` | POST | Cancel queued attack `{id}` |
-| `/api/espionage/attack-waves` | GET | Automatic multi-wave attack plans |
-| `/api/espionage/attack-waves/cancel` | POST | Cancel a wave plan `{id}` |
-| `/api/espionage/auto-attack-settings` | GET | Auto-attack configuration |
-| `/api/espionage/auto-attack-settings` | POST | Save auto-attack settings `{enabled, minLootTotal, lootPerWave, battleDelayFewMins, …}` |
-| `/api/health` | GET | Liveness check — `{"status": "ok", "ts": timestamp, "dbOk": bool}` |
+| `/api/espionage/recall-unused` | POST | Mass-recall idle spies from safehouses (skips active farm targets) |
+| `/api/attack-log` | GET | Dispatch history `?limit=&target=` (every attempt + game result) |
+| `/api/loot-stats`, `/api/loot-log` | GET | Real loot brought back per target |
+| `/api/farm` | GET | Farm targets with state, loot, attack counts |
+| `/api/farm/{add,update,remove}` | POST | Manage farm targets (`add` accepts `mode` for the drain loop) |
+| `/api/farm/army` | GET/POST | Per-target troop/fleet loadout + ship-reserve settings (POST merges) |
+| `/api/transport`, `/api/transport/wine`, `/api/transport/wine-buy[/status\|/preview]` | GET/POST | Scheduled transports, consolidation, wine balancer, wine buyer |
+| `/api/watchlist` | GET/POST | Per-island re-scan watchlist for marked targets |
+| `/api/pause` | GET/POST | Global pause (suspends actions, keeps data collection) |
+| `/api/logs` | GET | Tail of the bot log `?lines=N` (`?debug=1` includes DEBUG) |
+| `/api/activity` | GET | Aggregated "what the bot is doing" (pending queues, active flags, recent dispatches) |
+| `/api/alert-thresholds`, `/api/alert-settings` | GET/POST | Server-side alert thresholds and combat-alert settings |
+| `/api/travel-calibration` | GET | Learned real/estimated travel ratios per mode |
+| `/api/health` | GET | Liveness + per-subsystem health and config warnings |
 
 ## Dashboard Tabs
 
@@ -187,8 +196,8 @@ The dashboard defaults to **English**. A toggle in the sidebar footer switches t
 | **History** | Empire-wide charts (gold, resources, ships, population) over the last 7 days. City selector switches to per-city view: resources (5 lines) and wine timer (hours until empty) |
 | **Calculators** | **Building Upgrade**: city/building/level selector, auto-fills costs, estimates time to gather. **ROI Sawmill/Quarry**: island vs city building comparator. **Colony ROI**: current island vs new colony — pre-fillable from the Islands tab |
 | **Construction** | Building upgrade queue manager. **Queue** sub-tab: enabled/paused toggle, bulk-clear, city pills, building list, per-city queue panel with drag-to-reorder, inProgress ETA countdown, transport error banner, queue budget summary. **Template** sub-tab: set target levels per building type and apply to all cities at once |
-| **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note, timestamped action log, spy report summary (warehouse + garrison results), auto-attack wave status with per-wave timestamps. Highlights newly inactive players. **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button |
-| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Espionage**: spy defaults (origin city, number of agents), garrison inspection thresholds, auto-attack toggle and configuration (min loot, loot per wave, battle delays, max enemy ships). **Notifications**: browser notifications toggle; Telegram configuration with live test |
+| **World** | **Inactive**: inactive/vacation players near own cities — sortable by distance/scores, marks (novo/visto/alvo/ignorar), expandable rows with editable note, timestamped action log, spy report summary (warehouse + garrison results), "add to farm"/"add to drain loop" buttons. Highlights newly inactive players. **Islands**: nearby islands ranked by free slots, resource/wonder levels, "Use in Calc." button. Combat (dispatch, farm management, history, loot) lives on its own **Combat** page |
+| **Settings** | **General**: language, default tab. **Alerts**: wine warning/critical thresholds, storage threshold. **Construction**: active hours window, per-resource buffer minimums. **Espionage**: spy defaults (origin city, number of agents), garrison inspection thresholds, minimum loot threshold, watchlist. Farm loadout, ship reserve and cadence are managed on the Combat/Farm card. **Notifications**: browser notifications toggle; Telegram configuration with live test |
 
 ## Espionage System
 
@@ -202,17 +211,9 @@ TRAVELING → WAITING_AT_CITY → EXECUTING_WAREHOUSE → WAITING_FOR_GARRISON �
 ```
 The bot checks `spyMissions` view to detect arrival, then calls `executeMission` for warehouse inspection (mission type 5), waits 5–15 min, then for garrison inspection (mission type 6) if resources exceed the configured thresholds. Reports are fetched via `markReportAsRead`.
 
-**Phase 3 — Manual attack**: once a mission reaches DONE with both warehouse and garrison results, a "Prepare Attack" button appears in the expanded row. The modal shows available troops per city. The attack is queued in `attack_queue.json` and dispatched by the bot during active hours via `deployArmy`.
+**Phase 3 — Manual attack**: once a mission reaches DONE with both warehouse and garrison results, a "Prepare Attack" button appears in the expanded row (Combat page). The modal shows available troops per city. The attack is queued in the SQLite `shared_queue` ("attack") and dispatched by the bot during active hours — player pillage via `sendArmyPlunderSea`/`sendArmyPlunderLand`, naval blockade via `sendFleetOnBlockade`, own-city deploy via `deployArmy`/`deployFleet`. Reports of each attempt land in the `attack_log` table.
 
-**Phase 4 — Automatic waves**: after each DONE mission the bot runs `evaluate_auto_attacks()`, which:
-1. Checks total loot against `minLootTotal` (default 50 000) — skips if below threshold
-2. Counts enemy naval units — skips if above `maxEnemyShipsToEngage` (default 20)
-3. Classifies the target: Tier 0 (empty garrison), Tier 1 (troops only), Tier 2 (has fleet)
-4. Finds the closest own city with available troops (and fleet for Tier 2)
-5. Calculates sequential wave plans: `num_waves = ceil(total_loot / lootPerWave)`
-6. For Tier 2: dispatches `deployFleet` first, then `deployArmy` after `battle_delay + (fleet_travel - troop_travel)` seconds
-
-Wave plans and their per-wave status are visible in the expanded row of the Inactive Players tab. Settings (enabled toggle, loot thresholds, battle delays) are configurable in Settings → Espionage.
+**Phase 4 — Automated farming (the farm, `farm_manager.py`)**: the one-shot auto-attack waves system was **discontinued** in 2026-07; the **farm** is now the only automatic attack system. Each target is a row in the SQLite `farm_targets` table with its own state machine (`IDLE → SPYING → ATTACKING`), event-driven on the real round-trip cadence. It re-scouts on its own schedule, sizes each raid to the live warehouse, enforces a "drain to `min_loot`" rule, reserves trade ships against internal logistics, and — for **fleet targets** — never commits troops without fresh, trustworthy garrison intel (blockade-then-troops timing on a clean port). A separate **drain loop mode** (F13) hammers a single target wave-after-wave until empty. See FEATURES.md (F4, F4.b–F4.e, F13) for the full design. `minLootTotal` now lives in `espionage_settings.json` and auto-ignores poor reports at the espionage layer (farm targets exempt).
 
 ## Data Storage
 
@@ -233,6 +234,11 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `queue_transport_errors` | Latest transport failure per city |
 | `queue_state` | Queue enabled/paused flag |
 | `empire_meta` | Key-value store: latest empire snapshot, costs timestamp, scan timestamp |
+| `farm_targets` | Per-target farm state machine (state, intel, loadout, cadence, `mode`, `is_fleet_target`, `scout_fail_count`) — schema v13 |
+| `shared_queue` | Transactional queues the Flask UI writes and the bot consumes: `attack`, `spy_dispatch`, `spy_recall`, `transport` (per-item removal, no races) |
+| `attack_log` | Every dispatch attempt: target, origin, units, type, source, result, game error |
+| `loot_log` | Real loot detected on returning fleets, deduped by arrival time |
+| `schema_version` | Applied migration versions (lazy, idempotent `init_db`) |
 
 **JSON files** — written for operational signalling and read by the Flask layer:
 
@@ -255,10 +261,15 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `spy_dispatch_queue.json` | On demand | Pending spy dispatches queued from the UI |
 | `spy_counts.json` | Each active-hours cycle | Available/deployed/defense spy counts per city |
 | `espionage_settings.json` | On save via UI | Garrison inspection thresholds per resource |
-| `attack_queue.json` | On demand | Pending manual attack dispatches queued from the UI |
-| `auto_attack_waves.json` | Per cycle | Automatic multi-wave attack plans per target — state: PENDING → IN_PROGRESS → DONE/FAILED/AUTO_SKIPPED |
-| `auto_attack_settings.json` | On save via UI | Auto-attack configuration (enabled, min loot, loot per wave, battle delays, max enemy ships) |
+| `farm_settings.json` | On save via UI | Farm loadout (troops/fleet), ship reserve, cadence, early-respy, fleet-target timings (`fleetLeadMin`, `disperseMin`, `earlyReportMaxAgeMins`) |
+| `wine_settings.json`, `wine_buy_settings.json`, `wine_buy_status.json` | On save / per cycle | Wine balancer + market-buyer config and last-run status |
+| `pause.json` | On demand | Global pause flag (checked by every action processor) |
+| `health.json`, `config_warnings.json` | Per cycle / on start | Per-subsystem success/failure and config-schema warnings (surfaced in `/api/health` + UI banners) |
+| `travel_calibration.json` | Per raid | Learned real/estimated travel ratios (EWMA) per troop/fleet mode |
+| `bot.log` | Continuously | Rotating bot log served by `/api/logs` |
 | `telegram_settings.json` | On save via UI | Telegram bot token and chat ID |
+
+> The one-shot auto-attack (`auto_attack_waves.json` / `auto_attack_settings.json`) and the standalone `attack_queue.json` / `spy_dispatch_queue.json` were **discontinued or migrated to SQLite** (`shared_queue`) in 2026-06/07; the legacy JSON files were renamed `.migrated`.
 | `.queue_updated` | On each queue change | Sentinel touched on every queue write — SSE watches this |
 
 ## Project Structure
@@ -266,31 +277,34 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 ```
 .
 ├── docker-compose.yml
-├── empireFunction.py        # Main loop orchestrator (~120 lines)
-├── empire_utils.py          # Constants, duration parser, i18n log strings, with_retry(), shared logger
+├── bot_launcher.py          # Deterministic startup: login, launch empireFunction by reference, inject surgical patches, keep the menu on PID1
+├── empireFunction.py        # Main loop orchestrator: full cycle → queue → espionage → farm → scans → smart_sleep
+├── empire_utils.py          # Config/env, logger + i18n (lm), ThrottledSession, with_retry, is_paused, config validation, downtime accounting
 ├── empire_collector.py      # City data collection, movements fetch, military (troops + fleet) every 8h
 ├── costs_collector.py       # Building costs collection (every 3 days)
-├── scan_collector.py        # World scan (every 7 days)
-├── queue_processor.py       # Building queue: transport dispatch, smart sleep, city shuffling
-├── espionage_manager.py     # Full espionage system: spy dispatch, state machine (Phases 1–4), auto-attack waves
-├── db_manager.py            # SQLite layer: schema init, CRUD, migrations from JSON
-├── planRoutes_patched.py    # Patched transport helper with anti-detection delays
+├── scan_collector.py        # Incremental world scan (shallow quadrants + deep per-island checkpoint)
+├── queue_processor.py       # Building queue, resource transports, smart_sleep (processes spy/recall/attack/farm/scan queues)
+├── farm_manager.py          # Automated farming (F4): per-target state machine, ship reserve, drain loop (F13)
+├── espionage_manager.py     # Spy state machine, recalls, report parsing, spy-count fetch, mission retention
+├── espionage_parsers.py     # Pure HTML parsers extracted from espionage_manager
+├── attack_manager.py        # Attack queue + senders (plunder/blockade/deploy) and shared targeting helpers
+├── transport_manager.py     # Scheduled transports, consolidation, wine balancer (F9), wine market buyer (F10)
+├── db_manager.py            # SQLite layer: schema init, CRUD, migrations, shared_queue, daily online backup
+├── planroutes_overrides.py  # Surgical runtime patch for planRoutes (anti-detection delays) — injected, not shadowed
+├── loadcustommodule_overrides.py  # Surgical runtime patch for loadCustomModule
 ├── telegram_notifier.py     # Telegram Bot API notifications
-├── tests/
-│   ├── test_db.py           # DB CRUD unit tests (13 tests)
-│   └── test_queue.py        # Queue pure-function unit tests (13 tests)
+├── healthcheck.py           # Freeze-aware heartbeat healthcheck (used by compose + autoheal)
+├── tests/                   # pytest — 305 tests across 24 files (db, queues, parsers, spy state machine,
+│                            #   farm/respy/reserve/loot, attack payload golden-files, wine, throttle, health, downtime, Flask API)
 ├── ikabot_gui/
-│   └── app.py               # Flask REST API + SSE stream
+│   └── app.py               # Flask REST API + SSE stream + serves frontend/dist
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx          # Root: SSE EventSource, tab routing, LangContext
-│   │   ├── types.ts         # TypeScript interfaces for all API data
-│   │   ├── i18n.tsx         # EN/PT translations + useT, useLang hooks
-│   │   ├── utils.ts         # Formatting helpers (fmt, fmtTime, fmtTs, exportCsv…)
-│   │   ├── constants.ts     # MATERIALS, COST_KEYS, resource icons/colours
-│   │   ├── hooks/           # useNotifications
-│   │   └── components/      # One file per tab/feature
-│   ├── vite.config.ts       # Proxy /api/* → ikabot-gui:5000
+│   │   ├── App.tsx          # Root: SSE EventSource, routing, LangContext, global pause/attack banners
+│   │   ├── components/      # One file per page/feature (HomePage, CitiesPage, BuildingsPage, Construction,
+│   │   │                    #   MovementsPage, TransportTab, CombatPage, DispatchTab, WinePanorama, Logs, Settings, AuthGate, mundo/)
+│   │   ├── types.ts · i18n.tsx · utils.ts · constants.ts · hooks/
+│   ├── vite.config.ts       # Dev proxy /api/* → Flask (production build served by Flask)
 │   └── package.json
 └── .env                     # Credentials — never commit this
 ```
@@ -305,6 +319,6 @@ Tests use temporary SQLite databases and stub all ikabot imports — no live ses
 
 ## Patches Applied to Ikabot Core
 
-`planRoutes_patched.py` replaces `ikabot/ikabot/helpers/planRoutes.py` via Docker volume mount. Adds randomised delays between consecutive fleet dispatches on the same route (10–25s) and between distinct routes (12–30s), reducing detection risk during large transport operations.
+Stock files are **no longer shadowed** by whole-file copies (which froze and broke on upstream updates). Instead `bot_launcher.py` injects **surgical runtime patches** at startup: only the changed functions from `planroutes_overrides.py` (anti-detection delays between fleet dispatches) and `loadcustommodule_overrides.py` are `exec`'d into the stock module's namespace. Upstream additions to those files no longer break startup.
 
-All other custom modules (`empireFunction.py` and siblings) are injected into the ikabot container at `/ikabot/ikabot/function/` via volume mounts — no rebuild of the base image is needed when editing them.
+All custom modules (`empireFunction.py` and siblings) are mounted into the ikabot container at `/ikabot/ikabot/function/` via volume mounts — no rebuild of the base image is needed when editing them, but **both containers must be restarted** after a `.py` change (Python caches modules; the Flask auto-reloader is unreliable with bind-mounted inodes).
