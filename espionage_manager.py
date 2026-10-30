@@ -57,6 +57,8 @@ def _check_garrison_threshold(resources, settings):
 
 
 _DEFAULT_MIN_LOOT_TOTAL = 50000
+_DEFAULT_IGNORE_EXPIRY_DAYS = 30   # a temporary ignore lifts after this long for re-evaluation
+_DEFAULT_IGNORE_PERMANENT_AFTER = 4  # strikes before an ignore becomes permanent
 
 
 def _min_loot_total(settings):
@@ -64,6 +66,14 @@ def _min_loot_total(settings):
     and the target auto-hidden from the inactives list. Lived in the auto-attack settings
     until that system was retired; now an espionage setting (also drives the UI ranking)."""
     return int(settings.get("minLootTotal", _DEFAULT_MIN_LOOT_TOTAL))
+
+
+def _ignore_expiry_days(settings):
+    return int(settings.get("ignoreExpiryDays", _DEFAULT_IGNORE_EXPIRY_DAYS))
+
+
+def _ignore_permanent_after(settings):
+    return int(settings.get("ignorePermanentAfter", _DEFAULT_IGNORE_PERMANENT_AFTER))
 
 
 def _is_farm_target(city_id):
@@ -99,25 +109,38 @@ def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
 
         mark_key = f"{player_id}_{island_x}_{island_y}"
         now = int(time.time())
+        settings = _load_espionage_settings()
+        expiry_days = _ignore_expiry_days(settings)
+        permanent_after = _ignore_permanent_after(settings)
         try:
-            from db_manager import save_mark
-            save_mark(mark_key, player_id, str(island_x), str(island_y), "ignorar", note)
+            from db_manager import escalate_ignore
+            res = escalate_ignore(mark_key, player_id, str(island_x), str(island_y),
+                                  note, expiry_days, permanent_after)
+            logger.info("[espionage] auto-ignorar %s (%s) — %s [strike %d/%d, %s]",
+                        player_name, city_id, note, res["count"], permanent_after,
+                        "permanente" if res["permanent"] else f"reavalia em {expiry_days}d")
             return
         except Exception:
             pass
+        # JSON fallback (db unavailable): keep a running strike count too.
         marks = {}
         if os.path.exists(PLAYER_MARKS_JSON_PATH):
             with open(PLAYER_MARKS_JSON_PATH) as f:
                 marks = json.load(f)
         existing = marks.get(mark_key, {})
+        count = int(existing.get("ignoreCount", 0)) + 1
+        permanent = count >= max(1, permanent_after)
         marks[mark_key] = {
             "status": "ignorar", "note": note,
             "updatedAt": now, "actions": existing.get("actions", []),
+            "ignoreCount": count,
+            "expiresAt": None if permanent else now + max(1, expiry_days) * 86400,
         }
         os.makedirs(LOGS_DIR, exist_ok=True)
         with open(PLAYER_MARKS_JSON_PATH, "w") as f:
             json.dump(marks, f, indent=2)
-        logger.info("[espionage] auto-ignorar %s (%s) — %s", player_name, city_id, note)
+        logger.info("[espionage] auto-ignorar %s (%s) — %s [strike %d/%d]",
+                    player_name, city_id, note, count, permanent_after)
     except Exception:
         logger.warning("[espionage] _auto_mark_ignored falhou", exc_info=True)
 

@@ -147,6 +147,45 @@ def test_save_mark_preserves_actions():
         assert len(mark["actions"]) == 1  # action preserved
 
 
+def test_escalate_ignore_is_temporary_then_permanent():
+    with tempfile.TemporaryDirectory() as tmp:
+        _setup_tmp_db(tmp)
+        key = "500_3_4"
+        # First strikes: temporary ignore with an expiry window, count climbing.
+        r1 = db_manager.escalate_ignore(key, "500", 3, 4, "saque baixo",
+                                        expiry_days=30, permanent_after=4)
+        assert r1 == {"count": 1, "permanent": False, "expiresAt": r1["expiresAt"]}
+        assert r1["expiresAt"] and r1["expiresAt"] > int(time.time())
+        for expected in (2, 3):
+            r = db_manager.escalate_ignore(key, "500", 3, 4, "saque baixo",
+                                           expiry_days=30, permanent_after=4)
+            assert r["count"] == expected and r["permanent"] is False
+        # 4th strike hits permanent_after → permanent (no expiry).
+        r4 = db_manager.escalate_ignore(key, "500", 3, 4, "saque baixo",
+                                        expiry_days=30, permanent_after=4)
+        assert r4["count"] == 4 and r4["permanent"] is True and r4["expiresAt"] is None
+        marks = db_manager.get_all_marks()
+        assert marks[key]["status"] == "ignorar"
+        assert marks[key]["ignoreCount"] == 4
+        assert marks[key]["expiresAt"] is None
+
+
+def test_un_ignore_resets_strike_count():
+    with tempfile.TemporaryDirectory() as tmp:
+        _setup_tmp_db(tmp)
+        key = "77_1_1"
+        db_manager.escalate_ignore(key, "77", 1, 1, "saque baixo", 30, 4)
+        db_manager.escalate_ignore(key, "77", 1, 1, "saque baixo", 30, 4)
+        # Un-ignore clears the count and expiry (status back to novo).
+        db_manager.save_mark(key, "77", 1, 1, "novo", "", expires_at=None, ignore_count=0)
+        marks = db_manager.get_all_marks()
+        assert marks[key]["status"] == "novo"
+        assert marks[key]["ignoreCount"] == 0
+        # A later strike starts counting from 1 again.
+        r = db_manager.escalate_ignore(key, "77", 1, 1, "saque baixo", 30, 4)
+        assert r["count"] == 1
+
+
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
 def _sample_queue():

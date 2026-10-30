@@ -75,6 +75,8 @@ _DEFAULT_ESPIONAGE_SETTINGS = {
     "garrisonThresholdTotal": 50000,
     "minLootTotal": 50000,
     "processingEnabled": True,
+    "ignoreExpiryDays": 30,        # a temporary ignore lifts after this long for re-evaluation
+    "ignorePermanentAfter": 4,     # strikes before an ignore becomes permanent
 }
 
 
@@ -523,16 +525,26 @@ def api_world_scan():
         with open(WORLD_SCAN_PREV_PATH) as f:
             prev = json.load(f)
         prev_inactive_ids = {p["playerId"] for p in prev.get("players", [])}
+    now = int(time.time())
     for player in scan.get("players", []):
         pid = player["playerId"]
         cid = str(player.get("cityId") or "")
         mk_city   = f"{pid}_{cid}" if cid else None
         mk_island = f"{pid}_{player.get('islandX', '')}_{player.get('islandY', '')}"
         entry = (mk_city and marks.get(mk_city)) or marks.get(mk_island) or marks.get(str(pid), {})
-        player["mark"] = entry.get("status", "novo")
+        status = entry.get("status", "novo")
+        expires_at = entry.get("expiresAt")
+        # Tiered ignore: a temporary ignore whose window has passed no longer hides the target
+        # (it reappears for re-evaluation), but its strike count is kept for escalation.
+        if status == "ignorar" and expires_at and now >= int(expires_at):
+            status = "novo"
+        player["mark"] = status
         player["markNote"] = entry.get("note", "")
         player["markActions"] = entry.get("actions", [])
         player["markUpdatedAt"] = entry.get("updatedAt")
+        player["ignoreCount"] = entry.get("ignoreCount", 0) or 0
+        player["ignoreExpiresAt"] = expires_at
+        player["ignorePermanent"] = entry.get("status") == "ignorar" and not expires_at
         player["isNew"] = pid not in prev_inactive_ids
     return jsonify(scan)
 
@@ -559,14 +571,35 @@ def api_world_scan_mark():
     island_x  = str(body.get("islandX", ""))
     island_y  = str(body.get("islandY", ""))
     city_id   = str(body.get("cityId", ""))
-    mark_key  = f"{player_id}_{city_id}" if city_id else f"{player_id}_{island_x}_{island_y}"
     status = body.get("status", "novo")
     note = body.get("note", "")
     if status not in ("novo", "visto", "alvo", "ignorar"):
         return jsonify({"error": "Status inválido"}), 400
+    # Ignore/un-ignore always key on player+island (matching the bot's auto-ignore and the
+    # Ignoradas tab's un-ignore), so a city-keyed mark can't shadow them. Other statuses
+    # keep the historical city-or-island key.
+    if status in ("ignorar", "novo"):
+        mark_key = f"{player_id}_{island_x}_{island_y}"
+    else:
+        mark_key = f"{player_id}_{city_id}" if city_id else f"{player_id}_{island_x}_{island_y}"
     if _db:
         try:
-            _db.save_mark(mark_key, player_id, island_x, island_y, status, note)
+            if status == "ignorar":
+                esp = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+                try:
+                    with open(ESPIONAGE_SETTINGS_PATH) as f:
+                        esp.update(json.load(f))
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+                res = _db.escalate_ignore(
+                    mark_key, player_id, island_x, island_y, note or "Ignorado manualmente",
+                    int(esp.get("ignoreExpiryDays", 30)),
+                    int(esp.get("ignorePermanentAfter", 4)),
+                )
+                return jsonify({"ok": True, **res})
+            # 'novo' un-ignore resets the strike count; 'visto'/'alvo' are plain marks.
+            _db.save_mark(mark_key, player_id, island_x, island_y, status, note,
+                          expires_at=None, ignore_count=0)
             return jsonify({"ok": True})
         except Exception:
             pass
@@ -576,10 +609,26 @@ def api_world_scan_mark():
         with open(PLAYER_MARKS_JSON_PATH) as f:
             marks = json.load(f)
     existing = marks.get(mark_key, {})
-    marks[mark_key] = {
+    now = int(time.time())
+    entry = {
         "status": status, "note": note,
-        "updatedAt": int(time.time()), "actions": existing.get("actions", []),
+        "updatedAt": now, "actions": existing.get("actions", []),
     }
+    if status == "ignorar":
+        esp = dict(_DEFAULT_ESPIONAGE_SETTINGS)
+        try:
+            with open(ESPIONAGE_SETTINGS_PATH) as f:
+                esp.update(json.load(f))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        count = int(existing.get("ignoreCount", 0)) + 1
+        permanent = count >= max(1, int(esp.get("ignorePermanentAfter", 4)))
+        entry["ignoreCount"] = count
+        entry["expiresAt"] = None if permanent else now + max(1, int(esp.get("ignoreExpiryDays", 30))) * 86400
+    else:
+        entry["ignoreCount"] = 0
+        entry["expiresAt"] = None
+    marks[mark_key] = entry
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(PLAYER_MARKS_JSON_PATH, "w") as f:
         json.dump(marks, f, indent=2)

@@ -127,6 +127,9 @@ export interface WorldScanPlayer {
   markNote?: string
   markUpdatedAt?: number
   markActions?: Array<{ ts: number; text: string }>
+  ignoreCount?: number
+  ignoreExpiresAt?: number | null
+  ignorePermanent?: boolean
   isNew: boolean
 }
 

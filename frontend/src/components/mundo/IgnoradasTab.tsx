@@ -62,7 +62,26 @@ export function IgnoradasTab({ scanData, onScanDataChange }: IgnoradasTabProps) 
                 <div className="text-xs text-slate-400">{p.islandName} ({p.islandX},{p.islandY})</div>
               </td>
               <td className="px-3 py-2 text-sm text-slate-700">{p.playerName}</td>
-              <td className="px-3 py-2 text-xs text-slate-500">{p.markNote || t('reason_manual')}</td>
+              <td className="px-3 py-2 text-xs text-slate-500">
+                <div>{p.markNote || t('reason_manual')}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {(p.ignoreCount ?? 0) > 1 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-medium">
+                      {t('ignore_strikes', { n: p.ignoreCount as number })}
+                    </span>
+                  )}
+                  {p.ignorePermanent ? (
+                    <span className="px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-medium">
+                      <i className="fa-solid fa-infinity mr-1" />{t('ignore_permanent')}
+                    </span>
+                  ) : p.ignoreExpiresAt ? (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium">
+                      <i className="fa-regular fa-clock mr-1" />
+                      {t('ignore_reeval_on', { d: new Date((p.ignoreExpiresAt as number) * 1000).toLocaleDateString() })}
+                    </span>
+                  ) : null}
+                </div>
+              </td>
               <td className="px-3 py-2 text-xs text-slate-400">
                 {p.markUpdatedAt ? new Date(p.markUpdatedAt * 1000).toLocaleDateString() : '—'}
               </td>

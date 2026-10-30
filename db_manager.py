@@ -196,6 +196,20 @@ def _run_migrations(conn):
         except Exception:
             pass
         conn.execute("INSERT INTO schema_version (version) VALUES (14)")
+    if current < 15:
+        # v15 = tiered ignore: an auto/manual ignore is temporary (expires_at = when it lifts
+        # for re-evaluation, NULL = permanent) and counts strikes (ignore_count). After N
+        # strikes the ignore becomes permanent. Lets a city that briefly dipped below the loot
+        # bar come back for another look instead of being hidden forever on the first miss.
+        for ddl in (
+            "ALTER TABLE marks ADD COLUMN expires_at INTEGER",
+            "ALTER TABLE marks ADD COLUMN ignore_count INTEGER DEFAULT 0",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (15)")
     conn.commit()
 
 
@@ -873,27 +887,60 @@ def get_all_marks():
     result = {}
     for row in marks_rows:
         mk = row["mark_key"]
+        keys = row.keys()
         result[mk] = {
             "status": row["status"],
             "note": row["note"],
             "updatedAt": row["updated_at"],
             "actions": actions_by_key.get(mk, []),
+            "expiresAt": row["expires_at"] if "expires_at" in keys else None,
+            "ignoreCount": (row["ignore_count"] if "ignore_count" in keys else 0) or 0,
         }
     return result
 
 
-def save_mark(mark_key, player_id, island_x, island_y, status, note):
+def save_mark(mark_key, player_id, island_x, island_y, status, note,
+              expires_at=None, ignore_count=0):
     init_db()
     conn = _connect()
     try:
         with conn:
             conn.execute("""
                 INSERT OR REPLACE INTO marks
-                (mark_key, player_id, island_x, island_y, status, note, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (mark_key, player_id, island_x, island_y, status, note, int(time.time())))
+                (mark_key, player_id, island_x, island_y, status, note, updated_at,
+                 expires_at, ignore_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (mark_key, player_id, island_x, island_y, status, note, int(time.time()),
+                  expires_at, ignore_count))
     finally:
         conn.close()
+
+
+def escalate_ignore(mark_key, player_id, island_x, island_y, note,
+                    expiry_days=30, permanent_after=4):
+    """Ignore a city/island with strike escalation. Each call bumps ignore_count; while it is
+    below permanent_after the ignore is temporary (expires_at = now + expiry_days, so the
+    target reappears for re-evaluation), and once it reaches permanent_after it becomes
+    permanent (expires_at = NULL). Returns {count, permanent, expiresAt}."""
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT ignore_count FROM marks WHERE mark_key = ?", (mark_key,)).fetchone()
+        prev = (row["ignore_count"] if row and row["ignore_count"] is not None else 0)
+        count = int(prev) + 1
+        permanent = count >= max(1, int(permanent_after))
+        expires_at = None if permanent else int(time.time()) + max(1, int(expiry_days)) * 86400
+        with conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO marks
+                (mark_key, player_id, island_x, island_y, status, note, updated_at,
+                 expires_at, ignore_count)
+                VALUES (?, ?, ?, ?, 'ignorar', ?, ?, ?, ?)
+            """, (mark_key, player_id, island_x, island_y, note, int(time.time()),
+                  expires_at, count))
+    finally:
+        conn.close()
+    return {"count": count, "permanent": permanent, "expiresAt": expires_at}
 
 
 def append_action(mark_key, player_id, island_x, island_y, text):

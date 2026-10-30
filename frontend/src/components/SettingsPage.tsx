@@ -497,6 +497,8 @@ function EspionagemTab() {
   const [saved, setSaved]                 = useState(false)
   const [thresholdTotal, setThresholdTotal] = useState(DEFAULT_GARRISON_TOTAL)
   const [minLootTotal, setMinLootTotal]   = useState(50000)
+  const [ignoreExpiryDays, setIgnoreExpiryDays]         = useState(30)
+  const [ignorePermanentAfter, setIgnorePermanentAfter] = useState(4)
   const [farmLoots, setFarmLoots]         = useState<number[]>([])
   const [thSaved, setThSaved]             = useState(false)
 
@@ -520,6 +522,8 @@ function EspionagemTab() {
       .then(d => {
         if (d.garrisonThresholdTotal != null) setThresholdTotal(d.garrisonThresholdTotal)
         if (d.minLootTotal != null) setMinLootTotal(d.minLootTotal)
+        if (d.ignoreExpiryDays != null) setIgnoreExpiryDays(d.ignoreExpiryDays)
+        if (d.ignorePermanentAfter != null) setIgnorePermanentAfter(d.ignorePermanentAfter)
       })
       .catch(() => {})
   }, [])
@@ -534,7 +538,7 @@ function EspionagemTab() {
     fetch('/api/espionage/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ garrisonThresholdTotal: thresholdTotal, minLootTotal }),
+      body: JSON.stringify({ garrisonThresholdTotal: thresholdTotal, minLootTotal, ignoreExpiryDays, ignorePermanentAfter }),
     }).then(() => {
       setThSaved(true)
       setTimeout(() => setThSaved(false), 3000)
@@ -606,6 +610,23 @@ function EspionagemTab() {
               />
               <span className="text-[10px] text-slate-400">{t('spy_min_loot_hint')}</span>
             </div>
+            <div className="flex items-center gap-3 flex-wrap pt-1 border-t border-slate-100">
+              <label className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('ignore_expiry_label')}</label>
+              <input
+                type="number" min={1} max={365}
+                value={ignoreExpiryDays}
+                onChange={e => setIgnoreExpiryDays(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <label className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('ignore_permanent_label')}</label>
+              <input
+                type="number" min={1} max={20}
+                value={ignorePermanentAfter}
+                onChange={e => setIgnorePermanentAfter(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+            <p className="text-[10px] text-slate-400 -mt-1">{t('ignore_policy_hint')}</p>
             <div className="bg-slate-50 rounded-lg px-3 py-2.5 space-y-1">
               <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{t('threshold_funnel_title')}</p>
               <p className="text-[11px] text-slate-500">1. {t('threshold_funnel_1', { n: thresholdTotal.toLocaleString() })}</p>
