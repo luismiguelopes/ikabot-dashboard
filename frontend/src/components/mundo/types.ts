@@ -5,6 +5,10 @@ export interface FarmTarget {
   target_city_id: string; enabled: boolean; state: string; next_run_at: number
   interval_hours: number; total_raids: number; last_loot: number; respy_every: number
   mode?: string; low_raids?: number
+  // Identity fields (from farm_list SELECT *) — needed to render farm-only targets in the
+  // unified world/target list even when they are not in the current world scan (Phase 3).
+  target_city_name?: string; target_player?: string
+  island_id?: string | number; island_x?: number; island_y?: number
 }
 export interface LootStat {
   from_player: string; raids: number; last_ts: number; total: number

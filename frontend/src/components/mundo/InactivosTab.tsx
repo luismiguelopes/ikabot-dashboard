@@ -240,15 +240,13 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   }, [scanData])
 
   const players = useMemo((): EnrichedPlayer[] => {
-    if (!scanData?.players) return []
     const enriched: EnrichedPlayer[] = []
+    const seenCityIds = new Set<string>()
 
-    for (const p of scanData.players) {
-      if (p.state !== 'inactive') continue
+    // Turn a (real or synthesized) scan player into an enriched target row: attach its latest
+    // spy mission, derive seen loot / garrison, and compute the pipeline priority.
+    const enrichOne = (p: WorldScanPlayer): EnrichedPlayer => {
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
-      const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
-      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) continue
-
       const cKey = p.cityId || `${p.playerName}_${p.cityName}_${p.islandX}_${p.islandY}`
       const mission = p.cityId ? latestMissionByCityId[p.cityId] : undefined
 
@@ -286,7 +284,41 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         }
       }
 
-      enriched.push({ ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey })
+      return { ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey }
+    }
+
+    // 1) Inactive players discovered by the world scan.
+    for (const p of scanData?.players || []) {
+      if (p.state !== 'inactive') continue
+      const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
+      const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
+      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) continue
+      if (p.cityId) seenCityIds.add(String(p.cityId))
+      enriched.push(enrichOne(p))
+    }
+
+    // 2) Farm targets absent from the current scan (e.g. added manually, or the scan is stale).
+    //    Synthesize a row from the farm record so every target lives in one unified list
+    //    instead of being split between this page and the Combat/Farm tab (Phase 3).
+    for (const [cid, f] of Object.entries(farmByCity)) {
+      if (seenCityIds.has(String(cid))) continue
+      seenCityIds.add(String(cid))
+      const synth: WorldScanPlayer = {
+        playerId: `farm_${cid}`,
+        cityId: String(cid),
+        islandId: f.island_id != null ? String(f.island_id) : undefined,
+        playerName: f.target_player || '',
+        state: 'inactive',
+        cityName: f.target_city_name || String(cid),
+        islandName: '',
+        islandX: f.island_x ?? 0,
+        islandY: f.island_y ?? 0,
+        nearestOwnCity: '',
+        distance: Number.MAX_SAFE_INTEGER,
+        mark: '',
+        isNew: false,
+      }
+      enriched.push(enrichOne(synth))
     }
 
     enriched.sort((a, b) => {
@@ -300,7 +332,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     })
 
     return enriched
-  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal])
+  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
