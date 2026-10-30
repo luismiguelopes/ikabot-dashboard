@@ -239,6 +239,25 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     return new Set(Object.keys(counts).filter(k => counts[k] > 1))
   }, [scanData])
 
+  // Farm queue position, mirroring farm_manager._queue_head and the Combat/Farm panel:
+  // the one mid-cycle target leads, then enabled IDLE targets by loot/hour desc. Drained
+  // (disabled) targets get no position. Lets the unified list show #1, #2… inline.
+  const queuePos = useMemo((): Record<string, number> => {
+    const DEFAULT_RT = 4 * 3600
+    const roundTrip = (f: FarmTarget) => ((f.last_troop_journey ?? 0) > 0 ? (f.last_troop_journey as number) * 2 : DEFAULT_RT)
+    const score = (f: FarmTarget) => (f.last_loot || 0) / Math.max(1, roundTrip(f))
+    const order = Object.values(farmByCity)
+      .filter(f => f.enabled)
+      .sort((a, b) => {
+        const aActive = a.state !== 'IDLE', bActive = b.state !== 'IDLE'
+        if (aActive !== bActive) return aActive ? -1 : 1
+        return score(b) - score(a)
+      })
+    const pos: Record<string, number> = {}
+    order.forEach((f, i) => { pos[String(f.target_city_id)] = i + 1 })
+    return pos
+  }, [farmByCity])
+
   const players = useMemo((): EnrichedPlayer[] => {
     const enriched: EnrichedPlayer[] = []
     const seenCityIds = new Set<string>()
@@ -322,6 +341,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     }
 
     enriched.sort((a, b) => {
+      // Queued (farmed, enabled) targets lead, in queue order; discoveries follow.
+      const qa = a.cityId ? queuePos[String(a.cityId)] : undefined
+      const qb = b.cityId ? queuePos[String(b.cityId)] : undefined
+      if (qa && qb) return qa - qb
+      if (qa && !qb) return -1
+      if (!qa && qb) return 1
       if (b.priority !== a.priority) return b.priority - a.priority
       if (a.totalResources !== null && b.totalResources !== null && a.totalResources !== b.totalResources)
         return b.totalResources - a.totalResources
@@ -332,7 +357,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     })
 
     return enriched
-  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity])
+  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -354,6 +379,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
           <table className="w-full">
             <thead>
               <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
+                <th className="px-3 py-3 font-semibold text-center whitespace-nowrap" title={t('col_queue_pos')}>#</th>
                 <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_state')}</th>
                 <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_city')}</th>
                 <th className="px-3 py-3 font-semibold text-left whitespace-nowrap">{t('col_player')}</th>
@@ -375,6 +401,15 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                     <tr className={`border-b transition-colors ${
                       isExpanded ? 'border-indigo-200 bg-indigo-50/30' : 'border-slate-100 hover:bg-slate-50'
                     } ${!isExpanded && idx % 2 ? 'bg-slate-50/40' : ''}`}>
+                      <Td className="text-center px-1">
+                        {(() => {
+                          const q = p.cityId ? queuePos[String(p.cityId)] : undefined
+                          if (!q) return <span className="text-slate-300 text-xs">—</span>
+                          return (
+                            <span className={`font-bold text-sm ${q === 1 ? 'text-red-600' : 'text-slate-500'}`}>#{q}</span>
+                          )
+                        })()}
+                      </Td>
                       <Td>
                         <div className="flex flex-col gap-1 items-start">
                           <MissionStatePill priority={p.priority} mission={p.mission} />
@@ -501,6 +536,16 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           >
                             🚫
                           </button>
+                          {p.cityId && farmByCity[String(p.cityId)] ? (
+                            <button
+                              onClick={() => farmAction(String(p.cityId), {}, true)}
+                              title={t('btn_remove_farm')}
+                              className="w-7 h-7 rounded-lg flex items-center justify-center text-xs text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                            >
+                              <i className="fa-solid fa-seedling" />
+                              <i className="fa-solid fa-xmark text-[8px] -ml-1 -mt-2" />
+                            </button>
+                          ) : <span className="block w-7 h-7" />}
                         </div>
                       </Td>
                     </tr>
@@ -508,7 +553,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                     {isExpanded && p.mission?.state === 'DONE' && p.mission.result &&
                       p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0 && (
                       <tr className="bg-indigo-50/40 border-b border-indigo-200">
-                        <td colSpan={8} className="px-5 py-4">
+                        <td colSpan={9} className="px-5 py-4">
                           <div className="flex flex-col gap-3 max-w-2xl">
                             {/* Warehouse */}
                             <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">

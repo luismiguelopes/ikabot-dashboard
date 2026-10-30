@@ -9,6 +9,7 @@ export interface FarmTarget {
   // unified world/target list even when they are not in the current world scan (Phase 3).
   target_city_name?: string; target_player?: string
   island_id?: string | number; island_x?: number; island_y?: number
+  last_troop_journey?: number  // round-trip basis for the loot/hour queue score
 }
 export interface LootStat {
   from_player: string; raids: number; last_ts: number; total: number
