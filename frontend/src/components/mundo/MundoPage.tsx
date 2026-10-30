@@ -159,7 +159,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
 
   return (
     <div>
-      <PageHeader icon="fa-earth-europe" title={t('world_title')} />
+      <PageHeader icon="fa-bullseye" title={t('world_title')} />
 
       <Card className="mb-4">
         <div className="px-5 py-4 flex flex-wrap items-start gap-4">

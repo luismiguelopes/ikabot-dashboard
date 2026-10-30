@@ -7,10 +7,9 @@ import { DispatchTab } from './DispatchTab'
 // tabs inside MundoPage, mixing two unrelated concerns (world scan vs combat).
 export function CombatPage() {
   const t = useT()
-  const [tab, setTab] = useState<'dispatch' | 'farm' | 'historico'>('dispatch')
+  const [tab, setTab] = useState<'dispatch' | 'historico'>('dispatch')
   const TABS = [
     { key: 'dispatch',  label: t('tab_dispatch'),  icon: 'fa-crosshairs'        },
-    { key: 'farm',      label: t('tab_farm'),      icon: 'fa-seedling'          },
     { key: 'historico', label: t('tab_historico'), icon: 'fa-clock-rotate-left' },
   ] as const
 
