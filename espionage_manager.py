@@ -431,6 +431,35 @@ def process_dispatch_queue(session):
                         item["targetPlayerName"], item["targetCityName"])
             continue
 
+        # Reactivation guard: never send spies to a target whose owner is active again.
+        # The cached world scan can be stale, so we confirm live (island view) right before
+        # dispatch — the same check the farm runs before every action (_confirm_inactive).
+        # An active owner just captures the spies (as happened with Willesden Green on
+        # 2026-10-30). Only a CONFIRMED-active/vacation verdict blocks; True or an
+        # inconclusive None (fetch failed / not scanned) falls through and still dispatches.
+        island_id = str(item.get("islandId") or "")
+        if island_id:
+            try:
+                from farm_manager import _confirm_inactive
+                confirmed = _confirm_inactive(session, {
+                    "target_city_id":   target_cid,
+                    "island_id":        island_id,
+                    "target_city_name": item.get("targetCityName", ""),
+                    "target_player":    item.get("targetPlayerName", ""),
+                })
+            except Exception:
+                logger.warning("[espionage] confirmação de inactividade falhou para %s — a continuar",
+                               item.get("targetCityName", target_cid), exc_info=True)
+                confirmed = None
+            if confirmed is False or confirmed == "vacation":
+                reason = ("Jogador em férias — infiltração recusada pelo jogo"
+                          if confirmed == "vacation"
+                          else "Jogador já não está inactivo — espiões não enviados (teriam sido capturados)")
+                logger.warning("[espionage] %s (%s): %s — dispatch cancelado",
+                               item["targetPlayerName"], item["targetCityName"], reason)
+                _append_failed_mission(item, reason)
+                continue
+
         # Pre-check: inDefense = espiões na cidade, disponíveis para dispatch.
         # available pode ser None se o parser não o calculou — usar inDefense como fallback.
         city_counts  = spy_data.get(origin_id, {})
