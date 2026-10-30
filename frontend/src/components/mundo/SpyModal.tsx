@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useT } from '../../i18n'
+import { Modal } from '../ui/Modal'
 import { loadSpyDefaults } from '../SettingsPage'
 import type { WorldScanPlayer, OwnCity } from '../../types'
 import type { CitySpyCounts } from './types'
@@ -56,13 +57,12 @@ export function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOr
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+    <Modal onClose={onClose} labelledBy="spy-modal-title">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-slate-800">
+          <h3 id="spy-modal-title" className="text-base font-semibold text-slate-800">
             {t('spy_modal_title')} — <span className="text-indigo-600">{player.playerName}</span>
           </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+          <button onClick={onClose} aria-label={t('cancel')} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
         </div>
 
         <div className="text-xs text-slate-500 mb-4 space-y-0.5">
@@ -129,8 +129,7 @@ export function SpyModal({ player, ownCities, spyCounts, originCityId: defaultOr
             {sending ? t('spy_sending') : t('spy_send_btn')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 

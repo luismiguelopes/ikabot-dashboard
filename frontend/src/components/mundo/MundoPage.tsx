@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useT, useLang, getLocale } from '../../i18n'
 import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
+import { ConfirmModal } from '../ui/Modal'
+import { pushToast } from '../ui/Toast'
+import { apiAction } from '../../api'
 import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
 import { InactivosTab } from './InactivosTab'
 import { IgnoradasTab } from './IgnoradasTab'
@@ -26,6 +29,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [importMsg,            setImportMsg]            = useState<string | null>(null)
   const [recallingUnused,      setRecallingUnused]      = useState(false)
   const [recallMsg,            setRecallMsg]            = useState<string | null>(null)
+  const [recallConfirm,        setRecallConfirm]        = useState(false)
 
   useEffect(() => {
     fetch('/api/own-cities').then(r => r.json()).then((d: OwnCity[]) => {
@@ -110,36 +114,34 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   }, [scanStatus?.status, fetchScan, fetchStatus])
 
   const handleForceRefresh = () => {
-    fetch('/api/world-scan/refresh', { method: 'POST' })
-      .then(() => alert(t('scan_scheduled_msg')))
+    apiAction('/api/world-scan/refresh', { method: 'POST' })
+      .then(r => { if (r) pushToast(t('scan_scheduled_msg'), 'ok') })
   }
 
   const handleImportReports = useCallback(() => {
     setImportingReports(true)
     setImportMsg(null)
-    fetch('/api/espionage/import-reports', { method: 'POST' })
-      .then(r => r.json())
-      .then(() => {
+    apiAction('/api/espionage/import-reports', { method: 'POST' })
+      .then(r => {
+        if (!r) return
         setImportMsg(t('import_reports_ok'))
         setTimeout(() => setImportMsg(null), 5000)
       })
-      .catch(() => setImportMsg(null))
       .finally(() => setImportingReports(false))
   }, [t])
 
   const deployedTotal = Object.values(spyCounts).reduce((sum, c) => sum + (c.deployed ?? 0), 0)
 
   const handleRecallUnused = useCallback(() => {
-    if (!window.confirm(t('recall_unused_confirm'))) return
+    setRecallConfirm(false)
     setRecallingUnused(true)
     setRecallMsg(null)
-    fetch('/api/espionage/recall-unused', { method: 'POST' })
-      .then(r => r.json())
-      .then(() => {
+    apiAction('/api/espionage/recall-unused', { method: 'POST' })
+      .then(r => {
+        if (!r) return
         setRecallMsg(t('recall_unused_ok'))
         setTimeout(() => setRecallMsg(null), 8000)
       })
-      .catch(() => setRecallMsg(null))
       .finally(() => setRecallingUnused(false))
   }, [t])
 
@@ -250,7 +252,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
               <p className="text-xs text-emerald-600 font-medium">{importMsg}</p>
             )}
             <button
-              onClick={handleRecallUnused}
+              onClick={() => setRecallConfirm(true)}
               disabled={recallingUnused}
               className="flex items-center gap-2 px-4 py-2 bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
             >
@@ -320,6 +322,16 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       <div style={{ display: tab === 'ignoradas' ? undefined : 'none' }}>
         <IgnoradasTab scanData={scanData} onScanDataChange={setScanData} />
       </div>
+
+      {recallConfirm && (
+        <ConfirmModal
+          title={t('recall_unused_btn')}
+          body={t('recall_unused_confirm')}
+          tone="red"
+          onCancel={() => setRecallConfirm(false)}
+          onConfirm={handleRecallUnused}
+        />
+      )}
     </div>
   )
 }

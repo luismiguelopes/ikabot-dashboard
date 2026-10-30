@@ -3,6 +3,9 @@ import { useT } from '../../i18n'
 import { fmt } from '../../utils'
 import { Card } from '../ui/Card'
 import { Td } from '../ui/TableCells'
+import { ConfirmModal } from '../ui/Modal'
+import { pushToast } from '../ui/Toast'
+import { apiAction } from '../../api'
 import { SpyModal } from './SpyModal'
 import { AttackModal } from './AttackModal'
 import { FarmSettings } from '../dispatch/FarmSettings'
@@ -105,13 +108,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   const [spyTarget,      setSpyTarget]      = useState<EnrichedPlayer | null>(null)
   const [attackTarget,   setAttackTarget]   = useState<EnrichedPlayer | null>(null)
   const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
-  const [dispatchedOk,   setDispatchedOk]   = useState<string | null>(null)
-  const [attackOk,       setAttackOk]       = useState<string | null>(null)
   const [missions,       setMissions]       = useState<SpyMission[]>([])
   const [minLootTotal,   setMinLootTotal]   = useState(50000)
   const [ignoredKeys,    setIgnoredKeys]    = useState<Set<string>>(new Set())
   const [confirmModal,   setConfirmModal]   = useState<{ action: 'force-warehouse' | 'recall', player: EnrichedPlayer } | null>(null)
-  const [toast,          setToast]          = useState<{ msg: string; ok: boolean } | null>(null)
 
   useEffect(() => {
     if (!scanData?.players) return
@@ -145,7 +145,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (!Array.isArray(d)) return
       setFarmIds(new Set(d.map(f => String(f.target_city_id))))
       setFarmByCity(Object.fromEntries(d.map(f => [String(f.target_city_id), f])))
-    }).catch(() => {})
+    }).catch(() => {})  // background poll — stays silent on failure
   useEffect(() => {
     loadFarm()
     const loadLoot = () => fetch('/api/loot-stats').then(r => r.json())
@@ -159,26 +159,25 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
 
   async function handleAddFarm(p: EnrichedPlayer, mode: 'farm' | 'loop' = 'farm') {
     if (!p.cityId) return
-    const res = await fetch('/api/farm/add', {
+    const res = await apiAction('/api/farm/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targetCityId: p.cityId, targetCityName: p.cityName, targetPlayer: p.playerName,
         islandId: p.islandId, islandX: p.islandX, islandY: p.islandY, mode,
       }),
-    }).catch(() => null)
-    if (res && res.ok) {
+    })
+    if (res) {
       setFarmIds(prev => new Set([...prev, String(p.cityId)]))
-      setToast({ msg: `${t(mode === 'loop' ? 'loop_add' : 'farm_add')}: ${p.cityName}`, ok: true })
-      setTimeout(() => setToast(null), 4000)
+      pushToast(`${t(mode === 'loop' ? 'loop_add' : 'farm_add')}: ${p.cityName}`, 'ok')
     }
     loadFarm()
   }
 
   async function farmAction(cityId: string, body: Record<string, unknown>, remove = false) {
-    await fetch(remove ? '/api/farm/remove' : '/api/farm/update', {
+    await apiAction(remove ? '/api/farm/remove' : '/api/farm/update', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetCityId: cityId, ...body }),
-    }).catch(() => {})
+    })
     loadFarm()
   }
 
@@ -191,11 +190,6 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     }
     return map
   }, [missions])
-
-  const showToast = useCallback((msg: string, ok: boolean) => {
-    setToast({ msg, ok })
-    setTimeout(() => setToast(null), 4000)
-  }, [])
 
   const handleForceWarehouse = useCallback((p: EnrichedPlayer) => {
     setConfirmModal({ action: 'force-warehouse', player: p })
@@ -210,27 +204,24 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     const { action, player } = confirmModal
     setConfirmModal(null)
     const url = action === 'force-warehouse' ? '/api/espionage/force-warehouse' : '/api/espionage/recall-spy'
-    fetch(url, {
+    apiAction(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cityId: player.cityId }),
+    }).then(d => {
+      if (d && d.ok)
+        pushToast(action === 'force-warehouse' ? `Inspecção agendada — ${player.cityName}` : `Espião chamado de volta — ${player.cityName}`, 'ok')
     })
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) showToast(action === 'force-warehouse' ? `Inspecção agendada — ${player.cityName}` : `Espião chamado de volta — ${player.cityName}`, true)
-        else showToast(d.error || 'Erro', false)
-      })
-      .catch(() => showToast('Erro de rede', false))
-  }, [confirmModal, showToast])
+  }, [confirmModal])
 
   const handleIgnore = useCallback((p: EnrichedPlayer) => {
     const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : p.pKey
     setIgnoredKeys(prev => new Set([...prev, ignoreKey]))
-    fetch('/api/world-scan/mark', {
+    apiAction('/api/world-scan/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playerId: p.playerId, cityId: p.cityId, islandX: p.islandX, islandY: p.islandY, status: 'ignorar', note: 'Ignorado manualmente' }),
-    }).catch(() => {})
+    })
   }, [])
 
   const ambiguousCityKeys = useMemo((): Set<string> => {
@@ -780,18 +771,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
           originCityId={spyOriginCityId}
           onClose={() => setSpyTarget(null)}
           onDispatched={() => {
-            setDispatchedOk(spyTarget.playerName)
             setDispatchedKeys(prev => new Set([...prev, spyTarget.cKey]))
-            setTimeout(() => setDispatchedOk(null), 4000)
+            pushToast(t('spy_queued_ok', { player: spyTarget.playerName }), 'ok')
           }}
         />
-      )}
-
-      {dispatchedOk && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 bg-emerald-600 text-white text-sm font-medium rounded-xl shadow-lg flex items-center gap-2">
-          <i className="fa-solid fa-check" />
-          {t('spy_queued_ok', { player: dispatchedOk })}
-        </div>
       )}
 
       {attackTarget && (
@@ -800,60 +783,27 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
           ownCities={ownCities}
           defaultOriginCityId={spyOriginCityId}
           onClose={() => setAttackTarget(null)}
-          onQueued={name => {
-            setAttackOk(name)
-            setTimeout(() => setAttackOk(null), 4000)
-          }}
+          onQueued={name => pushToast(t('attack_queued', { player: name }), 'ok')}
         />
-      )}
-
-      {attackOk && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 bg-red-600 text-white text-sm font-medium rounded-xl shadow-lg flex items-center gap-2">
-          <i className="fa-solid fa-crosshairs" />
-          {t('attack_queued', { player: attackOk })}
-        </div>
       )}
 
       {/* Confirmation modal for force-warehouse and recall */}
       {confirmModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
-            <p className="text-sm font-semibold text-slate-800 mb-1">
-              {confirmModal.action === 'force-warehouse' ? t('btn_force_warehouse') : t('btn_recall_spy')}
-            </p>
-            <p className="text-sm text-slate-500 mb-5">
+        <ConfirmModal
+          title={confirmModal.action === 'force-warehouse' ? t('btn_force_warehouse') : t('btn_recall_spy')}
+          tone={confirmModal.action === 'recall' ? 'blue' : 'amber'}
+          body={
+            <>
               {confirmModal.player.cityName}
               {ambiguousCityKeys.has(`${confirmModal.player.playerName}|${confirmModal.player.cityName}`) && (
                 <span className="text-slate-400 text-xs ml-1">({confirmModal.player.cityId})</span>
               )}
               {' '}— {confirmModal.player.playerName}
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setConfirmModal(null)}
-                className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-              >
-                {t('cancel')}
-              </button>
-              <button
-                onClick={handleConfirmAction}
-                className={`px-4 py-2 text-sm text-white rounded-lg transition-colors ${
-                  confirmModal.action === 'recall' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-amber-500 hover:bg-amber-600'
-                }`}
-              >
-                {t('confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Toast notification */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm text-white ${toast.ok ? 'bg-emerald-500' : 'bg-red-500'}`}>
-          <i className={`fa-solid ${toast.ok ? 'fa-check' : 'fa-xmark'}`} />
-          {toast.msg}
-        </div>
+            </>
+          }
+          onCancel={() => setConfirmModal(null)}
+          onConfirm={handleConfirmAction}
+        />
       )}
     </div>
   )

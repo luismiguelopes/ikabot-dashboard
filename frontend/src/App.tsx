@@ -5,6 +5,8 @@ import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
 import type { ApiData, AlertThresholds, CityResources } from './types'
 import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
+import { ToastHost } from './components/ui/Toast'
+import { setApiLang } from './api'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
 import { CitiesPage } from './components/CitiesPage'
@@ -115,6 +117,8 @@ function ErrorScreen({ message }: { message: string }) {
 
 export default function App() {
   const [lang, setLang] = useState(loadLang)
+  // Keep the (non-React) apiAction helper's default error text in the active language.
+  useEffect(() => { setApiLang(lang as 'pt' | 'en') }, [lang])
   const toggleLang = useCallback(() => {
     setLang(prev => {
       const next = prev === 'en' ? 'pt' : 'en'
@@ -310,6 +314,7 @@ export default function App() {
           </main>
         </div>
       </div>
+      <ToastHost />
     </LangContext.Provider>
   )
 }
