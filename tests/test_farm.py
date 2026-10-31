@@ -243,6 +243,55 @@ def test_spying_with_good_loot_enqueues_attack(monkeypatch, tmp_path):
     assert t["last_loot"] == 90000
 
 
+def test_fleet_target_respy_requests_movements(monkeypatch, tmp_path):
+    """A known fleet target's re-scout chains a spy-on-movements leg (needMovements=True) so
+    the enemy fleet's real return ETA is read instead of guessed."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Martelo", "islandX": 48, "islandY": 44,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                   "is_fleet_target": 1})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needMovements"] is True
+    assert added[0][1]["needGarrison"] is True
+
+
+def test_movements_eta_feeds_enemy_return_at(monkeypatch, tmp_path):
+    """A fleet target's DONE report carrying a real enemy-fleet return ETA (movements scout)
+    updates enemy_return_at, so the troop-timing guard runs on real data, not disperse_min.
+    With the fleet due back long after the troops land, the raid stays troops-only."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    eta = now + 10000           # enemy fleet back in ~2.7h — troops land well before
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Martelo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1, "last_troop_journey": 600,
+                                   "enemy_return_at": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
+        "garrisonResult": {"troops": {}},
+        "movementsResult": {"enemyReturnAt": eta},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["enemy_return_at"] == eta       # real ETA stored, not the disperse_min guess
+    army  = [it for q, it in added if q == "attack" and it["missionType"] == "army"]
+    fleet = [it for q, it in added if q == "attack" and it["missionType"] == "fleet"]
+    assert len(army) == 1 and len(fleet) == 0   # troops land before the fleet is back
+
+
 def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
     """With a configured loadout, send min(loadout, available) per unit — not all troops."""
     _setup_db(tmp_path)

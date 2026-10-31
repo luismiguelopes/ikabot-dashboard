@@ -517,6 +517,7 @@ def process_dispatch_queue(session):
             num_decoys=item.get("numDecoys", 0),
             fast=bool(item.get("fast")),
             need_garrison=bool(item.get("needGarrison", True)),
+            need_movements=bool(item.get("needMovements", False)),
         )
         if ok:
             # Decrementar em memória para que o pre-check funcione correctamente
@@ -572,7 +573,8 @@ def _append_failed_mission(item, error):
 
 def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                   target_player_name, target_city_name, island_x, island_y,
-                  num_agents=1, num_decoys=0, fast=False, need_garrison=True):
+                  num_agents=1, num_decoys=0, fast=False, need_garrison=True,
+                  need_movements=False):
     """
     Dispatch spies from origin_city_id to target_city_id.
     `fast` (farm re-scouts): execute warehouse/garrison back-to-back with second-scale
@@ -671,7 +673,8 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "numAgents":         num_agents,
         "state":             "TRAVELING",
         "fast":              bool(fast),
-        "needGarrison":      bool(need_garrison),
+        "needGarrison":      bool(need_garrison) or bool(need_movements),
+        "needMovements":     bool(need_movements),
         "safehousePosition": safehouse_pos,
         "spySessionId":      None,
         "dispatchedAt":      int(time.time()),
@@ -851,11 +854,10 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
 
 
 
-def _fetch_all_reports(session, origin_city_id, position):
-    """
-    GET safehouse reports tab once and return all parsed report data {report_id: data}.
-    The page HTML already contains full content for every report (read and unread alike).
-    """
+def _fetch_reports_html(session, origin_city_id, position):
+    """GET the safehouse reports tab once and return its raw HTML (the full page content for
+    every report — warehouse, garrison AND movements — is present on the initial load). Empty
+    string on failure. Both the parsed-report path and the movements path build on this."""
     import ikabot.config as ikabot_config
     url = (
         f"view=safehouse&activeTab=tabReports&cityId={origin_city_id}&position={position}"
@@ -867,7 +869,7 @@ def _fetch_all_reports(session, origin_city_id, position):
         resp_data = json.loads(resp, strict=False)
     except Exception as e:
         logger.error("[espionage] GET reports tab falhou: %s", e)
-        return {}
+        return ""
 
     for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "updateGlobalData":
@@ -886,9 +888,49 @@ def _fetch_all_reports(session, origin_city_id, position):
 
     if not html:
         logger.warning("[espionage] reports tab: sem HTML no changeView")
-        return {}
+    return html
 
+
+def _fetch_all_reports(session, origin_city_id, position):
+    """
+    GET safehouse reports tab once and return all parsed report data {report_id: data}.
+    The page HTML already contains full content for every report (read and unread alike).
+    """
+    html = _fetch_reports_html(session, origin_city_id, position)
+    if not html:
+        return {}
     return _parse_reports_from_html(html)
+
+
+def _enemy_return_from_movements(html, city_name, now=None):
+    """Read the enemy fleet's REAL return time from a spy-on-movements report, as an absolute
+    epoch, or None if nothing relevant is seen. This replaces the fixed disperse_min guess for
+    enemy_return_at (F4.b): the port is unsafe for unescorted troops once a defending fleet is
+    back, so we want the SOONEST future arrival of a fleet coming INTO the target city.
+
+    We only count inbound-to-defend movements (action contains 'voltar'/'defender'/'apoio') so
+    our own attack waves ('Pilhar'/'Ocupar', which also show in the report) are never mistaken
+    for the enemy fleet returning. The destination (the report's first column) must match the
+    target city. Future arrivals only — a movement already landed is reflected by the garrison
+    scout instead. Fail-safe: any parse problem yields None and the caller keeps its estimate."""
+    if now is None:
+        now = int(time.time())
+    cn = (city_name or "").lower()
+    _INBOUND = ("voltar", "defender", "apoio", "apoyo", "support", "return")
+    best = None
+    try:
+        for m in parse_fleet_movements(html or ""):
+            action = (m.get("action") or "").lower()
+            if not any(k in action for k in _INBOUND):
+                continue
+            if cn and cn not in (m.get("target") or "").lower():
+                continue
+            arr = m.get("arrival")
+            if arr and arr > now and (best is None or arr < best):
+                best = arr
+    except Exception:
+        return None
+    return best
 
 
 
@@ -1268,7 +1310,6 @@ def collect_garrison_results(session):
                 found = (report.get("targetCityName") or "").lower()
                 if target and found and target[:6] not in found and found[:6] not in target:
                     continue
-            missions[i]["state"] = "DONE"
             missions[i]["garrisonResult"] = report
             _tr = report.get("troops") or {}
             logger.info("[espionage] garrison %s: %s",
@@ -1276,6 +1317,18 @@ def collect_garrison_results(session):
                         ("%d unidade(s) em %d tipo(s)"
                          % (sum(int(v or 0) for v in _tr.values()), len(_tr)))
                         if _tr else "sem tropas")
+            # Fleet target: chain a spy-on-movements leg to read the enemy fleet's REAL return
+            # ETA before finishing (F4.b), instead of marking DONE on the garrison alone.
+            if m.get("needMovements"):
+                delay = random.randint(15, 40) if m.get("fast") else random.randint(1, 4) * 60
+                missions[i]["state"] = "WAITING_FOR_MOVEMENTS"
+                missions[i]["movementsExecuteAfter"] = now + delay
+                missions[i]["movementsExecutedAt"]   = None
+                missions[i]["movementsResult"]       = None
+                logger.info("[espionage] garrison %s pronta — movimentos em %ds (ETA da frota)",
+                            m["targetCityName"], delay)
+            else:
+                missions[i]["state"] = "DONE"
             matched = True
             changed = True
             break
@@ -1292,6 +1345,111 @@ def collect_garrison_results(session):
         _save_missions(data)
 
 
+def execute_movements_missions(session):
+    """WAITING_FOR_MOVEMENTS → EXECUTING_MOVEMENTS after delay. Runs the spy-on-movements
+    mission (MISSION_MOVEMENTS) on the spy already stationed at the target, to read the enemy
+    fleet's real return ETA. Fail-safe: if the spy is gone or the server rejects it, the
+    mission goes straight to DONE keeping the garrison result (caller falls back to its
+    disperse_min estimate)."""
+    data = _load_missions()
+    missions = data.get("missions", [])
+    changed = False
+    now = int(time.time())
+
+    for i, m in enumerate(missions):
+        if m.get("state") != "WAITING_FOR_MOVEMENTS":
+            continue
+        if now < m.get("movementsExecuteAfter", now + 1):
+            continue
+
+        origin_id = str(m["originCityId"])
+        position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
+        if not position:
+            continue
+
+        time.sleep(random.randint(10, 25))
+        spy_count, html = _fetch_spy_missions_view(session, origin_id, m["targetCityId"], position)
+
+        if not spy_count:
+            # Spy left before movements — finish on the garrison result.
+            missions[i]["state"] = "DONE"
+            logger.info("[espionage] %s: espião regressou antes dos movimentos — DONE (sem ETA)",
+                        m["targetCityName"])
+            changed = True
+            continue
+
+        spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
+
+        time.sleep(random.randint(5, 15))
+        ok, _reason = _execute_spy_mission(
+            session, origin_id, m["targetCityId"], position,
+            spy_id, m.get("numAgents", 1), MISSION_MOVEMENTS,
+        )
+
+        if ok:
+            missions[i]["state"] = "EXECUTING_MOVEMENTS"
+            missions[i]["movementsExecutedAt"] = now
+            missions[i]["movementsCollectAfter"] = now + (random.randint(20, 45) if m.get("fast")
+                                                          else random.randint(60, 300))
+            missions[i]["spySessionId"] = spy_id
+            logger.info("[espionage] missão movimentos executada → %s", m["targetCityName"])
+        else:
+            missions[i]["state"] = "DONE"
+            logger.info("[espionage] %s: movimentos rejeitados → DONE (sem ETA da frota)",
+                        m["targetCityName"])
+        changed = True
+
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
+
+
+def collect_movements_results(session):
+    """EXECUTING_MOVEMENTS → DONE: fetch the reports tab, read the enemy fleet's real return
+    ETA from the spy-on-movements report and store it as movementsResult.enemyReturnAt (epoch)
+    or None. Always ends DONE — the movements leg only ADDS the real ETA; its absence just
+    leaves the caller on its own estimate."""
+    data = _load_missions()
+    missions = data.get("missions", [])
+    changed = False
+    now = int(time.time())
+
+    for i, m in enumerate(missions):
+        if m.get("state") != "EXECUTING_MOVEMENTS":
+            continue
+        if now < m.get("movementsCollectAfter", m.get("movementsExecutedAt", 0) + 60):
+            continue
+
+        origin_id = str(m["originCityId"])
+        position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
+        if not position:
+            continue
+
+        time.sleep(random.randint(5, 15))
+        html = _fetch_reports_html(session, origin_id, position)
+
+        if not html:
+            if active_elapsed(m.get("movementsExecutedAt", 0), now) > 7200:  # B7: discount downtime
+                missions[i]["state"] = "DONE"
+                logger.warning("[espionage] %s: relatório de movimentos ausente após 2h → DONE "
+                               "(sem ETA)", m["targetCityName"])
+                changed = True
+            continue
+
+        eta = _enemy_return_from_movements(html, m.get("targetCityName"), now)
+        missions[i]["movementsResult"] = {"enemyReturnAt": eta}
+        missions[i]["state"] = "DONE"
+        if eta:
+            logger.info("[espionage] movimentos %s: frota inimiga regressa em ~%dmin",
+                        m["targetCityName"], max(0, (eta - now) // 60))
+        else:
+            logger.info("[espionage] movimentos %s: sem frota inimiga a regressar (porto limpo)",
+                        m["targetCityName"])
+        changed = True
+
+    if changed:
+        data["missions"] = missions
+        _save_missions(data)
 
 
 def force_warehouse_mission(target_city_id):
@@ -1336,7 +1494,7 @@ def force_warehouse_mission(target_city_id):
         logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
-def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
+def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_movements=False):
     """Reuse spies already stationed at the target instead of sending fresh ones: a real
     player re-runs the warehouse mission on the spies sitting in the safehouse. Returns
     True if a stationed spy was found (re-executed, or already mid-mission → caller waits),
@@ -1346,7 +1504,8 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
     missions = data.get("missions", [])
     now = int(time.time())
     _ACTIVE = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
-               "WAITING_FOR_GARRISON", "EXECUTING_GARRISON")
+               "WAITING_FOR_GARRISON", "EXECUTING_GARRISON",
+               "WAITING_FOR_MOVEMENTS", "EXECUTING_MOVEMENTS")
     for i, m in enumerate(missions):
         if str(m.get("targetCityId", "")) != str(target_city_id):
             continue
@@ -1369,12 +1528,15 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True):
             missions[i]["executeAfter"] = now + offset
             missions[i]["dispatchedAt"] = now   # treat the re-run as a fresh attempt
             missions[i]["fast"] = bool(fast)
-            missions[i]["needGarrison"] = bool(need_garrison)
+            missions[i]["needGarrison"] = bool(need_garrison) or bool(need_movements)
+            missions[i]["needMovements"] = bool(need_movements)
             missions[i]["missionType"] = None
             missions[i]["warehouseRetries"] = 0
             missions[i]["error"] = None
             for k in ("result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
-                      "garrisonCollectAfter", "collectAfter", "executedAt"):
+                      "garrisonCollectAfter", "collectAfter", "executedAt",
+                      "movementsResult", "movementsExecutedAt", "movementsExecuteAfter",
+                      "movementsCollectAfter"):
                 missions[i][k] = None
             data["missions"] = missions
             _save_missions(data)
@@ -1726,6 +1888,8 @@ def process_spy_cycle(session):
         ("collect_mission_results",   collect_mission_results),
         ("execute_garrison_missions", execute_garrison_missions),
         ("collect_garrison_results",  collect_garrison_results),
+        ("execute_movements_missions", execute_movements_missions),
+        ("collect_movements_results",  collect_movements_results),
     ]:
         try:
             fn(session)

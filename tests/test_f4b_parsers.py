@@ -102,3 +102,56 @@ def test_clean_window_filters_by_city():
 def test_empty_movement_report():
     assert em.parse_fleet_movements(EMPTY_REPORT) == []
     assert em.enemy_fleet_clean_window_secs(EMPTY_REPORT) is None
+
+
+# ── _enemy_return_from_movements: real enemy-fleet return ETA (absolute epoch) ────
+
+import time as _time
+from datetime import datetime, timedelta
+
+
+def _mov_html(rows):
+    head = ("<tr><th>Cidade alvo</th><th>Tempo de partida</th><th>Tempo de chegada</th>"
+            "<th>Acção</th><th>Quantidade</th></tr>")
+    body = "".join(
+        f"<tr><td>{c}</td><td>{dep}</td><td>{arr}</td><td>{act}</td><td>{qty}</td></tr>"
+        for c, dep, arr, act, qty in rows)
+    return f"<table>{head}{body}</table>"
+
+
+def _fmt(dt):
+    return dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def test_enemy_return_picks_soonest_future_inbound():
+    now = int(_time.time())
+    base = datetime.fromtimestamp(now)
+    soon = base + timedelta(hours=2)        # defending fleet back in 2h
+    later = base + timedelta(hours=5)
+    html = _mov_html([
+        # outbound raid (ours or theirs going out) → NOT a returning fleet, ignored
+        ("Martelo", _fmt(base), _fmt(base + timedelta(hours=3)), "Pilhar", 168),
+        ("Martelo", _fmt(base - timedelta(hours=1)), _fmt(soon),  "Defender porto(Voltar)", 20),
+        ("Martelo", _fmt(base), _fmt(later), "Apoio(Voltar)", 5),
+        # already landed → reflected by the garrison scout, ignored here
+        ("Martelo", _fmt(base - timedelta(hours=3)), _fmt(base - timedelta(hours=1)),
+         "Defender porto(Voltar)", 10),
+    ])
+    eta = em._enemy_return_from_movements(html, "Martelo", now)
+    assert eta == int(_time.mktime(soon.timetuple()))   # soonest future return
+
+
+def test_enemy_return_ignores_outbound_and_other_cities():
+    now = int(_time.time())
+    base = datetime.fromtimestamp(now)
+    html = _mov_html([
+        ("Martelo", _fmt(base), _fmt(base + timedelta(hours=2)), "Pilhar", 168),          # outbound
+        ("Outra Cidade", _fmt(base), _fmt(base + timedelta(hours=1)),
+         "Defender porto(Voltar)", 10),                                                    # wrong city
+    ])
+    assert em._enemy_return_from_movements(html, "Martelo", now) is None
+
+
+def test_enemy_return_empty_or_clean_is_none():
+    assert em._enemy_return_from_movements("", "Martelo", 0) is None
+    assert em._enemy_return_from_movements(EMPTY_REPORT, "Martelo", 0) is None

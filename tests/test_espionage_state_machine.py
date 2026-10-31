@@ -281,6 +281,69 @@ def test_collect_garrison_times_out(monkeypatch):
     assert "não encontrado" in m["garrisonResult"]["error"]
 
 
+# ── Movements leg (fleet targets): garrison → WAITING_FOR_MOVEMENTS → DONE ───────
+
+def test_collect_garrison_chains_movements_for_fleet_target(monkeypatch):
+    """A fleet target (needMovements) does NOT finish on the garrison — it chains a
+    spy-on-movements leg to read the enemy fleet's real return ETA."""
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_GARRISON", garrisonCollectAfter=_now() - 1,
+                                      needMovements=True)])
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k:
+                        {"1": {"troops": {"s216": 1}, "targetCityId": "100", "targetCityName": "Alvo"}})
+    em.collect_garrison_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "WAITING_FOR_MOVEMENTS"
+    assert m["garrisonResult"]["troops"] == {"s216": 1}
+    assert m["movementsExecuteAfter"] >= _now()
+
+
+def test_collect_garrison_without_movements_flag_is_done(monkeypatch):
+    """No needMovements → the garrison still finishes the mission (unchanged behaviour)."""
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_GARRISON", garrisonCollectAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k:
+                        {"1": {"troops": {"s216": 1}, "targetCityId": "100", "targetCityName": "Alvo"}})
+    em.collect_garrison_results(session=object())
+    assert h["missions"][0]["state"] == "DONE"
+
+
+def test_execute_movements_runs(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="WAITING_FOR_MOVEMENTS", movementsExecuteAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (True, "ok"))
+    em.execute_movements_missions(session=object())
+    assert h["missions"][0]["state"] == "EXECUTING_MOVEMENTS"
+
+
+def test_execute_movements_spy_gone_is_done(monkeypatch):
+    """Spy left before the movements scout → finish on the garrison result (no ETA)."""
+    h = _patch(monkeypatch, [_mission(state="WAITING_FOR_MOVEMENTS", movementsExecuteAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (0, ""))
+    em.execute_movements_missions(session=object())
+    assert h["missions"][0]["state"] == "DONE"
+
+
+def test_collect_movements_sets_enemy_return_eta(monkeypatch):
+    eta = _now() + 2 * 3600
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_MOVEMENTS", movementsCollectAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: "<movements/>")
+    monkeypatch.setattr(em, "_enemy_return_from_movements", lambda html, name, now=None: eta)
+    em.collect_movements_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "DONE"
+    assert m["movementsResult"] == {"enemyReturnAt": eta}
+
+
+def test_collect_movements_clean_port_is_done_without_eta(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_MOVEMENTS", movementsCollectAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: "<movements/>")
+    monkeypatch.setattr(em, "_enemy_return_from_movements", lambda html, name, now=None: None)
+    em.collect_movements_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "DONE"
+    assert m["movementsResult"] == {"enemyReturnAt": None}
+
+
 # ── process_spy_cycle: resilience (one failing step doesn't stop the rest) ───────
 
 def test_cycle_isolates_step_failures(monkeypatch):
@@ -295,9 +358,12 @@ def test_cycle_isolates_step_failures(monkeypatch):
     monkeypatch.setattr(em, "collect_mission_results", lambda s: calls.append("collect"))
     monkeypatch.setattr(em, "execute_garrison_missions", lambda s: calls.append("garrison_exec"))
     monkeypatch.setattr(em, "collect_garrison_results", lambda s: calls.append("garrison_collect"))
+    monkeypatch.setattr(em, "execute_movements_missions", lambda s: calls.append("movements_exec"))
+    monkeypatch.setattr(em, "collect_movements_results", lambda s: calls.append("movements_collect"))
     em.process_spy_cycle(session=object())
     # the failing step ran and raised, but every later step still ran
-    assert calls == ["recall", "arrivals", "waiting", "collect", "garrison_exec", "garrison_collect"]
+    assert calls == ["recall", "arrivals", "waiting", "collect", "garrison_exec",
+                     "garrison_collect", "movements_exec", "movements_collect"]
 
 
 # ── process_recall_unused_flag: mass recall sweep of unused stationed spies ──────

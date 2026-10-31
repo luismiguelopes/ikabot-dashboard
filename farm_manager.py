@@ -792,12 +792,17 @@ def process_farm_targets(session, in_active_hours=True):
         spies burned), else dispatch fresh ones. `need_garrison=False` → warehouse-only
         re-scout (safe target). `force_fresh=True` skips the parked spies (used once they
         have been rejected _MAX_SCOUT_FAILS times — they are detected/dead) and dispatches
-        new ones. Returns 'stationed'/'dispatched' on success, or None when no spy origin
-        is available."""
+        new ones. A known fleet target also chains a spy-on-movements leg (need_movements)
+        so the enemy fleet's real return ETA is read, not guessed. Returns 'stationed'/
+        'dispatched' on success, or None when no spy origin is available."""
         tid = t["target_city_id"]
+        # Fleet targets: read the enemy fleet's real return ETA from a movements scout so we
+        # never send unescorted troops into a fleet that is merely dispersed and due back.
+        need_movements = need_garrison and int(t.get("is_fleet_target", 0)) == 1
         if not force_fresh:
             from espionage_manager import reexecute_stationed_spy
-            if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison):
+            if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison,
+                                       need_movements=need_movements):
                 return "stationed"
         origin = _pick_spy_origin(own_cities, spy_counts, t)
         if not origin:
@@ -814,6 +819,7 @@ def process_farm_targets(session, in_active_hours=True):
             "numDecoys":        0,
             "fast":             True,   # warehouse→garrison back-to-back
             "needGarrison":     bool(need_garrison),
+            "needMovements":    bool(need_movements),
             "queuedAt":         now,
         })
         return "dispatched"
@@ -1019,6 +1025,15 @@ def process_farm_targets(session, in_active_hours=True):
             loot     = sum((m.get("result") or {}).get("resources", {}).values())
             gres     = m.get("garrisonResult") or {}
             garrison = gres.get("troops") or {}
+            # Real enemy-fleet return ETA from the movements scout (fleet targets): feeds the
+            # troop-timing guard in _enqueue_attack so we never land unescorted troops after a
+            # dispersed fleet is back. Only overwrites the stored estimate when the scout
+            # actually read a returning fleet (None = clean/unknown → keep the disperse_min
+            # guess). Both t and the DB are updated so _enqueue_attack sees the fresh value.
+            mv = m.get("movementsResult")
+            if isinstance(mv, dict) and mv.get("enemyReturnAt"):
+                t["enemy_return_at"] = int(mv["enemyReturnAt"])
+                farm_update(tid, {"enemy_return_at": int(mv["enemyReturnAt"])})
             # A rejected/absent garrison scout carries NO fleet intel — it is not the same as
             # "scouted and saw an empty port". Only a scout that actually returned troops data
             # (error-free) tells us the port is clean.
