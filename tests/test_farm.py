@@ -472,9 +472,11 @@ def test_safe_target_attacks_directly(monkeypatch, tmp_path):
     assert t["total_raids"] == 1
 
 
-def test_safe_periodic_respy_is_warehouse_only(monkeypatch, tmp_path):
-    """When raids_since_spy reaches respy_every, a safe target re-scouts — but warehouse-only
-    (needGarrison=False), and re-confirms the owner is still inactive."""
+def test_safe_periodic_respy_is_full_garrison(monkeypatch, tmp_path):
+    """When raids_since_spy reaches respy_every, a safe target's periodic re-scout takes the
+    FULL garrison (needGarrison=True): "inactive" describes only the owner, not the port, so a
+    fleet that appeared (owner reactivated, built ships, went inactive again) must be caught on
+    this scheduled scout before a troops-only raid bounces off it. Still re-confirms inactivity."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
@@ -487,7 +489,7 @@ def test_safe_periodic_respy_is_warehouse_only(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
     assert [q for q, _ in added] == ["spy_dispatch"]
-    assert added[0][1]["needGarrison"] is False           # warehouse-only re-scout
+    assert added[0][1]["needGarrison"] is True            # cadence scout re-checks the port
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
@@ -528,6 +530,7 @@ def test_drained_by_real_return_respies_not_direct(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
     assert [q for q, _ in added] == ["spy_dispatch"]      # re-spied, did NOT attack directly
+    assert added[0][1]["needGarrison"] is False           # between cadence scouts → warehouse-only
     assert db_manager.farm_get("100")["state"] == "SPYING"
 
 
@@ -573,8 +576,10 @@ def test_no_free_troops_reschedules_not_doomed_attack(monkeypatch, tmp_path):
     assert t["state"] == "IDLE" and t["next_run_at"] > now   # rescheduled for a retry
 
 
-def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
-    """The pipelined re-scout fired while troops return is warehouse-only for a safe target."""
+def test_early_respy_full_garrison_for_safe_target(monkeypatch, tmp_path):
+    """The pipelined re-scout fired while troops return takes the full garrison: it only fires
+    when the re-spy cadence is due (raids_since_spy >= respy_every), which is exactly the scout
+    that now re-checks the port, so a newly-docked fleet is caught before the next raid."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
@@ -588,7 +593,7 @@ def test_early_respy_warehouse_only_for_safe_target(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
     assert [q for q, _ in added] == ["spy_dispatch"]
-    assert added[0][1]["needGarrison"] is False
+    assert added[0][1]["needGarrison"] is True
     assert db_manager.farm_get("100")["respy_launched_at"] > 0
 
 

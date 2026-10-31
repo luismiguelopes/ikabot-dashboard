@@ -823,10 +823,12 @@ def process_farm_targets(session, in_active_hours=True):
         re-check at the coordinates (user rule: never spy or attack without re-confirming
         the owner is still inactive). Returns:
           - "disable": the owner is active again → disabled + alerted.
-          - "garrison": needs a FULL scout — first contact, a fleet target, OR (P5.5) a safe
-            target whose inactivity could NOT be confirmed (island fetch + scan both failed).
+          - "garrison": needs a FULL scout — first contact, a fleet target, (P5.5) a safe
+            target whose inactivity could NOT be confirmed (island fetch + scan both failed),
+            OR the periodic re-spy cadence is due (see below).
             Escalating to a garrison scout instead of attacking blind closes the fail-open hole.
-          - "warehouse": safe target confirmed still inactive → a warehouse-only re-scout is safe.
+          - "warehouse": safe target confirmed still inactive, between cadence scouts → a
+            warehouse-only re-scout is safe (loot + drainage check, no mission on the garrison).
         """
         confirmed = _confirm_inactive(session, t)
         if confirmed is False:
@@ -837,7 +839,20 @@ def process_farm_targets(session, in_active_hours=True):
             return "skip"
         if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
             return "garrison"
-        return "warehouse" if confirmed is True else "garrison"
+        if confirmed is not True:
+            return "garrison"
+        # Periodic cadence re-scout (every respy_every rounds): take the FULL garrison, not just
+        # the warehouse. "Inactive" only describes the OWNER, never the port — a player who
+        # reactivated, built a fleet, and went inactive again still has those ships, while
+        # is_fleet_target stays stale at 0 and the live inactivity check still reads "inactive".
+        # Warehouse-only re-scouts never see that fleet, so troops-only raids bounce off it and
+        # we only learn after wasting a round-trip (seen live: Martelo 31/10). Re-checking the
+        # garrison on the scheduled scout catches the new fleet here → flags is_fleet_target=1 →
+        # blockade/skip, before the bounce. Between cadence scouts, warehouse-only still stands.
+        respy_every = max(1, int(t.get("respy_every", 3)))
+        if int(t.get("raids_since_spy", 0)) >= respy_every:
+            return "garrison"
+        return "warehouse"
 
     # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
     # Iterating over a 1-item list keeps the existing `continue`-based body intact.
