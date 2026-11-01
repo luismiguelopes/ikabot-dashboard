@@ -586,11 +586,39 @@ Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizad
     falhado, `get_loot_log` a rebentar, ou armazém mesmo vazio). Esses alvos pagam a cadeia de 3
     espionagens para sempre à toa. Evidência (01/11): Lançassolar/Braavos/Jardim/Valíria todos
     ~208k, marcados; Lançassolar com ricochete naval **confirmado in-game** (29/10).
-  - **Proposta**: acrescentar um parser do resultado de combate real (a mensagem "perderiam num
-    combate marítimo") a partir dos movimentos (`empire_collector._collect_movements`, endpoint
-    `militaryAdvisor`). Usar **só para acrescentar confiança**: um "não-naval confirmado" pode
-    *despromover* uma flag posta apenas pelo heurístico; um "naval confirmado" *tranca* `=1`.
-    **Nunca** substitui o heurístico "sem saque → marca frota" (a rede de segurança, que peca por
-    excesso e nunca desprotege).
-  - **Pré-requisito**: confirmar que o `militaryAdvisor` expõe o resultado do combate no schema
-    dos movimentos antes de prometer a abordagem.
+  - **Proposta (era)**: parsear o resultado de combate real a partir dos movimentos, só para
+    acrescentar confiança (nunca substituindo o heurístico "sem saque → marca frota").
+  - **INVESTIGADO E DESCARTADO (01/11)**: captura do schema cru de `militaryAndFleetMovements`
+    (feito passivamente, piggyback no ciclo). O `event` expõe só estado do movimento (`missionText`
+    ex.: "Pilhar (Voltar)", `missionState`, `isFleetReturning`, `isInFight`/`isCombatant`
+    transitórios) — **nenhum campo de resultado de combate**. Um ricochete é indistinguível de um
+    regresso vazio neste feed (só difere no saque, que já usamos). A mensagem "combate marítimo"
+    vive no sistema de **relatórios de combate**, que o ikabot não lê de todo → seria um subsistema
+    novo e frágil (endpoint + parsing narrativo + i18n), e só daria eficiência, não segurança.
+    **Veredicto: não construir.** O over-flagging actual é seguro (peca por excesso, nunca
+    desprotege) e é o custo aceite. Fecha o Caso 2.
+
+---
+
+## Caso 2 (alvos de frota) — FECHADO 2026-11-01
+
+Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado final:
+- **Motor — ETA real da frota** (`14b8d5b`): a cadeia de espionagem warehouse→garrison→**movimentos**
+  lê o regresso real da frota inimiga (`_enemy_return_from_movements`) e alimenta `enemy_return_at`,
+  em vez do palpite fixo `disperse_min`. Confirmado a funcionar ao vivo (Martelo).
+- **Sender do blockade** validado pela captura do formulário real (01/11, read-only, sem ataque):
+  view `blockade`, função `sendFleetOnBlockade`, campos `cargo_fleet_<id>_upkeep`, e o nosso
+  loadout (`s216`→`216`) **bate** com os ids do formulário — zero mismatch. Fix do fallback do nome
+  da função (`sendFleetBlockadeSea`→`sendFleetOnBlockade`), que não mordia mas estava errado.
+- **Timing das duas vagas** (`farm_manager.py:812-844`) validado: barcos saem já; tropas agendadas
+  para **chegar `fleet_lead` (5min, +20min se há combate) depois dos barcos chegarem**, com tempos
+  reais dos formulários; nunca esperam a confirmação do blockade (desenho intencional — barcos
+  demoram horas; o alvo é pré-validado). Edge cases (tropas mais rápidas/lentas) seguros.
+- **Prioridade**: Caso 1 (alvos seguros) corre **sempre primeiro**; os alvos de frota são os últimos
+  da fila (decisão do utilizador — um blockade é sempre mais lento/caro). Não há aging.
+- **Não acoplar tropas↔sucesso do blockade**: rejeitado (quebraria a janela de timing).
+- **Resíduo aceite**: se o *dispatch* do blockade falhar (raro, sender validado), as tropas saem na
+  mesma → ricochete que auto-corrige. O utilizador aceita (pré-valida o alvo).
+- **Validação ao vivo**: o blockade dispara naturalmente quando os alvos seguros secarem
+  (prioridade); o diagnóstico de "ids ausentes do form" (em `_send_fleet_blockade`) apanha o
+  primeiro real para confirmação de 100%.

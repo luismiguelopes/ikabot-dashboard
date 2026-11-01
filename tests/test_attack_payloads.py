@@ -1,6 +1,6 @@
 """
 Golden-file tests for the POST payloads that SPEND troops/ships (P5.7):
-sendArmyPlunderSea, sendFleetBlockadeSea (blockade) and deployArmy/deployFleet.
+sendArmyPlunderSea, sendFleetOnBlockade (blockade) and deployArmy/deployFleet.
 
 These are the highest-consequence requests in the bot — a regression in the unit-id strip,
 the mandatory upkeep fields or the transporter cap costs a real army in-game. The tests pin
@@ -112,14 +112,14 @@ def test_fleet_blockade_payload(monkeypatch):
     _common(monkeypatch)
     # Form self-discovers the real function name and the cargo_fleet_* upkeep fields.
     monkeypatch.setattr(am, "_fetch_blockade_form",
-                        lambda *a, **k: ({"401": "2", "402": "0"}, "sendFleetBlockadeSea", "blockade"))
+                        lambda *a, **k: ({"401": "2", "402": "0"}, "sendFleetOnBlockade", "blockade"))
     s = _CaptureSession()
 
     ok = am._send_fleet_blockade(s, origin_id=1, target_id=20477, island_id=30816,
                                  units={"s401": 10})
     assert ok is True
     p = s.params
-    assert p["function"] == "sendFleetBlockadeSea"      # taken from the form
+    assert p["function"] == "sendFleetOnBlockade"      # taken from the form
     assert p["templateView"] == "blockade"
     assert p["cargo_fleet_401"] == 10
     assert p["cargo_fleet_401_upkeep"] == "2"

@@ -376,8 +376,9 @@ def _fetch_blockade_form(session, ikabot_config, origin_id, target_id):
         fn = fn_m.group(1) if fn_m else None
 
         if upkeep or fn:
-            logger.info("[attack] blockade form (view=%s): %d tipo(s) de unidade, function=%s",
-                        view, len(upkeep), fn)
+            logger.info("[attack] blockade form (view=%s): %d tipo(s) de unidade, function=%s "
+                        "— ids do formulário: %s",
+                        view, len(upkeep), fn, sorted(upkeep.keys()))
             return upkeep, fn, view
 
         # Diagnostic: log the form's input names so the real API can be identified
@@ -390,7 +391,7 @@ def _fetch_blockade_form(session, ikabot_config, origin_id, target_id):
 def _send_fleet_blockade(session, origin_id, target_id, island_id, units):
     """Naval attack (port blockade) against a player city. deployFleet does NOT work
     here — it only stations ships in own/allied cities. The function name is taken
-    from the form when present (expected sendFleetBlockadeSea).
+    from the form when present (sendFleetOnBlockade, confirmed from the live form).
     Returns True on success (provideFeedback type=10)."""
     import ikabot.config as ikabot_config
 
@@ -398,7 +399,7 @@ def _send_fleet_blockade(session, origin_id, target_id, island_id, units):
     _change_to_origin_city(session, ikabot_config, origin_id)
 
     upkeep_map, form_fn, view = _fetch_blockade_form(session, ikabot_config, origin_id, target_id)
-    function = form_fn or "sendFleetBlockadeSea"
+    function = form_fn or "sendFleetOnBlockade"
 
     units_api = {(uid[1:] if uid.startswith("s") else uid): int(cnt)
                  for uid, cnt in units.items()}
@@ -420,8 +421,18 @@ def _send_fleet_blockade(session, origin_id, target_id, island_id, units):
     for uid, cnt in units_api.items():
         params[f"cargo_fleet_{uid}"] = cnt
 
-    logger.info("[attack] %s %s → %s: %d unidade(s) naval(is)",
-                function, origin_id, target_id, sum(units_api.values()))
+    # Diagnostic (blockade "no warship" rejections): show which ship ids we are sending and
+    # whether the form actually offers them. A requested id absent from the form means its
+    # mandatory upkeep field is missing and the server ignores those ships → 0 warships.
+    requested = {uid: cnt for uid, cnt in units_api.items() if cnt > 0}
+    missing = sorted(uid for uid in requested if uid not in upkeep_map)
+    logger.info("[attack] %s %s → %s: %d unidade(s) naval(is) | pedidos=%s | form=%s | "
+                "pedidos AUSENTES do form=%s",
+                function, origin_id, target_id, sum(units_api.values()),
+                requested, sorted(upkeep_map.keys()), missing or "nenhum")
+    if missing:
+        logger.warning("[attack] bloqueio: ship id(s) %s não existem no formulário — "
+                       "serão ignorados pelo servidor (prov. mismatch de id vista↔missão)", missing)
     try:
         resp = session.post(params=params)
         return _parse_attack_feedback(resp, function, ikabot_config)
