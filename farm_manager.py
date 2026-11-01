@@ -137,6 +137,60 @@ def _enabled_targets():
         return []
 
 
+# Ghost-target cleanup: a drained safe target is disabled + ignored for the re-evaluation window
+# (ignoreExpiryDays, 60). Once that window passes the target's fate is decided by the world scan —
+# still a listed inactive target → it reappears in the Mundo view for the user to re-add; gone from
+# the scan (the game deletes an account after long inactivity, or the owner reactivated) → the
+# disabled farm_targets row is dead weight. Prune those dead rows. SAFE against partial/stale
+# scans: a target is judged "gone" ONLY on an island the scan actually covered, and only after its
+# last real activity is older than the window — never on a just-drained row or an un-scanned island.
+_GHOST_CLEANUP_EVERY_SECS = 24 * 3600
+_last_ghost_cleanup = 0
+
+
+def cleanup_ghost_targets():
+    """Remove disabled farm targets whose owner's city has vanished from the world scan. Reads
+    only local state (no HTTP), and runs at most once per day."""
+    global _last_ghost_cleanup
+    now = int(time.time())
+    if now - _last_ghost_cleanup < _GHOST_CLEANUP_EVERY_SECS:
+        return
+    _last_ghost_cleanup = now
+    try:
+        from db_manager import farm_list, farm_remove
+        targets = farm_list()
+    except Exception:
+        logger.error("[farm] leitura de alvos para limpeza falhou", exc_info=True)
+        return
+    try:
+        with open(os.path.join(LOGS_DIR, "world_scan.json")) as f:
+            scan = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+    scanned_islands = {str(i.get("islandId", "")) for i in scan.get("islands", [])}
+    if not scanned_islands:
+        return   # no island coverage → nothing can be judged "gone"
+    scan_city_ids = {str(p.get("cityId", "")) for p in scan.get("players", [])}
+    try:
+        from espionage_manager import _DEFAULT_IGNORE_EXPIRY_DAYS as _expiry_days
+    except Exception:
+        _expiry_days = 60
+    window = _expiry_days * 86400
+    for t in targets:
+        if int(t.get("enabled", 0) or 0):
+            continue                                         # only disabled (drained/gone) rows
+        if str(t.get("island_id", "") or "") not in scanned_islands:
+            continue                                         # island not covered → cannot judge
+        if str(t.get("target_city_id", "") or "") in scan_city_ids:
+            continue                                         # still a listed inactive target → keep
+        last = max(int(t.get("last_attack_at", 0) or 0), int(t.get("last_spy_at", 0) or 0))
+        if not last or now - last < window:
+            continue                                         # never acted on, or still inside window
+        farm_remove(str(t.get("target_city_id", "")))
+        logger.info("[farm] %s: conta ausente do world scan há >%dd — alvo morto removido",
+                    t.get("target_city_name", t.get("target_city_id", "")), _expiry_days)
+
+
 def has_active_farm():
     return bool(_enabled_targets())
 
@@ -608,6 +662,7 @@ def process_farm_targets(session, in_active_hours=True):
     from empire_utils import is_paused
     if is_paused():
         return
+    cleanup_ghost_targets()   # prune dead rows (once/day); runs even with no enabled targets left
     targets = _enabled_targets()
     if not targets:
         return

@@ -782,6 +782,52 @@ def test_has_due_farm(monkeypatch, tmp_path):
     assert fm.has_due_farm() is False
 
 
+def test_cleanup_ghost_targets_prunes_only_dead_rows(monkeypatch, tmp_path):
+    """A disabled farm row whose city vanished from a COVERED island of the world scan, and whose
+    last activity predates the 60-day ignore window, is pruned. Enabled rows, rows still listed in
+    the scan, rows on un-scanned islands, and freshly-drained rows are all kept."""
+    _setup_db(tmp_path)
+    monkeypatch.setattr(fm, "LOGS_DIR", str(tmp_path))
+    fm._last_ghost_cleanup = 0
+    now = int(time.time())
+    old, fresh = now - 70 * 86400, now - 5 * 86400
+
+    def add(cid, island, enabled, last_attack):
+        db_manager.farm_add({"targetCityId": cid, "targetCityName": "C" + cid, "islandId": island,
+                             "islandX": 40, "islandY": 50, "minLoot": 30000})
+        db_manager.farm_update(cid, {"enabled": 1 if enabled else 0, "last_attack_at": last_attack})
+
+    add("1", "7", False, old)     # gone from scan, island covered, old → REMOVE
+    add("2", "7", False, old)     # still listed in scan players → KEEP
+    add("3", "9", False, old)     # island NOT covered by the scan → KEEP
+    add("4", "7", True,  old)     # enabled (active farm) → KEEP
+    add("5", "7", False, fresh)   # drained recently (inside the window) → KEEP
+
+    with open(tmp_path / "world_scan.json", "w") as f:
+        json.dump({"islands": [{"islandId": "7"}], "players": [{"cityId": "2"}]}, f)
+
+    fm.cleanup_ghost_targets()
+
+    remaining = {t["target_city_id"] for t in db_manager.farm_list()}
+    assert remaining == {"2", "3", "4", "5"}   # only the dead row (1) removed
+
+
+def test_cleanup_ghost_targets_skips_when_scan_has_no_islands(monkeypatch, tmp_path):
+    """No island coverage (empty/partial scan) → never judge anything 'gone', keep every row."""
+    _setup_db(tmp_path)
+    monkeypatch.setattr(fm, "LOGS_DIR", str(tmp_path))
+    fm._last_ghost_cleanup = 0
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "C1", "islandId": "7",
+                         "islandX": 40, "islandY": 50, "minLoot": 30000})
+    db_manager.farm_update("1", {"enabled": 0, "last_attack_at": int(time.time()) - 70 * 86400})
+    with open(tmp_path / "world_scan.json", "w") as f:
+        json.dump({"islands": [], "players": []}, f)
+
+    fm.cleanup_ghost_targets()
+
+    assert {t["target_city_id"] for t in db_manager.farm_list()} == {"1"}
+
+
 def test_reexecute_stationed_spy_resets_done(monkeypatch, tmp_path):
     import espionage_manager as em
     monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
