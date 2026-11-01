@@ -1506,17 +1506,27 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
     _ACTIVE = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
                "WAITING_FOR_GARRISON", "EXECUTING_GARRISON",
                "WAITING_FOR_MOVEMENTS", "EXECUTING_MOVEMENTS")
-    for i, m in enumerate(missions):
+
+    def _reusable(m):
         if str(m.get("targetCityId", "")) != str(target_city_id):
-            continue
+            return False
         if not m.get("originCityId"):   # synthetic/imported — no real spy stationed
-            continue
+            return False
         origin_id = str(m.get("originCityId"))
-        if not (m.get("safehousePosition") or _get_city_safehouse_position(origin_id)):
+        return bool(m.get("safehousePosition") or _get_city_safehouse_position(origin_id))
+
+    # First pass: if ANY mission for this target is still in flight, a stationed spy is
+    # already busy — re-arming a second (DONE/FAILED) mission object for the same target
+    # would run a concurrent executeMission on that one spy, which the game rejects
+    # (type=11, seen live on Jardim De Cima). So wait for the active one to finish.
+    for m in missions:
+        if _reusable(m) and m.get("state") in _ACTIVE:
+            return True
+    # Second pass: no active op — re-arm a parked mission's stationed spy.
+    for i, m in enumerate(missions):
+        if not _reusable(m):
             continue
         st = m.get("state")
-        if st in _ACTIVE:
-            return True   # a spy op is already running for this target — don't dispatch
         # DONE = spy parked after a clean run. FAILED = a run was abandoned, but the spy
         # may still be sitting in the safehouse (a transient executeMission rejection, or
         # a report that never arrived — NOT the same as "detected/gone"). In both cases we

@@ -507,6 +507,21 @@ def test_reexecute_skips_imported_mission_without_origin(monkeypatch):
     assert h["missions"][0]["state"] == "FAILED"
 
 
+def test_reexecute_waits_when_another_mission_for_target_is_active(monkeypatch):
+    """A target can carry several mission objects on one stationed spy. If ANY of them is
+    still in flight, re-arming a different DONE/FAILED one would run a concurrent
+    executeMission on the one spy, which the game rejects (type=11, seen live on Jardim De
+    Cima). The parked mission that appears FIRST in the list must NOT be re-armed while a
+    later mission for the same target is still active — reexecute returns True and waits."""
+    parked = _mission(state="DONE", targetCityId="100", missionType="warehouse")
+    active = _mission(state="EXECUTING_GARRISON", targetCityId="100")
+    h = _patch(monkeypatch, [parked, active])          # parked comes first in the list
+    assert em.reexecute_stationed_spy("100", need_movements=True) is True
+    # The parked mission is left untouched — nothing was re-armed.
+    assert h["missions"][0]["state"] == "DONE"
+    assert h["missions"][1]["state"] == "EXECUTING_GARRISON"
+
+
 # ── Mission retention: _save_missions prunes old terminal history ───────────────
 
 def test_save_prunes_old_terminal_missions(monkeypatch, tmp_path):
