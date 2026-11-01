@@ -521,25 +521,25 @@ def test_safe_target_attacks_directly(monkeypatch, tmp_path):
     assert t["total_raids"] == 1
 
 
-def test_safe_periodic_respy_is_full_garrison(monkeypatch, tmp_path):
-    """When raids_since_spy reaches respy_every, a safe target's periodic re-scout takes the
-    FULL garrison (needGarrison=True): "inactive" describes only the owner, not the port, so a
-    fleet that appeared (owner reactivated, built ships, went inactive again) must be caught on
-    this scheduled scout before a troops-only raid bounces off it. Still re-confirms inactivity."""
+def test_safe_target_ignores_raid_count_cadence(monkeypatch, tmp_path):
+    """The raid-count re-spy cadence was removed for safe targets: even with raids_since_spy well
+    past respy_every, an inactive no-fleet target raids DIRECTLY (no scout). An inactive owner
+    never regenerates loot nor grows a fleet, and a reactivation is caught by the pre-attack live
+    inactivity check — so there is nothing to re-scout between raids."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": 1000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 9, "last_spy_at": 1000,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
-    assert [q for q, _ in added] == ["spy_dispatch"]
-    assert added[0][1]["needGarrison"] is True            # cadence scout re-checks the port
-    assert db_manager.farm_get("100")["state"] == "SPYING"
+    assert [q for q, _ in added] == ["attack"]            # direct raid despite cadence "due"
+    assert added[0][1]["missionType"] == "army"
+    assert db_manager.farm_get("100")["state"] == "ATTACKING"
 
 
 def test_uncertain_inactivity_forces_full_scout(monkeypatch, tmp_path):
@@ -625,17 +625,17 @@ def test_no_free_troops_reschedules_not_doomed_attack(monkeypatch, tmp_path):
     assert t["state"] == "IDLE" and t["next_run_at"] > now   # rescheduled for a retry
 
 
-def test_early_respy_full_garrison_for_safe_target(monkeypatch, tmp_path):
-    """The pipelined re-scout fired while troops return takes the full garrison: it only fires
-    when the re-spy cadence is due (raids_since_spy >= respy_every), which is exactly the scout
-    that now re-checks the port, so a newly-docked fleet is caught before the next raid."""
+def test_early_respy_full_garrison_for_fleet_target(monkeypatch, tmp_path):
+    """The pipelined re-scout fired while troops return now only applies to FLEET targets (the
+    one re-spy trigger that survives for a confirmed-inactive target). It takes the full garrison
+    so the flee-and-return fleet is caught before the next raid. Safe targets never early-respy."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     now = int(time.time())
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 60,
                                    "respy_launched_at": 0, "raids_since_spy": 3, "last_spy_at": 1000,
-                                   "last_enemy_ships": 0, "is_fleet_target": 0})
+                                   "last_enemy_ships": 0, "is_fleet_target": 1})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
@@ -746,23 +746,24 @@ def test_reactivated_target_is_disabled(monkeypatch, tmp_path):
     assert len(alerted) == 1
 
 
-def test_return_triggers_respy_when_due(monkeypatch, tmp_path):
-    """After return, re-spy when raids_since_spy reached respy_every; else attack directly."""
+def test_return_next_action_spy_only_for_fleet_not_cadence(monkeypatch, tmp_path):
+    """After a return, a safe target's next_action is always 'attack' (the raid-count cadence was
+    removed — it bombs until drained). Only a fleet target forces next_action 'spy'."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "respyEvery": 3})
     _common_patches(monkeypatch, tmp_path)
 
-    # rss below threshold → next_action 'attack'
+    # safe target, cadence "due" (rss=3) → still 'attack', no longer a scout round
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": 1,
-                                   "raids_since_spy": 1, "last_enemy_ships": 0})
+                                   "raids_since_spy": 3, "last_enemy_ships": 0, "is_fleet_target": 0})
     fm.process_farm_targets(session=object(), in_active_hours=True)
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE" and t["next_action"] == "attack"
     assert t["next_run_at"] > int(time.time())
 
-    # rss at threshold → next_action 'spy'
+    # fleet target → next_action 'spy' (must re-scout the flee-and-return port)
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": 1,
-                                   "raids_since_spy": 3, "last_enemy_ships": 0})
+                                   "raids_since_spy": 1, "last_enemy_ships": 0, "is_fleet_target": 1})
     fm.process_farm_targets(session=object(), in_active_hours=True)
     assert db_manager.farm_get("100")["next_action"] == "spy"
 

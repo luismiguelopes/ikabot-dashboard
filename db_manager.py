@@ -917,7 +917,7 @@ def save_mark(mark_key, player_id, island_x, island_y, status, note,
 
 
 def escalate_ignore(mark_key, player_id, island_x, island_y, note,
-                    expiry_days=30, permanent_after=4):
+                    expiry_days=60, permanent_after=4):
     """Ignore a city/island with strike escalation. Each call bumps ignore_count; while it is
     below permanent_after the ignore is temporary (expires_at = now + expiry_days, so the
     target reappears for re-evaluation), and once it reaches permanent_after it becomes

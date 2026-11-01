@@ -26,9 +26,11 @@ def _targets(monkeypatch, targets):
 
 # ── _next_round_needs_spy ──────────────────────────────────────────────────────
 
-def test_needs_spy_when_cadence_due():
-    assert fm._next_round_needs_spy({"raids_since_spy": 3, "respy_every": 3}) is True
-    assert fm._next_round_needs_spy({"raids_since_spy": 4, "respy_every": 3}) is True
+def test_cadence_does_not_trigger_spy_for_safe_target():
+    # Raid-count cadence was removed for safe targets: an inactive owner never regenerates loot
+    # nor grows a fleet, so there is nothing to re-scout between raids — bomb until drained.
+    assert fm._next_round_needs_spy({"raids_since_spy": 3, "respy_every": 3}) is False
+    assert fm._next_round_needs_spy({"raids_since_spy": 9, "respy_every": 3}) is False
 
 
 def test_no_spy_between_cadence():
@@ -69,7 +71,7 @@ def test_attacking_due_in_early_respy_window(monkeypatch, tmp_path):
     _targets(monkeypatch, [{
         "enabled": True, "state": "ATTACKING", "attack_return_at": ra,
         "respy_launched_at": 0, "raids_since_spy": 3, "respy_every": 3,
-        "target_city_id": "1",
+        "is_fleet_target": 1, "target_city_id": "1",
     }])
     assert fm.has_due_farm() is True
 
@@ -81,7 +83,7 @@ def test_attacking_not_due_before_window(monkeypatch, tmp_path):
     _targets(monkeypatch, [{
         "enabled": True, "state": "ATTACKING", "attack_return_at": ra,
         "respy_launched_at": 0, "raids_since_spy": 3, "respy_every": 3,
-        "target_city_id": "1",
+        "is_fleet_target": 1, "target_city_id": "1",
     }])
     assert fm.has_due_farm() is False
 
@@ -105,7 +107,7 @@ def test_attacking_kill_switch_disables_early_window(monkeypatch, tmp_path):
     _targets(monkeypatch, [{
         "enabled": True, "state": "ATTACKING", "attack_return_at": ra,
         "respy_launched_at": 0, "raids_since_spy": 3, "respy_every": 3,
-        "target_city_id": "1",
+        "is_fleet_target": 1, "target_city_id": "1",
     }])
     assert fm.has_due_farm() is False
 
@@ -117,7 +119,7 @@ def test_next_farm_eta_pulls_in_for_early_respy(monkeypatch, tmp_path):
     _targets(monkeypatch, [{
         "enabled": True, "state": "ATTACKING", "attack_return_at": ra,
         "respy_launched_at": 0, "raids_since_spy": 3, "respy_every": 3,
-        "target_city_id": "1",
+        "is_fleet_target": 1, "target_city_id": "1",
     }])
     eta = fm.next_farm_eta()
     # wakes ~_EARLY_RESPY_LEAD before the return, not at the return itself
@@ -131,6 +133,6 @@ def test_next_farm_eta_uses_return_once_respy_launched(monkeypatch, tmp_path):
     _targets(monkeypatch, [{
         "enabled": True, "state": "ATTACKING", "attack_return_at": ra,
         "respy_launched_at": now - 60, "raids_since_spy": 3, "respy_every": 3,
-        "target_city_id": "1",
+        "is_fleet_target": 1, "target_city_id": "1",
     }])
     assert fm.next_farm_eta() == ra   # already launched → wake at the dock time

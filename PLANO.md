@@ -531,3 +531,66 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
 
 ### D — Validação in-game *(ver dívidas acima — a mesma lista)*
 - [ ] Deploy para cidade própria; sessão supervisionada de ponta a ponta do farm.
+
+### E — Farm: afinação de re-scout e intel de frota *(discussão em curso 2026-11-01)*
+
+Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizador:
+- **`loop`** (F13) → martela até secar, depois **desliga** o alvo. **Mantém-se como está.**
+- **`farm` hoje** → ataca direto entre scouts; re-espia a cada **3 raids** (`respy_every`).
+- **`farm` proposto** → ataca direto; re-espia por **tempo** + quando a estimativa seca.
+
+- [ ] **P11.7 Tirar a re-espionagem periódica por nº de raids nos alvos seguros** (o "Caso 1").
+  - **Regra do jogo (confirmada 2026-11-01, ver [[reference-ikariam-inactive-no-fleet]])**: um
+    inactivo **não produz recursos** → um alvo seguro drenado **NÃO regenera**. Só volta a ter
+    loot se o dono reactivar e depois voltar a ficar inactivo. (A ideia anterior de "re-scout por
+    tempo/24h para apanhar regen" era falsa — descartada.)
+  - **Onde**: `farm_manager.py:112` (`_next_round_needs_spy`), `:121` (`respy_every`), `:882`
+    (IDLE), `:1062-1067` (drenado → desliga + `_auto_mark_ignored`).
+  - **Hoje**: alvo seguro (`is_fleet_target=0`) ataca direto entre scouts e dimensiona a vaga a
+    `_estimated_warehouse`; trava e re-espia quando a estimativa OU o último regresso real cai
+    abaixo de `min_loot`; nessa re-espia, se confirmar < mínimo, **desliga + ignora** (ignore
+    re-avalia aos 30 dias, `espionage_manager.py:60`). **MAS** re-espia também a cada
+    `respy_every=3` raids — desperdício, porque o armazém só desce (nós + co-pilhadores), nunca
+    sobe; a estimativa nunca fica optimista por regen.
+  - **Proposta**: remover o termo `raids_since_spy >= respy_every` de `_next_round_needs_spy`
+    **para alvos seguros** (os termos de frota — `last_enemy_ships>0`, `is_fleet_target==1` —
+    ficam). Resultado: espia 1× no início + 1× para confirmar o fim; zero no meio. Segurança
+    intacta: `_confirm_inactive` (vista de ilha) corre antes de cada vaga → reactivação desliga o
+    alvo; co-pilhador é apanhado pelo primeiro regresso real pequeno. `loop` inalterado.
+  - **Opcional (belt-and-suspenders)**: guard de frescura — se `last_spy_at` > X horas (p.ex. após
+    downtime do bot), re-espiar antes de atacar, para evitar perder 1 vaga a um co-pilhador que
+    tenha mexido no alvo enquanto estávamos offline. Cobre o caso "desliguei o jogo e passaram
+    horas". Não é segurança, é poupar 1 vaga.
+  - **Ciclo de vida do alvo drenado (confirmado 2026-11-01 — JÁ IMPLEMENTADO na camada Mundo)**:
+    regra do jogo — uma conta inactiva durante muito tempo é **apagada** pelo jogo. Comportamento
+    desejado = drenado fica ignorado 30-60d → expira → reaparece no Mundo **se** ainda estiver no
+    world scan, senão desaparece. Isto já existe: `_auto_mark_ignored` põe `expires_at = now +
+    ignoreExpiryDays` (default 30, `app.py:78`); `app.py:539` levanta o ignore quando expira (volta
+    a "novo"); a vista do Mundo é guiada pelo scan, logo conta apagada (ausente do scan) não
+    aparece. **Decisões/gaps**: (a) subir o default de `ignoreExpiryDays` 30 → **60**? (só setting);
+    (b) **limpeza-fantasma (NOVO)** — a linha `farm_targets` drenada fica `enabled=0` para sempre
+    (o `farm_remove` só é chamado pela UI, `app.py:1415`); acrescentar: linha desligada cuja cidade
+    está ausente do world scan → `farm_remove` (apaga o alvo morto); (c) reaparecer no Mundo ≠
+    re-farmar automático — o utilizador re-adiciona (comportamento actual, provavelmente desejado).
+
+- [ ] **P11.8 Distinguir fleet-target verdadeiro de falso positivo via sinal de combate** (os
+      "Casos 2/3"). *Eficiência, NÃO segurança — não urgente.*
+  - **Achado**: `is_fleet_target` é **write-once** — posto a 1 (bounce sem saque `:1217`; frota
+    vista `:788`; combate acima do máximo `:1080`) e **nunca** limpo a 0, apesar do comentário em
+    `:874-881` prometer que "um full scout põe a 0" (nunca foi implementado).
+  - **Pela regra do utilizador** (os navios do jogador são permanentes: dispersam e voltam, nunca
+    morrem), um fleet-target verdadeiro **deve** ficar `=1` para sempre — limpar com base num scout
+    limpo seria errado (a frota só está dispersa). Correcto por desenho.
+  - **Problema residual**: o setter `:1217` marca `=1` sempre que um regresso não traz saque
+    **registado** — o que também dispara em falsos positivos (regresso não logado, match de nome
+    falhado, `get_loot_log` a rebentar, ou armazém mesmo vazio). Esses alvos pagam a cadeia de 3
+    espionagens para sempre à toa. Evidência (01/11): Lançassolar/Braavos/Jardim/Valíria todos
+    ~208k, marcados; Lançassolar com ricochete naval **confirmado in-game** (29/10).
+  - **Proposta**: acrescentar um parser do resultado de combate real (a mensagem "perderiam num
+    combate marítimo") a partir dos movimentos (`empire_collector._collect_movements`, endpoint
+    `militaryAdvisor`). Usar **só para acrescentar confiança**: um "não-naval confirmado" pode
+    *despromover* uma flag posta apenas pelo heurístico; um "naval confirmado" *tranca* `=1`.
+    **Nunca** substitui o heurístico "sem saque → marca frota" (a rede de segurança, que peca por
+    excesso e nunca desprotege).
+  - **Pré-requisito**: confirmar que o `militaryAdvisor` expõe o resultado do combate no schema
+    dos movimentos antes de prometer a abordagem.

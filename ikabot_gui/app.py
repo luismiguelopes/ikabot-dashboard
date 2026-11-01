@@ -75,7 +75,7 @@ _DEFAULT_ESPIONAGE_SETTINGS = {
     "garrisonThresholdTotal": 50000,
     "minLootTotal": 50000,
     "processingEnabled": True,
-    "ignoreExpiryDays": 30,        # a temporary ignore lifts after this long for re-evaluation
+    "ignoreExpiryDays": 60,        # a temporary ignore lifts after this long for re-evaluation
     "ignorePermanentAfter": 4,     # strikes before an ignore becomes permanent
 }
 
@@ -593,7 +593,7 @@ def api_world_scan_mark():
                     pass
                 res = _db.escalate_ignore(
                     mark_key, player_id, island_x, island_y, note or "Ignorado manualmente",
-                    int(esp.get("ignoreExpiryDays", 30)),
+                    int(esp.get("ignoreExpiryDays", 60)),
                     int(esp.get("ignorePermanentAfter", 4)),
                 )
                 return jsonify({"ok": True, **res})
@@ -624,7 +624,7 @@ def api_world_scan_mark():
         count = int(existing.get("ignoreCount", 0)) + 1
         permanent = count >= max(1, int(esp.get("ignorePermanentAfter", 4)))
         entry["ignoreCount"] = count
-        entry["expiresAt"] = None if permanent else now + max(1, int(esp.get("ignoreExpiryDays", 30))) * 86400
+        entry["expiresAt"] = None if permanent else now + max(1, int(esp.get("ignoreExpiryDays", 60))) * 86400
     else:
         entry["ignoreCount"] = 0
         entry["expiresAt"] = None

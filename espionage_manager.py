@@ -57,7 +57,7 @@ def _check_garrison_threshold(resources, settings):
 
 
 _DEFAULT_MIN_LOOT_TOTAL = 50000
-_DEFAULT_IGNORE_EXPIRY_DAYS = 30   # a temporary ignore lifts after this long for re-evaluation
+_DEFAULT_IGNORE_EXPIRY_DAYS = 60   # a temporary ignore lifts after this long for re-evaluation
 _DEFAULT_IGNORE_PERMANENT_AFTER = 4  # strikes before an ignore becomes permanent
 
 

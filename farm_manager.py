@@ -118,9 +118,13 @@ def _next_round_needs_spy(t):
     if str(t.get("mode", "farm")) == "loop":
         return (int(t.get("last_enemy_ships", 0)) > 0
                 or int(t.get("is_fleet_target", 0)) == 1)
-    respy_every = max(1, int(t.get("respy_every", 3)))
-    return (int(t.get("raids_since_spy", 0)) >= respy_every
-            or int(t.get("last_enemy_ships", 0)) > 0
+    # Safe targets (inactive, no fleet) are NEVER re-spied on a raid-count cadence. An inactive
+    # owner neither produces resources — the warehouse only shrinks as we raid, never refills, so
+    # our running estimate can't drift optimistically (co-plunderers show up as a small real
+    # return, caught by the drainage test) — nor can gain a fleet/army (game rule). A reactivation
+    # is caught by the pre-attack live inactivity check (_confirm_inactive) before any raid. So the
+    # only re-spy triggers that remain are a present/known fleet. (respy_every is now unused here.)
+    return (int(t.get("last_enemy_ships", 0)) > 0
             or int(t.get("is_fleet_target", 0)) == 1)
 
 
@@ -847,17 +851,13 @@ def process_farm_targets(session, in_active_hours=True):
             return "garrison"
         if confirmed is not True:
             return "garrison"
-        # Periodic cadence re-scout (every respy_every rounds): take the FULL garrison, not just
-        # the warehouse. "Inactive" only describes the OWNER, never the port — a player who
-        # reactivated, built a fleet, and went inactive again still has those ships, while
-        # is_fleet_target stays stale at 0 and the live inactivity check still reads "inactive".
-        # Warehouse-only re-scouts never see that fleet, so troops-only raids bounce off it and
-        # we only learn after wasting a round-trip (seen live: Martelo 31/10). Re-checking the
-        # garrison on the scheduled scout catches the new fleet here → flags is_fleet_target=1 →
-        # blockade/skip, before the bounce. Between cadence scouts, warehouse-only still stands.
-        respy_every = max(1, int(t.get("respy_every", 3)))
-        if int(t.get("raids_since_spy", 0)) >= respy_every:
-            return "garrison"
+        # Confirmed still inactive → a warehouse-only re-scout (loot + drainage check) is enough.
+        # No periodic garrison re-scout on a safe target: an inactive owner cannot gain a fleet or
+        # army (game rule, see the module comment above), and to build one it must go ACTIVE first
+        # — which the pre-attack live inactivity check (_confirm_inactive) catches and disables the
+        # target before any raid. So there is never a hidden fleet to look for here. (The real
+        # Martelo 31/10 bounce was a known fleet-target's flee-and-return fleet, not a safe target
+        # growing one — handled by is_fleet_target + the movements scout, not by this cadence.)
         return "warehouse"
 
     # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
@@ -1291,10 +1291,9 @@ def process_farm_targets(session, in_active_hours=True):
                                 name, delay, "spy" if need_spy else "attack")
                     continue
 
-                respy_every = max(1, int(t.get("respy_every", 3)))
-                rss = int(t.get("raids_since_spy", 0))
-                # Re-spy if it's time, or if the target ever showed a fleet (needs fresh intel)
-                next_action = "spy" if (rss >= respy_every or int(t.get("last_enemy_ships", 0)) > 0) else "attack"
+                # Safe targets keep bombing until drained (no raid-count cadence); only a
+                # present/known fleet forces a re-spy next round. Mirror the real gate.
+                next_action = "spy" if _next_round_needs_spy(t) else "attack"
                 delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
                 farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
                                   "next_action": next_action})
