@@ -304,7 +304,14 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (p.state !== 'inactive') continue
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
       const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
-      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) continue
+      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) {
+        // Ignored (e.g. auto-ignored after the farm drained it): keep it out of the active list
+        // AND mark its city seen, so the farm-target synthesis below can't re-add it — a drained
+        // target belongs only in the Ignoradas tab, not here. (A paused-but-not-ignored target is
+        // not caught here, so it still shows with its resume button.)
+        if (p.cityId) seenCityIds.add(String(p.cityId))
+        continue
+      }
       if (p.cityId) seenCityIds.add(String(p.cityId))
       enriched.push(enrichOne(p))
     }
