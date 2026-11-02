@@ -49,6 +49,22 @@ _MAX_SCOUT_FAILS = 3               # consecutive garrison scouts without fleet i
                                    # fleet target before the farm skips the round outright
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
                                   # ready on arrival (re-spy rounds skip the post-return wait)
+# ── P11.9 Parallel farming ──────────────────────────────────────────────────────
+# A small raid sizes its ships to the loot (transporters = ceil(loot/500)), so it leaves many
+# trade ships idle. Instead of letting them sit for hours until the single working slot frees,
+# the farm may run a SECOND target in parallel. Guard rails (user 2026-11-02):
+#   • at most _MAX_CONCURRENT_FARM targets ATTACKING at once (ships committed);
+#   • the 2nd slot only opens when there are ≥ _PARALLEL_SHIP_FLOOR free trade ships, so a raid
+#     never steals the ships a parallel one still needs;
+#   • Case-1 (safe) targets keep priority — the slot is offered by loot/hour, fleet last;
+#   • ≤ _MAX_LAUNCHES_PER_CYCLE new game dispatch per cycle: parallel raids open on CONSECUTIVE
+#     wakes, never in one burst (anti-detection — a human doesn't fire two attacks the same ms).
+# SPYING is NOT a slot: spies use the safehouse, not ships, so a scout never blocks a raid —
+# that is why #1 (spying) must step aside for a ready target below it.
+_MAX_CONCURRENT_FARM = 2
+_PARALLEL_SHIP_FLOOR = 50
+_PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor just blocked
+_MAX_LAUNCHES_PER_CYCLE = 1
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
 
@@ -606,54 +622,104 @@ def _queue_head(targets):
                                     -int(t.get("created_at", 0) or 0)))
 
 
+def _attack_slots_free(targets):
+    """P11.9: how many more targets may enter ATTACKING right now, by the concurrency cap
+    alone (the ship floor is checked at launch time, not here — the scheduler must not do an
+    HTTP getAvailableShips on every poll)."""
+    attacking = sum(1 for t in targets if t.get("state") == "ATTACKING")
+    return max(0, _MAX_CONCURRENT_FARM - attacking)
+
+
+def _idle_needs_attack_slot(t):
+    """P11.9: whether a due IDLE target's next move is a direct RAID (consumes an attack slot)
+    rather than a scout (spies, no slot). Mirrors the body's branching so the scheduler only
+    withholds a wake for a would-be raid when both slots are busy — a scout still wakes. First
+    contact, fleet targets and a re-spy round all scout; a confirmed-safe target raids directly."""
+    if int(t.get("last_spy_at", 0)) == 0:          # first contact → full scout
+        return False
+    if int(t.get("is_fleet_target", 0)) == 1:      # fleet target → always re-scout first
+        return False
+    if _next_round_needs_spy(t):                   # re-spy round due → scout
+        return False
+    return True                                    # safe target → direct raid (needs a slot)
+
+
+def _farm_working_set(targets, now):
+    """P11.9: the targets to advance this cycle, replacing the single queue head. SPYING and
+    ATTACKING targets are ALWAYS advanced — a scout (safehouse, no ships) must never block a
+    raid, and an in-flight raid must be checked for its return. The due IDLE targets are then
+    offered by priority (loop first, then loot/hour, then last_loot) so a free attack slot opens
+    on the next-best target instead of idling behind a committed head. Launch gating (cap, ship
+    floor, per-cycle burst) happens in the body, not here."""
+    active = [t for t in targets if t.get("state", "IDLE") != "IDLE"]
+    idle_due = [t for t in targets if t.get("state", "IDLE") == "IDLE"
+                and now >= int(t.get("next_run_at", 0) or 0)]
+    idle_due.sort(key=lambda t: (1 if str(t.get("mode", "farm")) == "loop" else 0,
+                                 _priority_score(t), int(t.get("last_loot", 0) or 0),
+                                 -int(t.get("created_at", 0) or 0)),
+                  reverse=True)
+    return active + idle_due
+
+
 def has_due_farm():
-    """Precise due-check for smart_sleep — True only when the queue head will actually act."""
-    head = _queue_head(_enabled_targets())
-    if not head:
+    """Precise due-check for smart_sleep — True when ANY target the working set would advance is
+    actually ready to act (P11.9: no longer just the single head). A due IDLE target only counts
+    when an attack slot is free, so both slots busy → the farm sleeps on returns/reports."""
+    targets = _enabled_targets()
+    if not targets:
         return False
     now = int(time.time())
-    st = head.get("state", "IDLE")
-    if st == "IDLE":
-        return now >= int(head.get("next_run_at", 0))
-    if st == "ATTACKING":
-        ra = int(head.get("attack_return_at", 0))
-        if now >= ra:
-            return True
-        return (early_respy_enabled() and int(head.get("respy_launched_at", 0)) == 0
-                and _next_round_needs_spy(head) and now >= ra - _EARLY_RESPY_LEAD)
-    if st == "SPYING":
-        from espionage_manager import _load_missions
-        return _spy_report_ready(_load_missions().get("missions", []), head, now)
+    slot_free = _attack_slots_free(targets) > 0
+    missions = None
+    for t in targets:
+        st = t.get("state", "IDLE")
+        if st == "ATTACKING":
+            ra = int(t.get("attack_return_at", 0))
+            if now >= ra:
+                return True
+            if (early_respy_enabled() and int(t.get("respy_launched_at", 0)) == 0
+                    and _next_round_needs_spy(t) and now >= ra - _EARLY_RESPY_LEAD):
+                return True
+        elif st == "SPYING":
+            if missions is None:
+                from espionage_manager import _load_missions
+                missions = _load_missions().get("missions", [])
+            if _spy_report_ready(missions, t, now):
+                return True
+        elif now >= int(t.get("next_run_at", 0)):   # IDLE and due
+            # A would-be raid only counts when an attack slot is free; a scout always wakes.
+            if slot_free or not _idle_needs_attack_slot(t):
+                return True
     return False
 
 
 def next_farm_eta():
-    """Soonest wake time for the queue head (IDLE next run / ATTACKING return / SPYING
-    backstop), or None. A live spy's own ETA is already scheduled via spy_eta; the SPYING
-    value here is the backstop that guarantees a stuck head (dead mission) is re-evaluated
-    at the grace deadline, then the timeout — instead of relying on the opportunistic poll."""
-    head = _queue_head(_enabled_targets())
-    if not head:
+    """Soonest wake time across the working set (P11.9: every target, not just the head) —
+    IDLE next run (only while an attack slot is free), ATTACKING return / early-respy, SPYING
+    stuck-backstop. A live spy's report wake is driven by spy_eta elsewhere; the SPYING value
+    here is the backstop that re-evaluates a dead mission at its grace/timeout deadline."""
+    targets = _enabled_targets()
+    if not targets:
         return None
     now = int(time.time())
-    st = head.get("state", "IDLE")
-    if st == "SPYING":
-        disp = int(head.get("spy_dispatched_at", 0))
-        grace = disp + _SPY_STUCK_GRACE
-        return max(now, grace if now < grace else disp + _SPY_TIMEOUT_SECS)
-    if st == "IDLE":
-        # Soonest next_run over ALL idle targets — with due-preference in _queue_head,
-        # whichever becomes due first will be the head at that moment.
-        runs = [int(t.get("next_run_at", 0) or 0) for t in _enabled_targets()
-                if t.get("state", "IDLE") == "IDLE"]
-        return max(min(runs) if runs else int(head.get("next_run_at", 0)), now)
-    if st == "ATTACKING":
-        ra = int(head.get("attack_return_at", 0))
-        if (early_respy_enabled() and int(head.get("respy_launched_at", 0)) == 0
-                and _next_round_needs_spy(head)):
-            return max(ra - _EARLY_RESPY_LEAD, now)
-        return max(ra, now)
-    return None
+    slot_free = _attack_slots_free(targets) > 0
+    etas = []
+    for t in targets:
+        st = t.get("state", "IDLE")
+        if st == "SPYING":
+            disp = int(t.get("spy_dispatched_at", 0))
+            grace = disp + _SPY_STUCK_GRACE
+            etas.append(max(now, grace if now < grace else disp + _SPY_TIMEOUT_SECS))
+        elif st == "ATTACKING":
+            ra = int(t.get("attack_return_at", 0))
+            if (early_respy_enabled() and int(t.get("respy_launched_at", 0)) == 0
+                    and _next_round_needs_spy(t)):
+                etas.append(max(ra - _EARLY_RESPY_LEAD, now))
+            else:
+                etas.append(max(ra, now))
+        elif slot_free or not _idle_needs_attack_slot(t):   # IDLE: scouts always, raids only
+            etas.append(max(int(t.get("next_run_at", 0) or 0), now))   # when a slot is free
+    return min(etas) if etas else None
 
 
 def process_farm_targets(session, in_active_hours=True):
@@ -915,10 +981,62 @@ def process_farm_targets(session, in_active_hours=True):
         # growing one — handled by is_fleet_target + the movements scout, not by this cadence.)
         return "warehouse"
 
-    # Pure queue: work ONLY the head target (the active one, else the best loot/hour).
-    # Iterating over a 1-item list keeps the existing `continue`-based body intact.
-    head = _queue_head(targets)
-    for t in ([head] if head else []):
+    # P11.9 parallel-farming budget (shared across the working-set loop below).
+    #  • _attacking counts raids in flight — the launch gate caps it at _MAX_CONCURRENT_FARM and
+    #    requires the ship floor before opening the 2nd slot. It is bumped as we launch this cycle.
+    #  • _launch_budget caps NEW game dispatches (attack enqueue OR spy launch) to one per cycle,
+    #    so a 2nd parallel raid opens on the NEXT wake, never in the same burst (anti-detection).
+    #  • _free_ships is read at most once per cycle (an HTTP getAvailableShips), lazily.
+    _state = {"attacking": sum(1 for x in targets if x.get("state") == "ATTACKING"),
+              "budget": _MAX_LAUNCHES_PER_CYCLE, "free_ships": None}
+
+    def _free_ships_once():
+        if _state["free_ships"] is None:
+            _state["free_ships"] = _free_ships(session)
+        return _state["free_ships"]
+
+    def _can_dispatch():
+        """A new game dispatch (scout OR raid) is allowed this cycle — the one-per-cycle cap
+        spaces every launch, so parallel raids open on consecutive wakes, never in one burst."""
+        return _state["budget"] > 0
+
+    def _can_launch_attack():
+        """True if a NEW raid may be enqueued now: a dispatch is left this cycle, the concurrency
+        cap is not reached, and (for a parallel 2nd+ slot) the ship floor is met."""
+        if not _can_dispatch():
+            return False
+        if _state["attacking"] >= _MAX_CONCURRENT_FARM:
+            return False
+        if _state["attacking"] >= 1 and _free_ships_once() < _PARALLEL_SHIP_FLOOR:
+            return False
+        return True
+
+    def _spent_dispatch():
+        _state["budget"] -= 1
+
+    def _spent_attack():
+        _state["attacking"] += 1
+        _spent_dispatch()
+
+    def _defer_parallel(t, **extra):
+        """A launch was blocked only by the parallel budget (slot busy, ship floor, or the
+        per-cycle dispatch cap) — not by intel. Hold the target a few minutes and keep its
+        report/loot (pass last_loot/last_enemy_ships via extra) so it retries directly, without
+        re-scouting. The backoff also stops the scheduler busy-waking on it while the ship floor
+        is unmet (P0.1 loop guard)."""
+        fields = {"state": "IDLE", "next_run_at": now + _PARALLEL_RETRY_BACKOFF,
+                  "next_action": "attack"}
+        fields.update(extra)
+        farm_update(t["target_city_id"], fields)
+        logger.info("[farm] %s: despacho adiado (slot/barcos/orçamento do ciclo) — "
+                    "nova tentativa em %dmin",
+                    t.get("target_city_name", t["target_city_id"]),
+                    _PARALLEL_RETRY_BACKOFF // 60)
+
+    # Working set (P11.9): advance committed targets (spying/attacking) AND offer the free attack
+    # slot to the best due IDLE target, instead of freezing behind a single head. The `continue`-
+    # based body is unchanged — it just runs for each target in turn, with the launch gate above.
+    for t in _farm_working_set(targets, now):
         tid      = t["target_city_id"]
         state    = t.get("state", "IDLE")
         interval = max(1, int(t.get("interval_hours", 8))) * 3600
@@ -963,6 +1081,11 @@ def process_farm_targets(session, in_active_hours=True):
             if (not first_scout and not _next_round_needs_spy(t)
                     and int(t.get("is_fleet_target", 0)) == 0
                     and not drained):
+                # P11.9: a safe direct raid needs an attack slot. If one isn't free this cycle,
+                # hold the target (keep intel) instead of spending the pre-attack island fetch.
+                if not _can_launch_attack():
+                    _defer_parallel(t)
+                    continue
                 # Live inactivity check at the coordinates immediately before the raid
                 # (user rule): False → target gone; None → scout instead of blind attack.
                 confirmed = _confirm_inactive(session, t)
@@ -978,6 +1101,7 @@ def process_farm_targets(session, in_active_hours=True):
                 if confirmed is True:
                     res = _enqueue_attack(t, est, 0)   # size troops to the realistic remaining loot
                     if res:
+                        _spent_attack()
                         farm_update(tid, {
                             "state": "ATTACKING", "attack_return_at": res["return_at"],
                             "last_attack_at": now, "last_transporters": res["transporters"],
@@ -1015,12 +1139,18 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
             need_garrison = (verdict == "garrison")
 
+            # P11.9: one dispatch per cycle (scout or raid). If spent, hold this scout for the
+            # next wake so launches never fire in a burst.
+            if not _can_dispatch():
+                _defer_parallel(t, next_action="spy")
+                continue
             spy = _launch_respy(t, need_garrison=need_garrison,
                                 force_fresh=bool(int(t.get("force_fresh_spy", 0) or 0)))
             if spy is None:
                 logger.info("[farm] %s: sem cidade com espiões — nova tentativa em 1h", name)
                 farm_update(tid, {"next_run_at": now + 3600})
                 continue
+            _spent_dispatch()
             farm_update(tid, {"state": "SPYING", "spy_dispatched_at": now,
                               "last_spy_at": now, "respy_launched_at": 0,
                               "force_fresh_spy": 0})
@@ -1169,6 +1299,13 @@ def process_farm_targets(session, in_active_hours=True):
             if int(t.get("scout_fail_count", 0)):
                 farm_update(tid, {"scout_fail_count": 0})
 
+            # P11.9: the report is in hand and the target is ready to raid — but the attack slot
+            # may be taken by a parallel raid (or this cycle's one launch is spent). Hold it with
+            # its loot so it retries directly, no re-scout. (A clean scout already cleared above.)
+            if not _can_launch_attack():
+                _defer_parallel(t, last_loot=loot, last_enemy_ships=enemy_ships)
+                continue
+
             # Don't launch while the previous raid's ships are still returning — keep
             # the fresh intel and retry directly in a few minutes once they're back.
             if enemy_ships == 0 and _free_ships(session) < 1:
@@ -1201,6 +1338,7 @@ def process_farm_targets(session, in_active_hours=True):
                 farm_update(tid, {"state": "IDLE", "next_run_at": eta, "last_loot": loot,
                                   "last_enemy_ships": enemy_ships, "next_action": "attack"})
                 continue
+            _spent_attack()
             farm_update(tid, {
                 "state": "ATTACKING", "attack_return_at": res["return_at"], "last_attack_at": now,
                 "last_loot": loot, "last_enemy_ships": enemy_ships,
@@ -1253,9 +1391,15 @@ def process_farm_targets(session, in_active_hours=True):
                 verdict = _safe_target_verdict(t)
                 if verdict in ("disable", "skip"):
                     continue
+                # P11.9: respect the one-dispatch-per-cycle cap. This early scout is opportunistic
+                # within the lead window, so if the cycle's dispatch is spent it simply retries on
+                # the next wake (still before the troops dock) — no reschedule needed.
+                if not _can_dispatch():
+                    continue
                 need_garrison = (verdict == "garrison")
                 spy = _launch_respy(t, need_garrison=need_garrison)
                 if spy:
+                    _spent_dispatch()
                     farm_update(tid, {"respy_launched_at": now,
                                       "spy_dispatched_at": now, "last_spy_at": now})
                     logger.info("[farm] %s: re-espionagem antecipada enquanto as tropas regressam (%s%s)",

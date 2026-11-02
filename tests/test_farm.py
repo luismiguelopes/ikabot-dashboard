@@ -1199,3 +1199,135 @@ def test_force_fresh_spy_dispatches_new_not_stationed(monkeypatch, tmp_path):
     assert [q for q, _ in added] == ["spy_dispatch"]   # fresh dispatch, NOT stationed reuse
     t = db_manager.farm_get("100")
     assert t["state"] == "SPYING" and t["force_fresh_spy"] == 0
+
+
+# ── P11.9 parallel farming (spy slot ≠ attack slot; ≥50 ships for 2nd raid; max 2) ──────────
+
+def _add_safe_due(cid, name, loot=70000, journey=2000):
+    """A confirmed-safe target, already scouted, IDLE and due → would raid directly."""
+    db_manager.farm_add({"targetCityId": cid, "targetCityName": name, "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update(cid, {"state": "IDLE", "next_run_at": 0, "last_loot": loot,
+                                 "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": 1000,
+                                 "is_fleet_target": 0, "last_troop_journey": journey})
+
+
+def test_spying_target_does_not_block_ready_raid(monkeypatch, tmp_path):
+    """#1 case: a target still gathering a spy report (SPYING, spies in transit) must NOT hold
+    the queue — spies use the safehouse, not ships. A ready safe target below it raids this cycle."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    # A: spying, report not in yet (fresh dispatch → not stuck, no DONE/FAILED mission)
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "AEspiar", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("1", {"state": "SPYING", "spy_dispatched_at": now, "last_loot": 900000})
+    # B: safe, ready to raid now
+    _add_safe_due("2", "BPronto")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    import espionage_manager as em
+    monkeypatch.setattr(em, "latest_failed_after", lambda *a, **k: False, raising=False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]              # B raided despite A occupying SPYING
+    assert db_manager.farm_get("1")["state"] == "SPYING"    # A keeps waiting for its report
+    assert db_manager.farm_get("2")["state"] == "ATTACKING"
+
+
+def test_second_slot_opens_with_enough_ships(monkeypatch, tmp_path):
+    """One raid already in flight (1 slot used). A second safe target opens the parallel slot
+    because ≥ _PARALLEL_SHIP_FLOOR trade ships are free."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "EmVoo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("1", {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                 "last_attack_at": now})
+    _add_safe_due("2", "Paralelo")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: fm._PARALLEL_SHIP_FLOOR)   # exactly the floor
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]
+    assert db_manager.farm_get("2")["state"] == "ATTACKING"   # 2nd concurrent raid opened
+
+
+def test_second_slot_blocked_below_ship_floor(monkeypatch, tmp_path):
+    """Same setup but one ship short of the floor → the 2nd raid is NOT launched; the target is
+    held with a backoff (no busy-loop) instead of attacking with too few ships."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "EmVoo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("1", {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                 "last_attack_at": now})
+    _add_safe_due("2", "Paralelo")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: fm._PARALLEL_SHIP_FLOOR - 1)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                        # no parallel raid under the floor
+    t = db_manager.farm_get("2")
+    assert t["state"] == "IDLE"
+    assert t["next_run_at"] >= now + fm._PARALLEL_RETRY_BACKOFF - 5   # deferred, not spinning
+
+
+def test_max_two_concurrent_raids(monkeypatch, tmp_path):
+    """Two raids already in flight (cap reached). A third ready target does NOT launch even with
+    plenty of ships — the concurrency ceiling holds."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    for cid in ("1", "2"):
+        db_manager.farm_add({"targetCityId": cid, "targetCityName": "Voo" + cid, "islandX": 40,
+                             "islandY": 50, "islandId": "7", "minLoot": 30000})
+        db_manager.farm_update(cid, {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                     "last_attack_at": now})
+    _add_safe_due("3", "Terceiro")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 5000)    # ships are not the limit here
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    assert db_manager.farm_get("3")["state"] == "IDLE"        # held, cap at 2
+
+
+def test_one_launch_per_cycle(monkeypatch, tmp_path):
+    """Anti-detection: with two ready safe targets and no raid in flight, only ONE launches this
+    cycle (the richer one by loot/hour); the other is held for the next wake."""
+    _setup_db(tmp_path)
+    _add_safe_due("1", "Rico", loot=500000)
+    _add_safe_due("2", "Pobre", loot=60000)
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 5000)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]                # exactly one dispatch this cycle
+    assert db_manager.farm_get("1")["state"] == "ATTACKING"   # the richer target went first
+    assert db_manager.farm_get("2")["state"] == "IDLE"
+
+
+def test_scheduler_withholds_raid_wake_when_slots_full(monkeypatch, tmp_path):
+    """has_due_farm: with both attack slots busy, a due IDLE target whose next move is a RAID does
+    not wake the farm — but a due target whose next move is a SCOUT still does."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    for cid in ("1", "2"):
+        db_manager.farm_add({"targetCityId": cid, "targetCityName": "Voo" + cid, "islandX": 40,
+                             "islandY": 50, "islandId": "7", "minLoot": 30000})
+        db_manager.farm_update(cid, {"state": "ATTACKING", "attack_return_at": now + 9999})
+    _add_safe_due("3", "RaidDue")                 # IDLE, due, would RAID → needs a slot
+    monkeypatch.setattr(fm, "_enabled_targets", db_manager.farm_list)
+    assert fm.has_due_farm() is False             # raid withheld: both slots busy
+
+    # Turn #3 into a fleet target (next move is a scout, not a raid) → must wake
+    db_manager.farm_update("3", {"is_fleet_target": 1})
+    assert fm.has_due_farm() is True

@@ -531,24 +531,33 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
 - [ ] **P11.5 Split do `DispatchTab.tsx`** (1229 linhas, maior componente). Dispatch manual + fila
       + histórico + saque + farm num só ficheiro. Extrair sub-painéis como já se fez na MundoPage.
 
-- [ ] **P11.9 Farming paralelo — usar os barcos livres no próximo alvo** (pedido do utilizador
-      2026-11-02). Uma vaga dimensiona os barcos ao saque (`transporters = ceil(saque/500)`), por
-      isso um alvo pequeno deixa **muitos barcos livres**; mas a fila é **slot único**
-      (`process_farm_targets` só trabalha a cabeça, `for t in [head]`, e um alvo `ATTACKING` continua
-      a ser a cabeça — `_queue_head:593`), logo os barcos livres ficam **parados horas** até a vaga
-      voltar, em vez de atacarem o próximo alvo *due*.
-  - **O ataque já lança com os que há** (só adia a 0 barcos — `_cap_to_available_ships`/`_DEFER`,
-    `attack_manager.py:304`); o desperdício é a fila não avançar ao próximo alvo enquanto há frota.
-  - **Proposta**: depois de lançar o alvo de topo, se sobrarem barcos livres **acima da reserva**
-    (`farm_ship_reserve`), avançar para o próximo alvo *due* por ordem de prioridade e lançar também
-    — multi-slot. Mantém a prioridade **Caso 1 primeiro** (frota por último; um blockade raramente
-    paraleliza — usa frota de combate + timing das 2 vagas). Ganho de throughput quase todo nos
-    alvos seguros (raids directos, sem scout).
-  - **Cuidados no desenho (não é o jogo que parte — a contagem auto-corrige por `getAvailableShips`)**:
-    (1) **anti-detecção** — espaçar os lançamentos e impor um **teto de concorrência** (N raids em
-    voo / gap mínimo), senão um burst de ataques é sinal de bot; (2) mudar o loop central e o
-    agendamento event-driven (`_queue_head`/`next_farm_eta` assumem uma só cabeça → passar a
-    iterar alvos due enquanto houver barcos livres). Tamanho médio.
+- [x] **P11.9 Farming paralelo — usar os barcos livres no próximo alvo** (pedido do utilizador
+      2026-11-02; **feito 2026-11-02**). Uma vaga dimensiona os barcos ao saque
+      (`transporters = ceil(saque/500)`), por isso um alvo pequeno deixa **muitos barcos livres**;
+      a fila era **slot único** (`process_farm_targets` só trabalhava a cabeça; um alvo `ATTACKING`
+      *ou* `SPYING` continuava a ser a cabeça), logo os barcos ficavam **parados horas** e, pior,
+      um alvo a **espiar** bloqueava alvos já prontos a atacar.
+  - **Afinação-chave (do exemplo real do utilizador):** **slot de espião ≠ slot de ataque.** A
+    espionagem usa a casa dos espiões, **não os barcos** → um alvo em `SPYING` nunca deve bloquear
+    um raid a outro alvo. Era o caso #1 (Jardim De Cima a espiar) a travar os #2/#3 prontos; e o
+    #4 (drenado, armazém < threshold) nunca chegava a ser reavaliado/retirado por estar preso atrás.
+  - **Implementado** (`farm_manager.py`):
+    - `_farm_working_set` substitui o head único: avança **sempre** SPYING+ATTACKING e **oferece** o
+      slot de ataque ao melhor alvo IDLE *due* por prioridade (Caso 1 primeiro; `loop` à frente).
+    - **Teto de concorrência** `_MAX_CONCURRENT_FARM = 2` raids em voo; o **2º slot só abre** com
+      `_free_ships ≥ _PARALLEL_SHIP_FLOOR` (50) — `_can_launch_attack`.
+    - **Anti-detecção**: `_MAX_LAUNCHES_PER_CYCLE = 1` despacho (scout *ou* raid) por ciclo → raids
+      paralelos abrem em **wakes consecutivos**, nunca em burst (o despacho ao jogo já é espaçado
+      pela sessão *throttled*). `getAvailableShips` lido **≤1×/ciclo** (lazy).
+    - **Guarda anti-busy-loop (P0.1)**: `_defer_parallel` adia `_PARALLEL_RETRY_BACKOFF` (7min)
+      quando o slot/barcos bloqueiam, preservando o relatório; os agendadores (`has_due_farm`/
+      `next_farm_eta`) só retêm o wake de um **raid** quando os 2 slots estão ocupados — um
+      **scout** acorda sempre (`_idle_needs_attack_slot`).
+  - **Frota (Caso 2)**: um alvo de frota ocupa o slot as 2 vagas (blockade→tropas, horas); com
+    ≥50 barcos livres o 2º slot farma um alvo seguro **durante** essa espera — poupa as horas mortas.
+  - Testes: `test_spying_target_does_not_block_ready_raid`, `test_second_slot_opens_with_enough_ships`,
+    `test_second_slot_blocked_below_ship_floor`, `test_max_two_concurrent_raids`,
+    `test_one_launch_per_cycle`, `test_scheduler_withholds_raid_wake_when_slots_full`.
 
 ### C — UX
 - [ ] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`). Fundir o pipeline do
