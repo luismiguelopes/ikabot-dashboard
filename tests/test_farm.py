@@ -1312,7 +1312,11 @@ def test_one_launch_per_cycle(monkeypatch, tmp_path):
 
     assert [q for q, _ in added] == ["attack"]                # exactly one dispatch this cycle
     assert db_manager.farm_get("1")["state"] == "ATTACKING"   # the richer target went first
-    assert db_manager.farm_get("2")["state"] == "IDLE"
+    t2 = db_manager.farm_get("2")
+    assert t2["state"] == "IDLE"
+    # blocked only by the per-cycle cap (slot & ships are free) → short spacing, not the 7-min wait
+    now = int(time.time())
+    assert now < t2["next_run_at"] <= now + fm._DISPATCH_SPACING_RANGE[1] + 2
 
 
 def test_scheduler_withholds_raid_wake_when_slots_full(monkeypatch, tmp_path):

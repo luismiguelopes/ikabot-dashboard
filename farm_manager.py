@@ -63,7 +63,8 @@ _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the rep
 # that is why #1 (spying) must step aside for a ready target below it.
 _MAX_CONCURRENT_FARM = 2
 _PARALLEL_SHIP_FLOOR = 50
-_PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor just blocked
+_PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor / cap just blocked
+_DISPATCH_SPACING_RANGE = (30, 90)  # jitter (s) between launches when only the per-cycle cap held
 _MAX_LAUNCHES_PER_CYCLE = 1
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
@@ -1018,20 +1019,27 @@ def process_farm_targets(session, in_active_hours=True):
         _state["attacking"] += 1
         _spent_dispatch()
 
-    def _defer_parallel(t, **extra):
-        """A launch was blocked only by the parallel budget (slot busy, ship floor, or the
-        per-cycle dispatch cap) — not by intel. Hold the target a few minutes and keep its
-        report/loot (pass last_loot/last_enemy_ships via extra) so it retries directly, without
-        re-scouting. The backoff also stops the scheduler busy-waking on it while the ship floor
-        is unmet (P0.1 loop guard)."""
-        fields = {"state": "IDLE", "next_run_at": now + _PARALLEL_RETRY_BACKOFF,
-                  "next_action": "attack"}
+    def _attack_backoff():
+        """How long to hold a raid that couldn't launch. A full wait only when a slot or the ship
+        floor is genuinely unavailable (needs a return first); otherwise it was just this cycle's
+        one-dispatch cap — a short human-like jitter so the queue keeps a 1-2 min cadence, not 7."""
+        if _state["attacking"] >= _MAX_CONCURRENT_FARM:
+            return _PARALLEL_RETRY_BACKOFF
+        if _state["attacking"] >= 1 and _free_ships_once() < _PARALLEL_SHIP_FLOOR:
+            return _PARALLEL_RETRY_BACKOFF
+        return random.randint(*_DISPATCH_SPACING_RANGE)
+
+    def _defer_parallel(t, backoff, **extra):
+        """A launch was blocked only by the parallel budget/slot/ship floor — not by intel. Hold
+        the target for `backoff` seconds and keep its report/loot (pass last_loot/last_enemy_ships
+        via extra) so it retries directly, without re-scouting. The backoff also stops the
+        scheduler busy-waking while the ship floor is unmet (P0.1 loop guard)."""
+        fields = {"state": "IDLE", "next_run_at": now + backoff, "next_action": "attack"}
         fields.update(extra)
         farm_update(t["target_city_id"], fields)
-        logger.info("[farm] %s: despacho adiado (slot/barcos/orçamento do ciclo) — "
-                    "nova tentativa em %dmin",
-                    t.get("target_city_name", t["target_city_id"]),
-                    _PARALLEL_RETRY_BACKOFF // 60)
+        logger.info("[farm] %s: despacho adiado (cap do ciclo / slot / barcos) — "
+                    "nova tentativa em %ds", t.get("target_city_name", t["target_city_id"]),
+                    backoff)
 
     # Working set (P11.9): advance committed targets (spying/attacking) AND offer the free attack
     # slot to the best due IDLE target, instead of freezing behind a single head. The `continue`-
@@ -1084,7 +1092,7 @@ def process_farm_targets(session, in_active_hours=True):
                 # P11.9: a safe direct raid needs an attack slot. If one isn't free this cycle,
                 # hold the target (keep intel) instead of spending the pre-attack island fetch.
                 if not _can_launch_attack():
-                    _defer_parallel(t)
+                    _defer_parallel(t, _attack_backoff())
                     continue
                 # Live inactivity check at the coordinates immediately before the raid
                 # (user rule): False → target gone; None → scout instead of blind attack.
@@ -1142,7 +1150,7 @@ def process_farm_targets(session, in_active_hours=True):
             # P11.9: one dispatch per cycle (scout or raid). If spent, hold this scout for the
             # next wake so launches never fire in a burst.
             if not _can_dispatch():
-                _defer_parallel(t, next_action="spy")
+                _defer_parallel(t, random.randint(*_DISPATCH_SPACING_RANGE), next_action="spy")
                 continue
             spy = _launch_respy(t, need_garrison=need_garrison,
                                 force_fresh=bool(int(t.get("force_fresh_spy", 0) or 0)))
@@ -1303,7 +1311,7 @@ def process_farm_targets(session, in_active_hours=True):
             # may be taken by a parallel raid (or this cycle's one launch is spent). Hold it with
             # its loot so it retries directly, no re-scout. (A clean scout already cleared above.)
             if not _can_launch_attack():
-                _defer_parallel(t, last_loot=loot, last_enemy_ships=enemy_ships)
+                _defer_parallel(t, _attack_backoff(), last_loot=loot, last_enemy_ships=enemy_ships)
                 continue
 
             # Don't launch while the previous raid's ships are still returning — keep
