@@ -513,16 +513,42 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
       ignorar.
 
 ### B — Manutenibilidade *(dívida técnica real, risco baixo)*
-- [ ] **P11.3 Observabilidade e tamanho do `ikabot_gui/app.py`** (2049 linhas, 53 `except
-      Exception`). O bot tem `health_guard`/`health.json`; a camada Flask não tem equivalente — um
-      endpoint que engole um erro fica invisível. Candidato: split por blueprints + um wrapper de
-      erro uniforme que registe falhas. Maior ficheiro do projecto, sem plano até agora.
+- [x] **P11.3 Observabilidade e tamanho do `ikabot_gui/app.py`** — ✅ ANALISADO 2026-11-02,
+      **risco baixo, NÃO fazer o split**. O `app.py` (agora 2098 linhas, 94 `except`) **nunca fala
+      com o jogo** (as 2 "sessions" são o cookie de auth do Flask, não a do jogo) — só lê JSON/SQLite
+      que o bot escreve, e o bot valida tudo o que consome. Logo um bug no dashboard **não pode**
+      causar acção errada no jogo; no pior caso mostra um valor errado/stale. Dos `except`: ~20
+      devolvem 500 visível; os ~28 `pass` silenciosos são o padrão benigno "abrir JSON opcional →
+      default" (não engolem escritas). Auth está ligada (`DASHBOARD_PASSWORD`, compare em tempo
+      constante). **Veredicto: segurança nenhuma afectada; risco é só fiabilidade/manutenibilidade
+      do dashboard.** O split por blueprints seria mexer muito numa camada crítica nunca validada
+      live para ganho baixo → não compensa. Ganho barato opcional (se algum dia): um
+      `@app.errorhandler(Exception)` que loga + devolve 500, para erros deixarem de ser invisíveis.
 - [ ] **P11.4 Reavaliar o split do `espionage_manager.py`** (1971 linhas; B8 foi saltado em
       2026-09). Mudou o contexto: agora há `test_espionage_state_machine.py` (rede de segurança) e
       o caminho de frota já corre live. Uma extracção mínima (contagem de espiões / fetch de counts)
       é agora mais segura do que era. Continua opcional — só se o módulo voltar a doer.
 - [ ] **P11.5 Split do `DispatchTab.tsx`** (1229 linhas, maior componente). Dispatch manual + fila
       + histórico + saque + farm num só ficheiro. Extrair sub-painéis como já se fez na MundoPage.
+
+- [ ] **P11.9 Farming paralelo — usar os barcos livres no próximo alvo** (pedido do utilizador
+      2026-11-02). Uma vaga dimensiona os barcos ao saque (`transporters = ceil(saque/500)`), por
+      isso um alvo pequeno deixa **muitos barcos livres**; mas a fila é **slot único**
+      (`process_farm_targets` só trabalha a cabeça, `for t in [head]`, e um alvo `ATTACKING` continua
+      a ser a cabeça — `_queue_head:593`), logo os barcos livres ficam **parados horas** até a vaga
+      voltar, em vez de atacarem o próximo alvo *due*.
+  - **O ataque já lança com os que há** (só adia a 0 barcos — `_cap_to_available_ships`/`_DEFER`,
+    `attack_manager.py:304`); o desperdício é a fila não avançar ao próximo alvo enquanto há frota.
+  - **Proposta**: depois de lançar o alvo de topo, se sobrarem barcos livres **acima da reserva**
+    (`farm_ship_reserve`), avançar para o próximo alvo *due* por ordem de prioridade e lançar também
+    — multi-slot. Mantém a prioridade **Caso 1 primeiro** (frota por último; um blockade raramente
+    paraleliza — usa frota de combate + timing das 2 vagas). Ganho de throughput quase todo nos
+    alvos seguros (raids directos, sem scout).
+  - **Cuidados no desenho (não é o jogo que parte — a contagem auto-corrige por `getAvailableShips`)**:
+    (1) **anti-detecção** — espaçar os lançamentos e impor um **teto de concorrência** (N raids em
+    voo / gap mínimo), senão um burst de ataques é sinal de bot; (2) mudar o loop central e o
+    agendamento event-driven (`_queue_head`/`next_farm_eta` assumem uma só cabeça → passar a
+    iterar alvos due enquanto houver barcos livres). Tamanho médio.
 
 ### C — UX
 - [ ] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`). Fundir o pipeline do
