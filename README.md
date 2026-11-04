@@ -17,10 +17,11 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 ## Notable capabilities
 
 - **Empire dashboard** — per-city resources, buildings, movements, world scan, espionage, combat dispatch, calculators; alerts and thresholds stored server-side; pt/en.
-- **Farming (F4)** — per-target state machine (SQLite `farm_targets`), event-driven cadence tuned to real round-trip time, ship reserve, live inactivity confirmation before every action.
+- **Farming (F4)** — per-target state machine (SQLite `farm_targets`), event-driven cadence tuned to real round-trip time, live inactivity confirmation before every action, parallel raids that only open once the priority target is being drained, and a scout-freshness guard so a stale estimate never wastes a wave after downtime.
 - **Wine strategy** — the empire produces no wine, so:
   - **Balancer (F9)** redistributes existing wine (and rescues emptied cities);
   - **Market buyer (F10)** buys wine from other players' offers within hard guards — price ceiling, gold floor, per-cycle spend cap, a refill deadband, a dry-run, and a critical mode that borrows the farm's reserved ships in a wine emergency;
+  - a **ship reserve** keeps a few trade ships (default 5) free for wine at all times, so the farm — which recycles transporters non-stop — can't starve an urgent wine transport;
   - a **"wine at a glance"** panorama shows per-city runway, empire totals and buyer status.
 - **Robustness** — surgical runtime patches (no shadowing of stock files), persistent login session on a volume, digest-pinned image with a stable/beta promotion flow, self-healing, daily SQLite backups, and downtime-aware espionage timeouts.
 - **Anti-detection** — randomised delays before/between game requests, active-hours gating (`SCAN_ACTIVE_HOURS` / `QUEUE_ACTIVE_HOURS`).
@@ -213,7 +214,7 @@ The bot checks `spyMissions` view to detect arrival, then calls `executeMission`
 
 **Phase 3 — Manual attack**: once a mission reaches DONE with both warehouse and garrison results, a "Prepare Attack" button appears in the expanded row (Combat page). The modal shows available troops per city. The attack is queued in the SQLite `shared_queue` ("attack") and dispatched by the bot during active hours — player pillage via `sendArmyPlunderSea`/`sendArmyPlunderLand`, naval blockade via `sendFleetOnBlockade`, own-city deploy via `deployArmy`/`deployFleet`. Reports of each attempt land in the `attack_log` table.
 
-**Phase 4 — Automated farming (the farm, `farm_manager.py`)**: the one-shot auto-attack waves system was **discontinued** in 2026-07; the **farm** is now the only automatic attack system. Each target is a row in the SQLite `farm_targets` table with its own state machine (`IDLE → SPYING → ATTACKING`), event-driven on the real round-trip cadence. It re-scouts on its own schedule, sizes each raid to the live warehouse, enforces a "drain to `min_loot`" rule, reserves trade ships against internal logistics, and — for **fleet targets** — never commits troops without fresh, trustworthy garrison intel (blockade-then-troops timing on a clean port). A separate **drain loop mode** (F13) hammers a single target wave-after-wave until empty. See FEATURES.md (F4, F4.b–F4.e, F13) for the full design. `minLootTotal` now lives in `espionage_settings.json` and auto-ignores poor reports at the espionage layer (farm targets exempt).
+**Phase 4 — Automated farming (the farm, `farm_manager.py`)**: the one-shot auto-attack waves system was **discontinued** in 2026-07; the **farm** is now the only automatic attack system. Each target is a row in the SQLite `farm_targets` table with its own state machine (`IDLE → SPYING → ATTACKING`), event-driven on the real round-trip cadence. It sizes each raid to the live warehouse and enforces a "drain to `min_loot`" rule; safe (inactive, no-fleet) targets are attacked directly between scouts and only re-spied when they drain below `min_loot` or the last scout goes stale (`spyFreshnessHours`, default 24h). It can run a second target in parallel, but only once the priority target's wave empties it (so the full fleet keeps hitting the priority while it is still rich), and it keeps a floor of trade ships free for urgent wine deliveries. For **fleet targets** it never commits troops without fresh, trustworthy garrison intel (blockade-then-troops timing on a clean port). A separate **drain loop mode** (F13) hammers a single target wave-after-wave until empty. See FEATURES.md (F4, F4.b–F4.e, F13) for the full design. `minLootTotal` now lives in `espionage_settings.json` and auto-ignores poor reports at the espionage layer (farm targets exempt).
 
 ## Data Storage
 
@@ -261,8 +262,8 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 | `spy_dispatch_queue.json` | On demand | Pending spy dispatches queued from the UI |
 | `spy_counts.json` | Each active-hours cycle | Available/deployed/defense spy counts per city |
 | `espionage_settings.json` | On save via UI | Garrison inspection thresholds per resource |
-| `farm_settings.json` | On save via UI | Farm loadout (troops/fleet), ship reserve, cadence, early-respy, fleet-target timings (`fleetLeadMin`, `disperseMin`, `earlyReportMaxAgeMins`) |
-| `wine_settings.json`, `wine_buy_settings.json`, `wine_buy_status.json` | On save / per cycle | Wine balancer + market-buyer config and last-run status |
+| `farm_settings.json` | On save via UI | Farm loadout (troops/fleet), ship reserve, cadence, early-respy, scout freshness (`spyFreshnessHours`), fleet-target timings (`fleetLeadMin`, `disperseMin`, `earlyReportMaxAgeMins`) |
+| `wine_settings.json`, `wine_buy_settings.json`, `wine_buy_status.json` | On save / per cycle | Wine balancer config (incl. the trade-ship reserve held against the farm), market-buyer config and last-run status |
 | `pause.json` | On demand | Global pause flag (checked by every action processor) |
 | `health.json`, `config_warnings.json` | Per cycle / on start | Per-subsystem success/failure and config-schema warnings (surfaced in `/api/health` + UI banners) |
 | `travel_calibration.json` | Per raid | Learned real/estimated travel ratios (EWMA) per troop/fleet mode |
