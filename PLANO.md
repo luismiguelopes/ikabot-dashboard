@@ -8,9 +8,10 @@ farm e da espionagem** (fixes de intel obsoleta/rejeitada em alvos de frota, ret
 watchdog de construção, imunidade ao sleep do host; ver secção P10). Bot em produção no
 **ikabot 7.7.2** (pinado por digest `6224352e`), sessão persistente, self-healing e backups activos.
 **305 testes a passar.**
-Trabalho de código: nada pendente. Em aberto só **dívidas de validação in-game** (precisam de
-sessão supervisionada, não é código): deploy para cidade própria; reescrita do farm nunca correu
-supervisionada live. Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
+Trabalho de código: nada pendente. Em aberto só **1 dívida de validação in-game** (precisa de
+sessão supervisionada, não é código): deploy para cidade própria. A reescrita do farm foi
+**validada live de ponta a ponta pelo utilizador (2026-11-04)** — está a funcionar devidamente.
+Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
 
 ---
 
@@ -218,9 +219,9 @@ features.
       descontinuado (P6.2, 2026-07-03). O farm é o único sistema de ataque automático.
 - [ ] Validar deploy para cidade própria (após 1 ciclo do império, para o islandId
       aparecer no own_cities.json): dispatch com destino "própria" → deployArmy type=10.
-- [ ] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
+- [x] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
       flee-fleet bloqueio→tropas (F4.b), ataque-directo + confirmação de inactividade (F4.e).
-      Nunca correu live — código completo e testado, validação real em dívida.
+      ✅ **Validada live de ponta a ponta pelo utilizador (2026-11-04)** — a funcionar devidamente.
 - [ ] Validar o self-healing (P5.1): `docker compose up -d`, confirmar o `ikabot` a ficar
       `healthy` e o container `ikabot-autoheal` a correr com acesso ao docker.sock.
 
@@ -491,9 +492,8 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
 
 ### Dívidas de validação in-game *(precisam de sessão supervisionada — não é trabalho de código)*
 - [ ] Deploy para cidade própria (DispatchTab → destino "própria" → deployArmy type=10).
-- [ ] Reescrita do farm supervisionada live. *(parcialmente exercitada: os fixes P10.4–P10.7
-      saíram de incidentes reais em produção, logo o caminho de frota já corre live — falta uma
-      sessão supervisionada de ponta a ponta.)*
+- [x] Reescrita do farm supervisionada live. ✅ **Validada de ponta a ponta pelo utilizador
+      (2026-11-04)** — a funcionar devidamente.
 
 ---
 
@@ -578,7 +578,8 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
       trazido → estado do farm + acções inline.
 
 ### D — Validação in-game *(ver dívidas acima — a mesma lista)*
-- [ ] Deploy para cidade própria; sessão supervisionada de ponta a ponta do farm.
+- [ ] Deploy para cidade própria. *(A sessão supervisionada do farm já foi validada —
+      utilizador, 2026-11-04.)*
 
 ### E — Farm: afinação de re-scout e intel de frota *(discussão em curso 2026-11-01)*
 
