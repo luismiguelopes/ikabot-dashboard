@@ -505,9 +505,10 @@ git limpo. **Veredicto: o projecto está maduro e estável** — não há bugs a
 código pendente. O que resta é dívida de manutenibilidade, validação live e afinação operacional.
 Ordenado por valor/risco. Nenhum item é urgente.
 
-> **Reconciliação 2026-11-04:** após fechar P11.1/P11.5/P11.6/P11.7/P11.10 e descartar P11.8/P11.11,
-> a suite está em **341 testes**. Em aberto: P11.2 (decisão operacional), P11.4 (split opcional,
-> não feito), e 1 dívida de validação in-game (deploy p/ cidade própria). Tudo o resto fechado.
+> **Reconciliação 2026-11-04:** após fechar P11.1/P11.2/P11.5/P11.6/P11.7/P11.10 + self-healing e
+> descartar P11.4/P11.8/P11.11, a suite está em **343 testes**. **Único item aberto:** a validação
+> in-game do deploy para cidade própria (bug corrigido em `7b95486`, a aguardar a retry). Trabalho
+> de código pendente: zero.
 
 ### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
 - [x] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** ✅ 2026-11-04 — o utilizador baixou
@@ -531,11 +532,13 @@ Ordenado por valor/risco. Nenhum item é urgente.
       do dashboard.** O split por blueprints seria mexer muito numa camada crítica nunca validada
       live para ganho baixo → não compensa. Ganho barato opcional (se algum dia): um
       `@app.errorhandler(Exception)` que loga + devolve 500, para erros deixarem de ser invisíveis.
-- [ ] **P11.4 Reavaliar o split do `espionage_manager.py`** (**2137 linhas** a 2026-11-04; cresceu
-      desde as 1971 da auditoria; B8 foi saltado em 2026-09). Mudou o contexto: agora há
-      `test_espionage_state_machine.py` (rede de segurança) e o caminho de frota já corre live. Uma
-      extracção mínima (contagem de espiões / fetch de counts) é agora mais segura do que era.
-      Continua **opcional** — só se o módulo voltar a doer. **NÃO feito.**
+- [~] **P11.4 Split do `espionage_manager.py`** — **FORA DA PIPELINE (2026-11-04, decisão do
+      utilizador).** O módulo tem 2137 linhas mas está **estável, testado e sem problemas**; partir
+      um módulo crítico (importado por 4 sítios, store de missões entrelaçado) sem dor real que o
+      justifique não compensa. Não é trabalho; só reabrir se o tamanho/emaranhado voltar a causar
+      dor concreta (bug difícil de localizar por causa do tamanho, alteração que parte partes não
+      relacionadas, ou feature nova que o emaranhado torne arriscada). Contexto favorável se um dia
+      for preciso: há `test_espionage_state_machine.py` e o caminho de frota já corre live.
 - [x] **P11.5 Split do `DispatchTab.tsx`** ✅ 2026-10-30 (`2d33c62`) — o monólito de 1229 linhas
       foi partido: `DispatchTab.tsx` é agora um router fino (10 linhas) que despacha para
       `dispatch/DispatchPanel.tsx` (dispatch manual + fila), `dispatch/HistoryPanel.tsx` (histórico)
