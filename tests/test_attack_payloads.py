@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Stubs so attack_manager's lazy `import ikabot.config` and telegram imports resolve even when
 # this file runs before the other test modules that set them up.
-for _name in ("ikabot", "ikabot.config"):
+for _name in ("ikabot", "ikabot.config", "ikabot.helpers", "ikabot.helpers.naval"):
     sys.modules.setdefault(_name, types.ModuleType(_name))
 _cfg = sys.modules["ikabot.config"]
 for _attr, _val in (("actionRequest", "TEST"), ("materials_names_english", []),
@@ -143,9 +143,41 @@ def test_deploy_army_keeps_css_unit_ids(monkeypatch):
     assert p["deploymentType"] == "army"
     assert p["templateView"] == "deployment"
     assert p["transporter"] == 20
-    assert p["cargo_army_s303"] == 50                   # CSS id kept (NOT stripped to 303)
+    assert p["cargo_army_s303"] == 50                   # emitted under the form's own id
     assert p["cargo_army_s303_upkeep"] == "5"
-    assert "cargo_army_303" not in p
+    assert "cargo_army_303" not in p                     # no stray mismatched field
+
+
+def test_deploy_matches_units_to_form_id_format(monkeypatch):
+    """Regression (live failure 2026-11-04 "Não selecionaste nenhuma unidade"): the deployment
+    form keys units by the bare number (303) while the UI sends CSS ids (s303). The cargo field
+    must be emitted under the FORM's id with the requested count matched across the 's' prefix —
+    not two mismatched fields the game ignores."""
+    _common(monkeypatch)
+    monkeypatch.setattr(am, "_fetch_deployment_upkeep", lambda *a, **k: {"303": "5", "304": "2"})
+    s = _CaptureSession()
+
+    ok = am._send_deploy(s, origin_id=1, target_id=999, island_id=30816,
+                         units={"s303": 50}, transporters=10, kind="army")
+    assert ok is True
+    p = s.params
+    assert p["cargo_army_303"] == 50                     # matched s303 → form's 303
+    assert p["cargo_army_303_upkeep"] == "5"
+    assert p["cargo_army_304"] == 0                      # untouched unit zero-filled
+    assert "cargo_army_s303" not in p                    # never emits the UI's own format
+
+
+def test_deploy_bails_when_no_unit_matches_form(monkeypatch):
+    """If nothing the UI asked for matches the form, bail (return False) with a diagnostic
+    instead of POSTing an empty army that the game rejects."""
+    _common(monkeypatch)
+    monkeypatch.setattr(am, "_fetch_deployment_upkeep", lambda *a, **k: {"999": "1"})
+    s = _CaptureSession()
+
+    ok = am._send_deploy(s, origin_id=1, target_id=999, island_id=30816,
+                         units={"s303": 50}, transporters=10, kind="army")
+    assert ok is False
+    assert s.params is None                              # never POSTed
 
 
 def _write_own_cities(tmp_path, monkeypatch, cities):

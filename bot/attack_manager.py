@@ -482,14 +482,35 @@ def _send_deploy(session, origin_id, target_id, island_id, units, transporters, 
     if kind == "army":
         params["transporter"] = _cap_to_available_ships(transporters, session)
 
+    # The deployment form's own unit-id format is the source of truth: upkeep_map keys come
+    # straight from the form. The UI may key units with or without the CSS 's' prefix, and the
+    # form may use the other format (the game's plunder form uses the bare number; deployment
+    # does too — the old "deploy keeps s303" assumption was never validated and broke live on
+    # 2026-11-04 with "Não selecionaste nenhuma unidade"). So emit each cargo field under the
+    # FORM's id and match the requested count by NORMALISED id (strip a leading 's'), instead of
+    # trusting the two to use the same format.
+    def _norm(u):
+        u = str(u)
+        return u[1:] if u.startswith("s") else u
+    want = {_norm(u): int(c) for u, c in units.items()}
+    placed = 0
     for uid, upkeep in upkeep_map.items():
+        cnt = want.get(_norm(uid), 0)
         params[f"{cargo_prefix}_{uid}_upkeep"] = upkeep
-        params[f"{cargo_prefix}_{uid}"] = int(units.get(uid, 0))
-    for uid, cnt in units.items():
-        params[f"{cargo_prefix}_{uid}"] = int(cnt)
+        params[f"{cargo_prefix}_{uid}"] = cnt
+        placed += cnt
+
+    total_requested = sum(int(c) for c in units.values())
+    if total_requested > 0 and placed == 0:
+        # None of the requested units matched a form id → the POST would be rejected with
+        # "no unit selected". Surface the id formats (like the blockade form probe) instead of
+        # a silent failure, and bail so it retries/diagnoses rather than sending an empty army.
+        logger.warning("[attack] deploy: nenhuma unidade pedida bate com o formulário — "
+                       "form ids=%s, pedidos=%s", list(upkeep_map.keys()), list(units.keys()))
+        return False
 
     logger.info("[attack] %s %s → %s: %d unidade(s)",
-                function, origin_id, target_id, sum(int(c) for c in units.values()))
+                function, origin_id, target_id, placed)
     try:
         resp = session.post(params=params)
         return _parse_attack_feedback(resp, function, ikabot_config)
