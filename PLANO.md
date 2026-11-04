@@ -222,8 +222,9 @@ features.
 - [x] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
       flee-fleet bloqueio→tropas (F4.b), ataque-directo + confirmação de inactividade (F4.e).
       ✅ **Validada live de ponta a ponta pelo utilizador (2026-11-04)** — a funcionar devidamente.
-- [ ] Validar o self-healing (P5.1): `docker compose up -d`, confirmar o `ikabot` a ficar
-      `healthy` e o container `ikabot-autoheal` a correr com acesso ao docker.sock.
+- [x] Validar o self-healing (P5.1): ✅ 2026-11-04 — `ikabot` fica `healthy`, `ikabot-autoheal`
+      está `Up (healthy)` com `/var/run/docker.sock` montado (pode reiniciar containers unhealthy).
+      O supervisor do worker (P10.2) é a 1ª linha; o autoheal é a rede de último nível.
 
 ---
 
@@ -499,10 +500,14 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
 
 ## P11 — Roadmap candidato (auditoria a frio 2026-10-29)
 
-Auditoria de todo o projecto com P0-P10 concluídos, 305 testes a passar, zero TODO/FIXME, build
-do frontend fresco e git limpo. **Veredicto: o projecto está maduro e estável** — não há bugs
-abertos nem trabalho de código pendente. O que resta é dívida de manutenibilidade, validação live
-e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
+Auditoria de todo o projecto com P0-P10 concluídos, zero TODO/FIXME, build do frontend fresco e
+git limpo. **Veredicto: o projecto está maduro e estável** — não há bugs abertos nem trabalho de
+código pendente. O que resta é dívida de manutenibilidade, validação live e afinação operacional.
+Ordenado por valor/risco. Nenhum item é urgente.
+
+> **Reconciliação 2026-11-04:** após fechar P11.1/P11.5/P11.6/P11.7/P11.10 e descartar P11.8/P11.11,
+> a suite está em **341 testes**. Em aberto: P11.2 (decisão operacional), P11.4 (split opcional,
+> não feito), e 1 dívida de validação in-game (deploy p/ cidade própria). Tudo o resto fechado.
 
 ### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
 - [x] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** ✅ 2026-11-04 — o utilizador baixou
@@ -523,10 +528,11 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
       do dashboard.** O split por blueprints seria mexer muito numa camada crítica nunca validada
       live para ganho baixo → não compensa. Ganho barato opcional (se algum dia): um
       `@app.errorhandler(Exception)` que loga + devolve 500, para erros deixarem de ser invisíveis.
-- [ ] **P11.4 Reavaliar o split do `espionage_manager.py`** (1971 linhas; B8 foi saltado em
-      2026-09). Mudou o contexto: agora há `test_espionage_state_machine.py` (rede de segurança) e
-      o caminho de frota já corre live. Uma extracção mínima (contagem de espiões / fetch de counts)
-      é agora mais segura do que era. Continua opcional — só se o módulo voltar a doer.
+- [ ] **P11.4 Reavaliar o split do `espionage_manager.py`** (**2137 linhas** a 2026-11-04; cresceu
+      desde as 1971 da auditoria; B8 foi saltado em 2026-09). Mudou o contexto: agora há
+      `test_espionage_state_machine.py` (rede de segurança) e o caminho de frota já corre live. Uma
+      extracção mínima (contagem de espiões / fetch de counts) é agora mais segura do que era.
+      Continua **opcional** — só se o módulo voltar a doer. **NÃO feito.**
 - [x] **P11.5 Split do `DispatchTab.tsx`** ✅ 2026-10-30 (`2d33c62`) — o monólito de 1229 linhas
       foi partido: `DispatchTab.tsx` é agora um router fino (10 linhas) que despacha para
       `dispatch/DispatchPanel.tsx` (dispatch manual + fila), `dispatch/HistoryPanel.tsx` (histórico)
@@ -577,9 +583,13 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
       reserve-aware), para o farm nunca paralelizar sobre os barcos reservados ao vinho.
 
 ### C — UX
-- [ ] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`). Fundir o pipeline do
-      Mundo com saque-por-alvo/histórico numa vista por alvo: espiei → saque visto → saque real
-      trazido → estado do farm + acções inline.
+- [x] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`) ✅ 2026-11-04
+      (reconciliação — já estava implementado). O `InactivosTab` (Mundo) já tem a linha por alvo
+      unificada: pills de pipeline (espiei → `pipeline_ready`/`has_ships`/`warehouse_known`/
+      `low_resources`/`failed`), **saque visto** (relatório) + **saque real trazido** por jogador
+      (F1.b, `lootByPlayer`), **estado do farm** por alvo (`farmByCity`) e **acções inline**
+      (`FarmSettings` embutido, add/remove). `FEATURES.md` Fase 3 estava com o label "POR FAZER"
+      desatualizado — corrigido.
 
 ### D — Validação in-game *(ver dívidas acima — a mesma lista)*
 - [ ] Deploy para cidade própria. *(A sessão supervisionada do farm já foi validada —
@@ -589,8 +599,9 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
 
 Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizador:
 - **`loop`** (F13) → martela até secar, depois **desliga** o alvo. **Mantém-se como está.**
-- **`farm` hoje** → ataca direto entre scouts; re-espia a cada **3 raids** (`respy_every`).
-- **`farm` proposto** → ataca direto; re-espia por **tempo** + quando a estimativa seca.
+- **`farm` (actual, pós-P11.7)** → ataca direto entre scouts; **NÃO** re-espia por nº de raids;
+  só re-espia quando a estimativa/último regresso seca (drenagem) ou o scout fica stale
+  (`spyFreshnessHours`). O `respy_every` deixou de ser usado para alvos seguros.
 
 - [x] **P11.7 Tirar a re-espionagem periódica por nº de raids nos alvos seguros** (o "Caso 1").
       ✅ 2026-11-04 — o núcleo (remover o termo `respy_every` de `_next_round_needs_spy` para
@@ -636,8 +647,9 @@ Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizad
     está ausente do world scan → `farm_remove` (apaga o alvo morto); (c) reaparecer no Mundo ≠
     re-farmar automático — o utilizador re-adiciona (comportamento actual, provavelmente desejado).
 
-- [ ] **P11.8 Distinguir fleet-target verdadeiro de falso positivo via sinal de combate** (os
-      "Casos 2/3"). *Eficiência, NÃO segurança — não urgente.*
+- [~] **P11.8 Distinguir fleet-target verdadeiro de falso positivo via sinal de combate** (os
+      "Casos 2/3"). **DESCARTADO (2026-11-01)** — ver veredicto no fim do item. *Eficiência, NÃO
+      segurança — não urgente.*
   - **Achado**: `is_fleet_target` é **write-once** — posto a 1 (bounce sem saque `:1217`; frota
     vista `:788`; combate acima do máximo `:1080`) e **nunca** limpo a 0, apesar do comentário em
     `:874-881` prometer que "um full scout põe a 0" (nunca foi implementado).
