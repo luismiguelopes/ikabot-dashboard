@@ -1605,9 +1605,8 @@ def api_loot_stats():
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
 _DEFAULT_WINE_SETTINGS = {"enabled": True, "thresholdHours": 12, "targetHours": 48,
                           "donorReserveHours": 96,
-                          # P11.10: reserve trade ships for wine against the farm
-                          "reserveShipsFromFarm": True, "reserveBelowHours": 12,
-                          "reserveShips": 6}
+                          # P11.10: always keep N trade ships free for wine (out of farm reach)
+                          "reserveShipsFromFarm": True, "reserveShips": 5}
 
 
 @app.route("/api/transport/wine")
@@ -1631,8 +1630,7 @@ def api_wine_post():
     s["targetHours"]    = max(s["thresholdHours"], min(336, int(data.get("targetHours", 48))))
     s["donorReserveHours"] = max(s["targetHours"], min(720, int(data.get("donorReserveHours", 96))))
     s["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
-    s["reserveBelowHours"] = max(1, min(336, int(data.get("reserveBelowHours", 12))))
-    s["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 6))))
+    s["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 5))))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(WINE_SETTINGS_PATH, "w") as f:
         json.dump(s, f, indent=2)

@@ -38,7 +38,6 @@ interface WineSettings {
   targetHours:    number
   donorReserveHours: number
   reserveShipsFromFarm?: boolean
-  reserveBelowHours?:    number
   reserveShips?:         number
 }
 
@@ -655,22 +654,11 @@ export function TransportTab() {
                   <div className="grid grid-cols-2 gap-3 max-w-md">
                     <div>
                       <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
-                        {t('wine_reserve_below')}
-                      </label>
-                      <input
-                        type="number" min={1} max={336}
-                        value={wine.reserveBelowHours ?? 12}
-                        onChange={e => setWine({ ...wine, reserveBelowHours: Math.max(1, Number(e.target.value)) })}
-                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
                         {t('wine_reserve_ships')}
                       </label>
                       <input
                         type="number" min={0} max={100}
-                        value={wine.reserveShips ?? 6}
+                        value={wine.reserveShips ?? 5}
                         onChange={e => setWine({ ...wine, reserveShips: Math.max(0, Number(e.target.value)) })}
                         className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                       />

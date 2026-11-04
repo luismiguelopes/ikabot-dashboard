@@ -652,9 +652,10 @@ Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizad
     nenhum consegue navios enquanto o farm os agarra assim que regressam. Só saiu via **freighter**
     (pool separado que o farm não usa).
   - **Implementado**:
-    - `transport_manager.wine_ship_reserve()` — quando QUALQUER cidade cai abaixo de
-      `reserveBelowHours` (default 12h; ou já está seca), devolve `reserveShips` (default 6) navios
-      a reservar para o vinho. Lê só JSON local (sem HTTP), barato de chamar no caminho do farm.
+    - `transport_manager.wine_ship_reserve()` — **piso permanente** (decisão do utilizador
+      2026-11-04, não condicional à autonomia): reserva sempre `reserveShips` (default **5**) navios
+      de comércio para o vinho, fora do alcance do farm. O farm continua a usar tudo acima do piso.
+      Barato de chamar no caminho do farm (sem HTTP).
     - Os ataques do farm levam a flag `respectWineReserve`; `_dispatch_attack` consulta a reserva e
       passa-a a `_cap_to_available_ships(..., reserve=N)`, que cede N navios ao vinho. Se a reserva
       consumir tudo, a pilhagem devolve `_DEFER` (reagenda limpo, sem contar como falha). Ataques

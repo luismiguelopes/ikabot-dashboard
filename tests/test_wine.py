@@ -132,40 +132,31 @@ def test_below_floor_city_never_lends(monkeypatch, tmp_path):
     assert sent == []
 
 
-# ── P11.10 wine ship reserve (held against the farm) ────────────────────────────
+# ── P11.10 wine ship reserve: a permanent floor held against the farm ───────────
 
-def _reserve(monkeypatch, resources, settings=None):
-    import queue_processor as qp
+def _reserve(monkeypatch, settings=None):
     st = dict(tm._DEFAULT_WINE_SETTINGS)
     st.update(settings or {})
     monkeypatch.setattr(tm, "get_wine_settings", lambda: st)
-    monkeypatch.setattr(qp, "_load_resources_json", lambda: resources)
     return tm.wine_ship_reserve()
 
 
-def test_wine_reserve_bites_when_city_low(monkeypatch):
-    """A city whose runway is under reserveBelowHours → the configured ships are held for wine."""
-    resources = {"DeathCrow": _city(272, 272 * 2),   # ~2h runway (the real incident)
-                 "Safe": _city(100, 100 * 500)}       # 500h → comfortable
-    assert _reserve(monkeypatch, resources, {"reserveBelowHours": 12, "reserveShips": 6}) == 6
+def test_wine_reserve_default_floor(monkeypatch):
+    """The reserve is a permanent floor: the default keeps 5 trade ships free for wine."""
+    assert _reserve(monkeypatch) == 5
 
 
-def test_wine_reserve_zero_when_all_comfortable(monkeypatch):
-    """No city below the threshold → no reserve, the farm keeps every ship."""
-    resources = {"A": _city(100, 100 * 500), "B": _city(80, 80 * 300)}
-    assert _reserve(monkeypatch, resources, {"reserveBelowHours": 12, "reserveShips": 6}) == 0
+def test_wine_reserve_always_on_regardless_of_runway(monkeypatch):
+    """Unconditional: the floor holds even when every city is comfortable (the farm still uses
+    everything above it)."""
+    assert _reserve(monkeypatch, {"reserveShips": 7}) == 7
 
 
 def test_wine_reserve_off_switch(monkeypatch):
-    """reserveShipsFromFarm=False disables the reserve even with a starving city."""
-    resources = {"DeathCrow": _city(272, 272 * 2)}
-    assert _reserve(monkeypatch, resources,
-                    {"reserveShipsFromFarm": False, "reserveShips": 6}) == 0
+    """reserveShipsFromFarm=False disables the reserve entirely → the farm keeps every ship."""
+    assert _reserve(monkeypatch, {"reserveShipsFromFarm": False, "reserveShips": 5}) == 0
 
 
-def test_wine_reserve_catches_dry_city(monkeypatch):
-    """A city that has already run completely dry (cons 0, stock 0, runway -1) still triggers
-    the reserve — the plain runway test would miss it (runway -1 is not < threshold)."""
-    dry = {"Wine": 0, "wineConsumptionPerHour": 0, "wineProductionPerHour": 0, "wineRunsOutIn": -1}
-    resources = {"Dry": dry, "Safe": _city(100, 100 * 500)}
-    assert _reserve(monkeypatch, resources, {"reserveShips": 4}) == 4
+def test_wine_reserve_zero_count(monkeypatch):
+    """reserveShips=0 means no floor even with the switch on."""
+    assert _reserve(monkeypatch, {"reserveShips": 0}) == 0
