@@ -505,9 +505,8 @@ abertos nem trabalho de código pendente. O que resta é dívida de manutenibili
 e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
 
 ### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
-- [ ] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** (~36× nos logs). O pre-check já
-      envia com os que houver (F11), mas pedir 10 com 2 disponíveis desperdiça rondas. Decidir:
-      baixar o nº de agentes por omissão **ou** treinar mais espiões nas cidades de origem.
+- [x] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** ✅ 2026-11-04 — o utilizador baixou
+      o nº de agentes por omissão para **4** na UI (farm settings `spyAgents`). Resolvido.
 - [ ] **P11.2 Clusters "possivelmente capturado"** (HEFESTO×3, Jaka, Triplex do Lula). Contra-
       espionagem do alvo. Decidir por alvo se vale continuar a espiar (queima espiões) ou marcar
       ignorar.
@@ -558,6 +557,20 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
   - Testes: `test_spying_target_does_not_block_ready_raid`, `test_second_slot_opens_with_enough_ships`,
     `test_second_slot_blocked_below_ship_floor`, `test_max_two_concurrent_raids`,
     `test_one_launch_per_cycle`, `test_scheduler_withholds_raid_wake_when_slots_full`.
+
+- [~] **P11.11 Capar a raid do farm para não monopolizar a frota** — DESCARTADO (2026-11-04,
+      decisão do utilizador). A ideia (capar uma raid para forçar farming paralelo) é o **oposto**
+      do desejado: o utilizador quer que o alvo prioritário leve a **frota toda** vaga após vaga
+      até secar, e só paralelizar um 2º alvo quando o prioritário estiver praticamente drenado.
+      **O comportamento actual já faz isto** por construção: `transporters = ceil(saque/cap)`
+      dimensiona a raid para carregar TODO o saque, logo só sobram navios livres (→ 2º slot) quando
+      o armazém do prioritário cabe numa só vaga com ≥50 navios de folga — i.e. quando essa vaga o
+      **esvazia**. Um prioritário rico pede ≥ frota inteira → 0 livres → zero paralelismo. Nada a
+      fazer; capar partiria exactamente a estratégia pretendida. (Reserva de vinho P11.10 à parte.)
+
+- [x] **P11.10×P11.9 Reserva de vinho vs. decisão de paralelismo** ✅ 2026-11-04 — a decisão de
+      abrir o 2º slot passou a descontar a reserva de vinho dos navios livres (`_free_ships_once`
+      reserve-aware), para o farm nunca paralelizar sobre os barcos reservados ao vinho.
 
 ### C — UX
 - [ ] **P11.6 Linha de alvo unificada** (Fase 3 do `frontend/FEATURES.md`). Fundir o pipeline do
