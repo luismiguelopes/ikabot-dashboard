@@ -210,6 +210,110 @@ def test_farm_readd_keeps_measured_stats(monkeypatch, tmp_path):
     assert t["last_troop_journey"] == 1234
 
 
+def _add_with_reports(c, tmp_path, missions):
+    (tmp_path / "spy_missions.json").write_text(json.dumps({"missions": missions}))
+    (tmp_path / "own_cities.json").write_text(json.dumps([{"cityId": 1, "x": 50, "y": 50}]))
+    return c.post("/api/farm/add", json={"targetCityId": "900", "targetCityName": "T",
+                                         "islandX": 53, "islandY": 46})
+
+
+def test_farm_add_seeds_clean_port_from_empty_garrison(monkeypatch, tmp_path):
+    """A successful garrison read with NO troops + a known loot figure → the target is sealed
+    as fleet-free (is_fleet_target=0, last_enemy_ships=0) and marked scouted at the real report
+    time, so the farm raids directly instead of re-reading intel we already hold."""
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 300000}, "reportedAt": 100}},
+        {"targetCityId": "900", "garrisonExecutedAt": 200,
+         "garrisonResult": {"success": True, "troops": {}, "reportedAt": 200}},
+    ])
+    t = db_manager.farm_get("900")
+    assert t["last_loot"] == 300000
+    assert t["is_fleet_target"] == 0
+    assert t["last_enemy_ships"] == 0
+    assert t["last_spy_at"] == 100            # oldest intel relied on (warehouse 100 < garrison 200)
+
+
+def test_farm_add_land_only_garrison_is_clean(monkeypatch, tmp_path):
+    """Land units alone are not a fleet — a garrison of hoplites/lancers still seeds clean
+    (the farm's safety model gates on ships, not land defenders)."""
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 90000}, "reportedAt": 100}},
+        {"targetCityId": "900", "garrisonExecutedAt": 150,
+         "garrisonResult": {"success": True,
+                            "troops": {"Hoplita": 300, "Lanceiro": 500}, "reportedAt": 150}},
+    ])
+    t = db_manager.farm_get("900")
+    assert t["is_fleet_target"] == 0 and t["last_spy_at"] == 100
+
+
+def test_farm_add_garrison_with_ship_stays_fleet_target(monkeypatch, tmp_path):
+    """Any ship in the garrison (even a flee-only lancha) leaves the target to the farm's own
+    scout — last_spy_at stays 0 so it is treated as first contact and re-scouted."""
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 90000}, "reportedAt": 100}},
+        {"targetCityId": "900", "garrisonExecutedAt": 150,
+         "garrisonResult": {"success": True,
+                            "troops": {"Lancha rápida": 2}, "reportedAt": 150}},
+    ])
+    assert db_manager.farm_get("900")["last_spy_at"] == 0
+
+
+def test_farm_add_combat_ship_not_seeded(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 90000}, "reportedAt": 100}},
+        {"targetCityId": "900", "garrisonExecutedAt": 150,
+         "garrisonResult": {"success": True,
+                            "troops": {"Trirreme": 3, "Hoplita": 10}, "reportedAt": 150}},
+    ])
+    assert db_manager.farm_get("900")["last_spy_at"] == 0
+
+
+def test_farm_add_failed_garrison_not_seeded(monkeypatch, tmp_path):
+    """A rejected garrison scout (success=False) carries no fleet intel → not sealed clean."""
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "state": "DONE",
+         "result": {"resources": {"wood": 90000}, "reportedAt": 100}},
+        {"targetCityId": "900", "garrisonExecutedAt": 150,
+         "garrisonResult": {"success": False, "troops": {}, "reportedAt": 150}},
+    ])
+    assert db_manager.farm_get("900")["last_spy_at"] == 0
+
+
+def test_farm_add_clean_garrison_without_loot_not_seeded(monkeypatch, tmp_path):
+    """No loot figure yet → the farm still needs a warehouse scout, so it is not sealed."""
+    c = _client(monkeypatch, tmp_path)
+    _add_with_reports(c, tmp_path, [
+        {"targetCityId": "900", "garrisonExecutedAt": 150,
+         "garrisonResult": {"success": True, "troops": {}, "reportedAt": 150}},
+    ])
+    assert db_manager.farm_get("900")["last_spy_at"] == 0
+
+
+def test_seed_naval_keywords_mirror_attack_manager():
+    """The gui-side naval keyword list must stay identical to attack_manager's source of
+    truth (it cannot import that bot module), so parse the set straight from the source."""
+    import ast
+    src = os.path.join(_ROOT, "bot", "attack_manager.py")
+    with open(src) as f:
+        tree = ast.parse(f.read())
+    naval = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "_NAVAL_UNIT_NAMES" for t in node.targets)):
+            naval = ast.literal_eval(node.value)
+    assert naval is not None, "_NAVAL_UNIT_NAMES not found in attack_manager.py"
+    assert set(flask_app._SEED_NAVAL_KEYWORDS) == set(naval)
+
+
 # ── Dashboard authentication (B1) ─────────────────────────────────────────────
 def test_auth_disabled_is_open(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)

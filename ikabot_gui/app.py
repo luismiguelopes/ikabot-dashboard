@@ -1252,34 +1252,79 @@ def api_farm_army_set():
                      "earlyRespyEnabled") if k in s}})
 
 
+# Naval-unit keywords (accent-stripped, lowercase) — a MIRROR of
+# attack_manager._NAVAL_UNIT_NAMES, which is the source of truth. attack_manager is a bot
+# module and is NOT mounted in the gui container, so the add-to-farm seed (Flask side) keeps
+# its own copy; test_farm_seed_garrison asserts the two lists stay identical. Each keyword
+# matches ONLY a naval unit in the mixed land+fleet garrison dict (e.g. "ariete a vapor" not
+# "ariete", "porta-bal" not "balao").
+_SEED_NAVAL_KEYWORDS = (
+    "chamas", "ariete a vapor", "trirreme", "balista", "barco catapulta",
+    "barco morteiro", "foguetes", "submergivel", "lancha", "porta-bal", "reparador",
+)
+
+
+def _seed_garrison_fleet_count(troops):
+    """Count naval units in a garrison dict {unit_name: count}. 0 = fleet-free port (safe for
+    a direct land raid); >0 = ships present → still a fleet target that needs its own scout +
+    blockade. Mirrors attack_manager._enemy_fleet_count; land units are ignored."""
+    if not troops:
+        return 0
+    import unicodedata
+    total = 0
+    for name, count in troops.items():
+        norm = ''.join(c for c in unicodedata.normalize('NFD', str(name).lower())
+                       if unicodedata.category(c) != 'Mn')
+        if any(k in norm for k in _SEED_NAVAL_KEYWORDS):
+            total += int(count or 0)
+    return total
+
+
 def _seed_farm_target_intel(city_id, island_x, island_y):
     """A freshly added farm target already has intel we can rank it by: the latest DONE spy
     report (MundoPage) gives the scouted warehouse total, and the island coordinates give a
     troop-travel estimate (closest own city, same formula as attack_manager, adjusted by the
     P6.7 calibration ratio). Without this every new target scores 0 and queues LAST even when
     its report says it's the richest — the head would only reorder after draining everything
-    above it. Only fills fields still at 0: re-adding never overwrites measured stats."""
+    above it.
+
+    It also seeds the CLEAN-PORT confirmation (is_fleet_target=0 + last_spy_at +
+    last_enemy_ships=0) from a recent SUCCESSFUL garrison report that shows no naval units, so
+    a target we already scouted safe raids directly instead of re-reading intel we hold. A
+    garrison with any ship, or a failed/absent garrison read, is left to the farm's own scout
+    (fleet timing matters there). last_spy_at is seeded to the REAL report time, so the farm's
+    own freshness guard (spyFreshnessHours) still forces a re-scout once that intel ages out.
+    Only fills fields still at 0: re-adding never overwrites measured stats/runtime state."""
     try:
         t = _db.farm_get(str(city_id))
         if not t:
             return
-        updates = {}
-        if not int(t.get("last_loot", 0) or 0):
-            best_ts, loot = -1, 0
-            try:
-                with open(SPY_MISSIONS_PATH) as f:
-                    for m in json.load(f).get("missions", []):
-                        if str(m.get("targetCityId", "")) != str(city_id) or m.get("state") != "DONE":
-                            continue
+        # One pass over the mission store: newest DONE warehouse (loot) + newest SUCCESSFUL
+        # garrison (troops) for this target.
+        best_wh  = (-1, 0)      # (reportedAt, loot)
+        best_gar = (-1, None)   # (reportedAt, troops) — successful reads only
+        try:
+            with open(SPY_MISSIONS_PATH) as f:
+                for m in json.load(f).get("missions", []):
+                    if str(m.get("targetCityId", "")) != str(city_id):
+                        continue
+                    if m.get("state") == "DONE":
                         res = (m.get("result") or {}).get("resources") or {}
                         ts  = int((m.get("result") or {}).get("reportedAt", 0)
                                   or m.get("executedAt", 0) or 0)
-                        if res and ts >= best_ts:
-                            best_ts, loot = ts, sum(int(v or 0) for v in res.values())
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-            if loot > 0:
-                updates["last_loot"] = loot
+                        if res and ts >= best_wh[0]:
+                            best_wh = (ts, sum(int(v or 0) for v in res.values()))
+                    g = m.get("garrisonResult") or {}
+                    if g.get("success") and ("troops" in g):
+                        ts = int(g.get("reportedAt", 0) or m.get("garrisonExecutedAt", 0) or 0)
+                        if ts >= best_gar[0]:
+                            best_gar = (ts, g.get("troops") or {})
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+        updates = {}
+        if not int(t.get("last_loot", 0) or 0) and best_wh[1] > 0:
+            updates["last_loot"] = best_wh[1]
         if not int(t.get("last_troop_journey", 0) or 0) and island_x and island_y:
             try:
                 with open(os.path.join(LOGS_DIR, "own_cities.json")) as f:
@@ -1297,6 +1342,18 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
                     updates["last_troop_journey"] = max(600, int(est * ratio))
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
+        # Clean-port seed: a confirmed fleet-free garrison + a known loot figure means we
+        # already hold everything the farm would scout for → let it raid directly. Requires a
+        # SUCCESSFUL garrison read with zero naval units; any ship leaves it a fleet target.
+        loot_known = (best_wh[1] > 0) or (int(t.get("last_loot", 0) or 0) > 0)
+        if (not int(t.get("last_spy_at", 0) or 0)
+                and best_gar[0] >= 0
+                and loot_known
+                and _seed_garrison_fleet_count(best_gar[1]) == 0):
+            seen = [best_gar[0]] + ([best_wh[0]] if best_wh[0] >= 0 else [])
+            updates["last_spy_at"]      = min(seen)   # oldest intel relied on (freshness guard re-checks)
+            updates["is_fleet_target"]  = 0
+            updates["last_enemy_ships"] = 0
         if updates:
             _db.farm_update(str(city_id), updates)
     except Exception:
