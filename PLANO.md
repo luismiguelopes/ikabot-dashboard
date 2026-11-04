@@ -735,3 +735,48 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
 - **Validação ao vivo**: o blockade dispara naturalmente quando os alvos seguros secarem
   (prioridade); o diagnóstico de "ids ausentes do form" (em `_send_fleet_blockade`) apanha o
   primeiro real para confirmação de 100%.
+
+---
+
+## P12 — Pós-reconciliação (2026-11-04)
+
+### Feito
+
+- [x] **P12.1 Seed de porto-limpo ao adicionar alvo ao farm** ✅ 2026-11-04
+      (`farm-add-seed-clean-port`, commit `0ee238e`). O `_seed_farm_target_intel` (em `app.py`,
+      chamado por `/api/farm/add`) já semeava `last_loot` + `last_troop_journey` dos relatórios
+      existentes (ranking). Passou a semear também a **confirmação de porto-limpo**
+      (`is_fleet_target=0`, `last_enemy_ships=0`, `last_spy_at` = hora REAL do relatório) quando há
+      um relatório de **guarnição `success=True` com 0 navios** (`_seed_garrison_fleet_count`) **e**
+      um saque conhecido → o alvo seguro **ataca direto, sem re-espiar** intel que já temos. NÃO sela
+      se houver qualquer navio (fica fleet-target — o timing da frota importa), se o scout de
+      guarnição falhou, ou se não há saque. Como `last_spy_at` leva a hora real, o guarda de frescura
+      (`_spy_stale`, 24h) re-espia sozinho quando a intel envelhece. Motivou-o o utilizador: re-espiar
+      um alvo seguro de que já temos relatório fresco é desperdício. ⚠️ `attack_manager` (fonte de
+      `_NAVAL_UNIT_NAMES`) não está montado no gui → `app.py` tem cópia `_SEED_NAVAL_KEYWORDS`, com
+      teste-espelho. Só o caminho UI/API semeia; `db.farm_add` cru não. **350 testes.**
+
+### Por fazer
+
+- [ ] **F14 — Construção autónoma de espiões** (pedido do utilizador 2026-11-04: *"o bot construir
+      os espiões sozinho isso era excelente"*). **Alta prioridade / valor; esforço médio-alto.**
+      - **Hoje**: o bot **só despacha/recolhe** espiões — **não os constrói** (confirmado no código:
+        não há função de recrutamento; `spy_counts.py`/`empire_collector.py` só *lêem* a casa de
+        espionagem). O treino dos ~179 "em treino" vistos em produção é **manual do utilizador**.
+      - **Objectivo**: o bot mantém um **alvo de espiões por cidade** (p.ex. ≥N em defesa), e recruta
+        automaticamente para lá chegar, consumindo o cristal que já garantimos em cada cidade (o
+        trabalho dos transportes de cristal foi precisamente para isto).
+      - **A descobrir/definir (pré-requisitos antes de escrever código)**:
+        1. **Endpoint do jogo** para recrutar espiões (acção na Casa de Espionagem / Esconderijo) —
+           auto-descobrir pelo formulário, como se fez para `sendArmyPlunderSea`/`sendFleetOnBlockade`
+           (nunca hardcode; logar os inputs). `type=10/11` feedback.
+        2. **Custo e travões** — cristal (glass) + ouro + tempo; piso de ouro, cap por ciclo, alvo
+           por cidade (settings + UI, como o comprador de vinho). Nunca esgotar recursos de guerra.
+        3. **Anti-detecção** — recrutar dentro das horas activas, com os delays da sessão *throttled*;
+           não fazer bursts.
+        4. **Capacidade** — a Casa de Espionagem tem limite por nível; respeitar e, opcionalmente,
+           ligar à fila de construção (subir o edifício quando o limite trava o alvo).
+      - **Interacções**: fecha o ciclo com os transportes de cristal (F9/manual) e com o farm (mais
+        espiões = menos falhas de "insuficientes" e mais presença estacionada contra contra-espionagem).
+      - **Validação live obrigatória** (gasta recursos): primeiro em dry-run/preview, depois 1 recruta
+        supervisionado, como todas as acções que mexem no jogo.
