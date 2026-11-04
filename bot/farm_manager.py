@@ -1024,13 +1024,27 @@ def process_farm_targets(session, in_active_hours=True):
     #    requires the ship floor before opening the 2nd slot. It is bumped as we launch this cycle.
     #  • _launch_budget caps NEW game dispatches (attack enqueue OR spy launch) to one per cycle,
     #    so a 2nd parallel raid opens on the NEXT wake, never in the same burst (anti-detection).
-    #  • _free_ships is read at most once per cycle (an HTTP getAvailableShips), lazily.
+    #  • _free_ships is read at most once per cycle (an HTTP getAvailableShips), lazily, and the
+    #    wine reserve (P11.10) is subtracted from it: ships held for wine are NOT the farm's to
+    #    count. So the parallel-slot floor (≥50) and the "0 ships" check both see only the ships
+    #    the farm may actually use — a 2nd parallel raid never opens on, nor dispatches into, the
+    #    reserved ships (the dispatch-time cap enforces the same floor as a second line of defence).
     _state = {"attacking": sum(1 for x in targets if x.get("state") == "ATTACKING"),
-              "budget": _MAX_LAUNCHES_PER_CYCLE, "free_ships": None}
+              "budget": _MAX_LAUNCHES_PER_CYCLE, "free_ships": None, "wine_reserve": None}
+
+    def _wine_reserve_once():
+        if _state["wine_reserve"] is None:
+            try:
+                from transport_manager import wine_ship_reserve
+                _state["wine_reserve"] = max(0, int(wine_ship_reserve()))
+            except Exception:
+                _state["wine_reserve"] = 0
+        return _state["wine_reserve"]
 
     def _free_ships_once():
+        """Trade ships the FARM may use this cycle = live free ships minus the wine reserve."""
         if _state["free_ships"] is None:
-            _state["free_ships"] = _free_ships(session)
+            _state["free_ships"] = max(0, _free_ships(session) - _wine_reserve_once())
         return _state["free_ships"]
 
     def _can_dispatch():
@@ -1363,8 +1377,9 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
 
             # Don't launch while the previous raid's ships are still returning — keep
-            # the fresh intel and retry directly in a few minutes once they're back.
-            if enemy_ships == 0 and _free_ships(session) < 1:
+            # the fresh intel and retry directly in a few minutes once they're back. Uses the
+            # reserve-aware count (P11.10): only the wine reserve free → nothing for the farm.
+            if enemy_ships == 0 and _free_ships_once() < 1:
                 eta = _ships_back_eta(t, now, session, first_city_id)
                 farm_update(tid, {"state": "IDLE", "next_run_at": eta,
                                   "last_loot": loot, "last_enemy_ships": enemy_ships,

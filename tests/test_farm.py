@@ -84,6 +84,10 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "missions.json"))  # isolate saves
     monkeypatch.setattr(fm, "MOVEMENTS_PATH", str(tmp_path / "movements.json"))  # isolate
     monkeypatch.setattr(fm, "_free_ships", lambda s: 50)  # ships available by default
+    # Wine ship reserve off by default here — tests that exercise the farm↔wine ship
+    # interaction patch transport_manager.wine_ship_reserve themselves.
+    import transport_manager as tm
+    monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 0, raising=False)
     # Real-time form fetches / movement refresh: stub so attacks don't hit the network or sleep
     monkeypatch.setattr(am, "fetch_troop_journey", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(am, "fetch_fleet_journey", lambda *a, **k: None, raising=False)
@@ -1329,6 +1333,52 @@ def test_second_slot_blocked_below_ship_floor(monkeypatch, tmp_path):
     t = db_manager.farm_get("2")
     assert t["state"] == "IDLE"
     assert t["next_run_at"] >= now + fm._PARALLEL_RETRY_BACKOFF - 5   # deferred, not spinning
+
+
+def test_wine_reserve_blocks_parallel_slot_at_floor(monkeypatch, tmp_path):
+    """P11.10×P11.9: the parallel-slot decision must subtract the wine reserve FIRST. One raid in
+    flight, exactly _PARALLEL_SHIP_FLOOR trade ships free, but 5 are reserved for wine → only 45
+    usable < floor → the 2nd slot does NOT open (the farm must never open a parallel raid on the
+    ships held for wine)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "EmVoo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("1", {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                 "last_attack_at": now})
+    _add_safe_due("2", "Paralelo")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: fm._PARALLEL_SHIP_FLOOR)   # 50 raw
+    import transport_manager as tm
+    monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 5)                     # 50 - 5 = 45 < 50
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                        # reserve kept the 2nd slot shut
+    assert db_manager.farm_get("2")["state"] == "IDLE"
+
+
+def test_wine_reserve_lets_parallel_open_above_floor(monkeypatch, tmp_path):
+    """With floor + reserve free (55 raw, 5 reserved → 50 usable == floor), the 2nd slot opens:
+    the reserve is honoured without starving parallel farming when there genuinely are spare ships."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "EmVoo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000})
+    db_manager.farm_update("1", {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                 "last_attack_at": now})
+    _add_safe_due("2", "Paralelo")
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: fm._PARALLEL_SHIP_FLOOR + 5)   # 55 raw
+    import transport_manager as tm
+    monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 5)                         # 55 - 5 = 50
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]
+    assert db_manager.farm_get("2")["state"] == "ATTACKING"
 
 
 def test_max_two_concurrent_raids(monkeypatch, tmp_path):
