@@ -29,29 +29,29 @@ services:
       - .env
     volumes:
       # Deterministic entrypoint — spawns empireFunction by reference, then menu
-      - ./bot_launcher.py:/ikabot/bot_launcher.py
+      - ./bot/bot_launcher.py:/ikabot/bot_launcher.py
       # Main loop — thin orchestrator
-      - ./empireFunction.py:/ikabot/ikabot/function/empireFunction.py
+      - ./bot/empireFunction.py:/ikabot/ikabot/function/empireFunction.py
       # Módulos de suporte injectados na mesma pasta para importação relativa
-      - ./empire_utils.py:/ikabot/ikabot/function/empire_utils.py
-      - ./empire_collector.py:/ikabot/ikabot/function/empire_collector.py
-      - ./costs_collector.py:/ikabot/ikabot/function/costs_collector.py
-      - ./scan_collector.py:/ikabot/ikabot/function/scan_collector.py
-      - ./queue_processor.py:/ikabot/ikabot/function/queue_processor.py
-      - ./db_manager.py:/ikabot/ikabot/function/db_manager.py
-      - ./telegram_notifier.py:/ikabot/ikabot/function/telegram_notifier.py
-      - ./espionage_manager.py:/ikabot/ikabot/function/espionage_manager.py
-      - ./espionage_parsers.py:/ikabot/ikabot/function/espionage_parsers.py
-      - ./spy_counts.py:/ikabot/ikabot/function/spy_counts.py
-      - ./attack_manager.py:/ikabot/ikabot/function/attack_manager.py
-      - ./transport_manager.py:/ikabot/ikabot/function/transport_manager.py
-      - ./farm_manager.py:/ikabot/ikabot/function/farm_manager.py
+      - ./bot/empire_utils.py:/ikabot/ikabot/function/empire_utils.py
+      - ./bot/empire_collector.py:/ikabot/ikabot/function/empire_collector.py
+      - ./bot/costs_collector.py:/ikabot/ikabot/function/costs_collector.py
+      - ./bot/scan_collector.py:/ikabot/ikabot/function/scan_collector.py
+      - ./bot/queue_processor.py:/ikabot/ikabot/function/queue_processor.py
+      - ./bot/db_manager.py:/ikabot/ikabot/function/db_manager.py
+      - ./bot/telegram_notifier.py:/ikabot/ikabot/function/telegram_notifier.py
+      - ./bot/espionage_manager.py:/ikabot/ikabot/function/espionage_manager.py
+      - ./bot/espionage_parsers.py:/ikabot/ikabot/function/espionage_parsers.py
+      - ./bot/spy_counts.py:/ikabot/ikabot/function/spy_counts.py
+      - ./bot/attack_manager.py:/ikabot/ikabot/function/attack_manager.py
+      - ./bot/transport_manager.py:/ikabot/ikabot/function/transport_manager.py
+      - ./bot/farm_manager.py:/ikabot/ikabot/function/farm_manager.py
       # Surgical overrides — bot_launcher execs these INTO the live stock modules
       # (planRoutes: human delays; loadCustomModule: Add/Remove menu) instead of
       # shadowing whole stock files, so upstream additions can't break our imports.
-      - ./planroutes_overrides.py:/ikabot/planroutes_overrides.py
-      - ./loadcustommodule_overrides.py:/ikabot/loadcustommodule_overrides.py
-      - ./healthcheck.py:/ikabot/healthcheck.py
+      - ./bot/planroutes_overrides.py:/ikabot/planroutes_overrides.py
+      - ./bot/loadcustommodule_overrides.py:/ikabot/loadcustommodule_overrides.py
+      - ./bot/healthcheck.py:/ikabot/healthcheck.py
       # Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/
       # Sessão persistente: ~/.ikabot guarda os cookies de login (7.6.1). Num volume,
@@ -111,8 +111,8 @@ services:
     volumes:
       # Pega na pasta inteira ./ikabot_gui que está ao lado do compose e mete no contentor
       - ./ikabot_gui:/gui
-      - ./db_manager.py:/gui/db_manager.py
-      - ./telegram_notifier.py:/gui/telegram_notifier.py
+      - ./bot/db_manager.py:/gui/db_manager.py
+      - ./bot/telegram_notifier.py:/gui/telegram_notifier.py
       # P6.11: build de produção do frontend, servido pelo Flask (era um container Vite)
       # Rebuild após mudanças no frontend: cd frontend && npx vite build
       - ./frontend/dist:/gui/dist:ro

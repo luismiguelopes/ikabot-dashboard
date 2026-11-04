@@ -277,24 +277,25 @@ All persistent data is stored in two places on the shared volume (`/tmp/ikalogs/
 ```
 .
 ├── docker-compose.yml
-├── bot_launcher.py          # Deterministic startup: login, launch empireFunction by reference, inject surgical patches, keep the menu on PID1
-├── empireFunction.py        # Main loop orchestrator: full cycle → queue → espionage → farm → scans → smart_sleep
-├── empire_utils.py          # Config/env, logger + i18n (lm), ThrottledSession, with_retry, is_paused, config validation, downtime accounting
-├── empire_collector.py      # City data collection, movements fetch, military (troops + fleet) every 8h
-├── costs_collector.py       # Building costs collection (every 3 days)
-├── scan_collector.py        # Incremental world scan (shallow quadrants + deep per-island checkpoint)
-├── queue_processor.py       # Building queue, resource transports, smart_sleep (processes spy/recall/attack/farm/scan queues)
-├── farm_manager.py          # Automated farming (F4): per-target state machine, ship reserve, drain loop (F13)
-├── espionage_manager.py     # Spy state machine, recalls, report parsing, spy-count fetch, mission retention
-├── espionage_parsers.py     # Pure HTML parsers extracted from espionage_manager
-├── attack_manager.py        # Attack queue + senders (plunder/blockade/deploy) and shared targeting helpers
-├── transport_manager.py     # Scheduled transports, consolidation, wine balancer (F9), wine market buyer (F10)
-├── db_manager.py            # SQLite layer: schema init, CRUD, migrations, shared_queue, daily online backup
-├── planroutes_overrides.py  # Surgical runtime patch for planRoutes (anti-detection delays) — injected, not shadowed
-├── loadcustommodule_overrides.py  # Surgical runtime patch for loadCustomModule
-├── telegram_notifier.py     # Telegram Bot API notifications
-├── healthcheck.py           # Freeze-aware heartbeat healthcheck (used by compose + autoheal)
-├── tests/                   # pytest — 305 tests across 24 files (db, queues, parsers, spy state machine,
+├── bot/                     # Custom bot modules — bind-mounted into the ikabot container
+│   ├── bot_launcher.py      # Deterministic startup: login, launch empireFunction by reference, inject surgical patches, keep the menu on PID1
+│   ├── empireFunction.py    # Main loop orchestrator: full cycle → queue → espionage → farm → scans → smart_sleep
+│   ├── empire_utils.py      # Config/env, logger + i18n (lm), ThrottledSession, with_retry, is_paused, config validation, downtime accounting
+│   ├── empire_collector.py  # City data collection, movements fetch, military (troops + fleet) every 8h
+│   ├── costs_collector.py   # Building costs collection (every 3 days)
+│   ├── scan_collector.py    # Incremental world scan (shallow quadrants + deep per-island checkpoint)
+│   ├── queue_processor.py   # Building queue, resource transports, smart_sleep (processes spy/recall/attack/farm/scan queues)
+│   ├── farm_manager.py      # Automated farming (F4): per-target state machine, ship reserve, drain loop (F13)
+│   ├── espionage_manager.py # Spy state machine, recalls, report parsing, spy-count fetch, mission retention
+│   ├── espionage_parsers.py # Pure HTML parsers extracted from espionage_manager
+│   ├── attack_manager.py    # Attack queue + senders (plunder/blockade/deploy) and shared targeting helpers
+│   ├── transport_manager.py # Scheduled transports, consolidation, wine balancer (F9), wine market buyer (F10)
+│   ├── db_manager.py        # SQLite layer: schema init, CRUD, migrations, shared_queue, daily online backup
+│   ├── planroutes_overrides.py       # Surgical runtime patch for planRoutes (anti-detection delays) — injected, not shadowed
+│   ├── loadcustommodule_overrides.py # Surgical runtime patch for loadCustomModule
+│   ├── telegram_notifier.py # Telegram Bot API notifications
+│   └── healthcheck.py       # Freeze-aware heartbeat healthcheck (used by compose + autoheal)
+├── tests/                   # pytest — 330 tests across 24 files (db, queues, parsers, spy state machine,
 │                            #   farm/respy/reserve/loot, attack payload golden-files, wine, throttle, health, downtime, Flask API)
 ├── ikabot_gui/
 │   └── app.py               # Flask REST API + SSE stream + serves frontend/dist
