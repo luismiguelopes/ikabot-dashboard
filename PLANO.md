@@ -8,10 +8,11 @@ farm e da espionagem** (fixes de intel obsoleta/rejeitada em alvos de frota, ret
 watchdog de construção, imunidade ao sleep do host; ver secção P10). Bot em produção no
 **ikabot 7.7.2** (pinado por digest `6224352e`), sessão persistente, self-healing e backups activos.
 **305 testes a passar.**
-Trabalho de código: nada pendente. Em aberto só **1 dívida de validação in-game** (precisa de
-sessão supervisionada, não é código): deploy para cidade própria. A reescrita do farm foi
-**validada live de ponta a ponta pelo utilizador (2026-11-04)** — está a funcionar devidamente.
-Auto-attack foi **descontinuado** (P6.2) — ignorar itens antigos que o referem.
+Trabalho de código: nada pendente. **Validação in-game: toda concluída (2026-11-04).** A reescrita
+do farm foi validada live de ponta a ponta pelo utilizador; o deploy para cidade própria estava a
+falhar (bug de formato de id), foi **corrigido (`7b95486`) e confirmado live** — `deployArmy` com
+type=10 (`ataque despachado → Própria (Vampiria)` às 09:53). Auto-attack foi **descontinuado**
+(P6.2) — ignorar itens antigos que o referem.
 
 ---
 
@@ -217,8 +218,8 @@ features.
       `POST /api/military/refresh` (P4.4 ✅).
 - [x] ~~Validar a primeira vaga do auto-attack~~ — OBSOLETO: o auto-attack foi
       descontinuado (P6.2, 2026-07-03). O farm é o único sistema de ataque automático.
-- [ ] Validar deploy para cidade própria (após 1 ciclo do império, para o islandId
-      aparecer no own_cities.json): dispatch com destino "própria" → deployArmy type=10.
+- [x] Validar deploy para cidade própria ✅ 2026-11-04 — `deployArmy` type=10 confirmado live
+      (`ataque despachado → Própria (Vampiria)`), após o fix do formato de id (`7b95486`).
 - [x] Validar in-game toda a reescrita do farm (2026-06): fila pura (drenar 1 alvo),
       flee-fleet bloqueio→tropas (F4.b), ataque-directo + confirmação de inactividade (F4.e).
       ✅ **Validada live de ponta a ponta pelo utilizador (2026-11-04)** — a funcionar devidamente.
@@ -492,7 +493,7 @@ Ordenado por prioridade (risco → conforto). Fonte da verdade viva; ver também
 - [x] **B10 Split do chunk do frontend** ✅ — `manualChunks` (react + chart.js); app 653→314KB.
 
 ### Dívidas de validação in-game *(precisam de sessão supervisionada — não é trabalho de código)*
-- [ ] Deploy para cidade própria (DispatchTab → destino "própria" → deployArmy type=10).
+- [x] Deploy para cidade própria ✅ 2026-11-04 — validado live (type=10) após o fix `7b95486`.
 - [x] Reescrita do farm supervisionada live. ✅ **Validada de ponta a ponta pelo utilizador
       (2026-11-04)** — a funcionar devidamente.
 
@@ -506,9 +507,9 @@ código pendente. O que resta é dívida de manutenibilidade, validação live e
 Ordenado por valor/risco. Nenhum item é urgente.
 
 > **Reconciliação 2026-11-04:** após fechar P11.1/P11.2/P11.5/P11.6/P11.7/P11.10 + self-healing e
-> descartar P11.4/P11.8/P11.11, a suite está em **343 testes**. **Único item aberto:** a validação
-> in-game do deploy para cidade própria (bug corrigido em `7b95486`, a aguardar a retry). Trabalho
-> de código pendente: zero.
+> descartar P11.4/P11.8/P11.11, a suite está em **343 testes**. O deploy para cidade própria (última
+> dívida) foi corrigido (`7b95486`) e **confirmado live (type=10)**. **Pipeline sem itens abertos**;
+> trabalho de código pendente: zero.
 
 ### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
 - [x] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** ✅ 2026-11-04 — o utilizador baixou
@@ -598,13 +599,12 @@ Ordenado por valor/risco. Nenhum item é urgente.
       desatualizado — corrigido.
 
 ### D — Validação in-game *(ver dívidas acima — a mesma lista)*
-- [ ] Deploy para cidade própria — **bug encontrado e corrigido 2026-11-04** (`7b95486`): a 1ª
+- [x] Deploy para cidade própria ✅ 2026-11-04 — **bug encontrado e corrigido** (`7b95486`): a 1ª
       tentativa live falhou com type=11 "Não selecionaste nenhuma unidade" porque o formulário de
       deployment indexa as unidades pelo número puro (`304`) e a UI envia o id CSS (`s304`) — o
       `_send_deploy` punha `cargo_army_304=0` e um `cargo_army_s304` que o jogo ignorava. Fix: emitir
-      os campos sob o id do próprio formulário, casando a contagem através do prefixo `s`. **A
-      aguardar confirmação na retry automática** (item `own`→Vampiria ainda na fila). *(A sessão
-      supervisionada do farm já foi validada — utilizador, 2026-11-04.)*
+      os campos sob o id do próprio formulário, casando a contagem através do prefixo `s`.
+      **Confirmado live:** retry às 09:53 saiu com type=10 (`ataque despachado → Própria (Vampiria)`).
 
 ### E — Farm: afinação de re-scout e intel de frota *(discussão em curso 2026-11-01)*
 
