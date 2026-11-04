@@ -527,8 +527,12 @@ e afinação operacional. Ordenado por valor/risco. Nenhum item é urgente.
       2026-09). Mudou o contexto: agora há `test_espionage_state_machine.py` (rede de segurança) e
       o caminho de frota já corre live. Uma extracção mínima (contagem de espiões / fetch de counts)
       é agora mais segura do que era. Continua opcional — só se o módulo voltar a doer.
-- [ ] **P11.5 Split do `DispatchTab.tsx`** (1229 linhas, maior componente). Dispatch manual + fila
-      + histórico + saque + farm num só ficheiro. Extrair sub-painéis como já se fez na MundoPage.
+- [x] **P11.5 Split do `DispatchTab.tsx`** ✅ 2026-10-30 (`2d33c62`) — o monólito de 1229 linhas
+      foi partido: `DispatchTab.tsx` é agora um router fino (10 linhas) que despacha para
+      `dispatch/DispatchPanel.tsx` (dispatch manual + fila), `dispatch/HistoryPanel.tsx` (histórico)
+      e `dispatch/FarmSettings.tsx`, com helpers/tipos comuns em `dispatch/shared.ts` — como se fez
+      na MundoPage. O split na auditoria (2026-10-29) listou-o a 1229 linhas; foi feito no dia
+      seguinte e só agora fechado no plano.
 
 - [x] **P11.9 Farming paralelo — usar os barcos livres no próximo alvo** (pedido do utilizador
       2026-11-02; **feito 2026-11-02**). Uma vaga dimensiona os barcos ao saque
