@@ -512,9 +512,12 @@ Ordenado por valor/risco. Nenhum item é urgente.
 ### A — Operacional / estratégia *(config, não código — decisão do utilizador)*
 - [x] **P11.1 "Espiões insuficientes: 2 na cidade, 10 pedidos"** ✅ 2026-11-04 — o utilizador baixou
       o nº de agentes por omissão para **4** na UI (farm settings `spyAgents`). Resolvido.
-- [ ] **P11.2 Clusters "possivelmente capturado"** (HEFESTO×3, Jaka, Triplex do Lula). Contra-
-      espionagem do alvo. Decidir por alvo se vale continuar a espiar (queima espiões) ou marcar
-      ignorar.
+- [x] **P11.2 Clusters "possivelmente capturado"** ✅ 2026-11-04 (verificação) — regra do
+      utilizador: só fica alvo se ainda estiver inactivo, senão ignorar. Verificado no world scan:
+      **HEFESTO** = cidade do jogador `adauthos5675`, agora em **`vacation`** (não inactivo → o jogo
+      recusa ataque); **Jaka** e **Triplex do Lula** já **não aparecem no scan** (contas apagadas /
+      fora de alcance). Nenhum qualifica como alvo inactivo → todos **ignorar**. Além disso, nenhum
+      é alvo de farm activo, logo já não queima espiões — concern morto.
 
 ### B — Manutenibilidade *(dívida técnica real, risco baixo)*
 - [x] **P11.3 Observabilidade e tamanho do `ikabot_gui/app.py`** — ✅ ANALISADO 2026-11-02,
@@ -592,8 +595,13 @@ Ordenado por valor/risco. Nenhum item é urgente.
       desatualizado — corrigido.
 
 ### D — Validação in-game *(ver dívidas acima — a mesma lista)*
-- [ ] Deploy para cidade própria. *(A sessão supervisionada do farm já foi validada —
-      utilizador, 2026-11-04.)*
+- [ ] Deploy para cidade própria — **bug encontrado e corrigido 2026-11-04** (`7b95486`): a 1ª
+      tentativa live falhou com type=11 "Não selecionaste nenhuma unidade" porque o formulário de
+      deployment indexa as unidades pelo número puro (`304`) e a UI envia o id CSS (`s304`) — o
+      `_send_deploy` punha `cargo_army_304=0` e um `cargo_army_s304` que o jogo ignorava. Fix: emitir
+      os campos sob o id do próprio formulário, casando a contagem através do prefixo `s`. **A
+      aguardar confirmação na retry automática** (item `own`→Vampiria ainda na fila). *(A sessão
+      supervisionada do farm já foi validada — utilizador, 2026-11-04.)*
 
 ### E — Farm: afinação de re-scout e intel de frota *(discussão em curso 2026-11-01)*
 
