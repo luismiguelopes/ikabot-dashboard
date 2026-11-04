@@ -258,10 +258,12 @@ def _log_attack_attempt(item, ok, source="manual"):
         logger.warning("[attack] registo no attack_log falhou", exc_info=True)
 
 
-def _cap_to_available_ships(requested, session=None):
+def _cap_to_available_ships(requested, session=None, reserve=0):
     """transporter > available ships → server rejects with type=11. Cap it.
     Prefers a LIVE count from the game at dispatch time — statusSummary.json can be
-    up to an empire cycle (~1h) stale, and ships busy at scheduling time may be back."""
+    up to an empire cycle (~1h) stale, and ships busy at scheduling time may be back.
+    `reserve` (P11.10) trade ships are held back from the usable pool so a farm raid can't
+    take the ships an urgent wine delivery needs."""
     requested = int(requested)
     available = None
     if session is not None:
@@ -277,14 +279,20 @@ def _cap_to_available_ships(requested, session=None):
                 available = int(json.load(_f).get("ships", {}).get("available", requested))
         except Exception:
             available = requested
-    capped = min(requested, available)
+    usable = max(0, available - int(reserve)) if reserve else available
+    capped = min(requested, usable)
     if capped < requested:
-        logger.info("[attack] transporters limitados a %d (pedidos %d, livres %d)",
-                    capped, requested, available)
+        if reserve:
+            logger.info("[attack] transporters limitados a %d (pedidos %d, livres %d, "
+                        "reserva vinho %d)", capped, requested, available, int(reserve))
+        else:
+            logger.info("[attack] transporters limitados a %d (pedidos %d, livres %d)",
+                        capped, requested, available)
     return capped
 
 
-def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters):
+def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters,
+                       wine_reserve=0):
     """Player pillage. The POST function is taken from the game's own form:
     'sendArmyPlunderSea' for a target on another island (troops ride transport ships),
     'sendArmyPlunderLand' for one on the SAME island (troops march overland). Hardcoding
@@ -301,9 +309,12 @@ def _send_army_plunder(session, origin_id, target_id, island_id, units, transpor
     # Transporters carry the loot (500 per ship) for both land and sea raids; with none
     # free the POST is doomed (type=11). Bail out before the form fetch so it can be
     # retried once the ships are back.
-    capped = _cap_to_available_ships(transporters, session)
+    capped = _cap_to_available_ships(transporters, session, reserve=wine_reserve)
     if int(transporters) > 0 and capped <= 0:
-        logger.info("[attack] pilhagem adiada — 0 navios livres (a regressar)")
+        if wine_reserve:
+            logger.info("[attack] pilhagem adiada — navios cedidos à reserva de vinho (P11.10)")
+        else:
+            logger.info("[attack] pilhagem adiada — 0 navios livres (a regressar)")
         return _DEFER
 
     _change_to_origin_city(session, ikabot_config, origin_id)
@@ -505,9 +516,18 @@ def _dispatch_attack(session, item):
     if mission_type == "army":
         logger.info("[attack] a despachar army → %s (%s)",
                     item.get("targetCityName"), item.get("targetPlayerName"))
+        # P11.10: farm raids (flagged respectWineReserve) yield trade ships to wine logistics
+        # when a city is low on autonomy; manual UI attacks are unflagged and take priority.
+        wine_reserve = 0
+        if item.get("respectWineReserve"):
+            try:
+                from transport_manager import wine_ship_reserve
+                wine_reserve = wine_ship_reserve()
+            except Exception:
+                wine_reserve = 0
         return _send_army_plunder(session, origin_id, item["targetCityId"],
                                   item["islandId"], item.get("units", {}),
-                                  item.get("transporters", 0))
+                                  item.get("transporters", 0), wine_reserve=wine_reserve)
 
     logger.info("[attack] a despachar fleet → %s (%s)",
                 item.get("targetCityName"), item.get("targetPlayerName"))

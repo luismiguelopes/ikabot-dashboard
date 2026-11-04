@@ -126,6 +126,36 @@ def _early_report_max_age_secs():
         return 7200
 
 
+def _spy_freshness_secs():
+    """P11.7 freshness guard. A confirmed-safe target is raided DIRECTLY on its last scout's
+    loot estimate (no periodic re-spy — an inactive owner's warehouse only shrinks, so the
+    estimate never drifts optimistically). But if the bot was offline for hours, a co-plunderer
+    may have emptied the warehouse meanwhile, so the next direct raid would send the whole army
+    round-trip for scraps. Past this scout age, re-scout ONCE before the next direct raid. This
+    is NOT a safety guard (reactivation is still caught live by _confirm_inactive) — it only
+    saves a wasted wave after downtime. 0 disables it. Default 24h, override `spyFreshnessHours`
+    in farm settings."""
+    try:
+        hours = float(_load_farm_settings().get("spyFreshnessHours", 24))
+    except (ValueError, TypeError):
+        hours = 24
+    return int(hours * 3600) if hours > 0 else 0
+
+
+def _spy_stale(t, now):
+    """True when a confirmed-safe target's last scout is older than the freshness window, so its
+    next direct raid should re-scout first (P11.7). Cheap timestamp check — no HTTP. Loop mode
+    is exempt: it hammers on real-return intel alone and is short-lived, so a periodic re-scout
+    would fight its design (same reason it skips the drainage re-scout)."""
+    if str(t.get("mode", "farm")) == "loop":
+        return False
+    window = _spy_freshness_secs()
+    if window <= 0:
+        return False
+    last = int(t.get("last_spy_at", 0) or 0)
+    return last > 0 and now - last > window
+
+
 def _next_round_needs_spy(t):
     """True if the round after the current raid will re-scout: the periodic re-spy cadence
     is due, the target currently shows a fleet, or it's a known fleet-target (its fleet
@@ -631,16 +661,19 @@ def _attack_slots_free(targets):
     return max(0, _MAX_CONCURRENT_FARM - attacking)
 
 
-def _idle_needs_attack_slot(t):
+def _idle_needs_attack_slot(t, now):
     """P11.9: whether a due IDLE target's next move is a direct RAID (consumes an attack slot)
     rather than a scout (spies, no slot). Mirrors the body's branching so the scheduler only
     withholds a wake for a would-be raid when both slots are busy — a scout still wakes. First
-    contact, fleet targets and a re-spy round all scout; a confirmed-safe target raids directly."""
+    contact, fleet targets, a re-spy round and a stale-scout refresh (P11.7) all scout; a
+    confirmed-safe target with fresh intel raids directly."""
     if int(t.get("last_spy_at", 0)) == 0:          # first contact → full scout
         return False
     if int(t.get("is_fleet_target", 0)) == 1:      # fleet target → always re-scout first
         return False
     if _next_round_needs_spy(t):                   # re-spy round due → scout
+        return False
+    if _spy_stale(t, now):                          # freshness guard → re-scout, not a raid
         return False
     return True                                    # safe target → direct raid (needs a slot)
 
@@ -689,7 +722,7 @@ def has_due_farm():
                 return True
         elif now >= int(t.get("next_run_at", 0)):   # IDLE and due
             # A would-be raid only counts when an attack slot is free; a scout always wakes.
-            if slot_free or not _idle_needs_attack_slot(t):
+            if slot_free or not _idle_needs_attack_slot(t, now):
                 return True
     return False
 
@@ -718,7 +751,7 @@ def next_farm_eta():
                 etas.append(max(ra - _EARLY_RESPY_LEAD, now))
             else:
                 etas.append(max(ra, now))
-        elif slot_free or not _idle_needs_attack_slot(t):   # IDLE: scouts always, raids only
+        elif slot_free or not _idle_needs_attack_slot(t, now):   # IDLE: scouts always, raids only
             etas.append(max(int(t.get("next_run_at", 0) or 0), now))   # when a slot is free
     return min(etas) if etas else None
 
@@ -873,6 +906,10 @@ def process_farm_targets(session, in_active_hours=True):
             "targetPlayerName": t.get("target_player", ""),
             "islandX": ix, "islandY": iy, "islandId": str(t.get("island_id", "")),
             "targetType": "enemy", "addedAt": now,
+            # P11.10: the farm recycles transporters non-stop, so its raids must yield trade
+            # ships to wine logistics when a city is low on autonomy (see wine_ship_reserve).
+            # Manual UI attacks are NOT flagged — they take priority as the user intends.
+            "respectWineReserve": 1,
         }
         new_enemy_return = ret_at  # unchanged unless we blockade again
 
@@ -1053,9 +1090,11 @@ def process_farm_targets(session, in_active_hours=True):
         # ── IDLE → next raid ────────────────────────────────────────────────
         # Two regimes:
         #  • SAFE target (is_fleet_target=0, set by a FULL scout that confirmed no fleet):
-        #    raid directly with troops, no scout. An inactive owner can't gain a fleet/army
-        #    (game rule), so the only risk is the owner reactivating — re-confirmed below
-        #    every `respy_every` rounds, not every round.
+        #    raid directly with troops, no periodic scout. An inactive owner can't gain a
+        #    fleet/army and doesn't produce (game rule), so the warehouse only shrinks — the
+        #    loot estimate never drifts optimistically. Reactivation is re-confirmed live by
+        #    _confirm_inactive before every raid; drainage and a stale scout (P11.7 freshness
+        #    guard, after downtime) both force a re-scout before the next raid.
         #  • FLEET target (is_fleet_target=1, e.g. The Rock): never direct-attack — always a
         #    full re-scout (garrison + movements) because its fleet flees and returns.
         # The danger from the old blind shortcut (sending troops into a returning fleet) is
@@ -1088,7 +1127,7 @@ def process_farm_targets(session, in_active_hours=True):
                 est = max(est, int(recent or 0))
             if (not first_scout and not _next_round_needs_spy(t)
                     and int(t.get("is_fleet_target", 0)) == 0
-                    and not drained):
+                    and not drained and not _spy_stale(t, now)):
                 # P11.9: a safe direct raid needs an attack slot. If one isn't free this cycle,
                 # hold the target (keep intel) instead of spending the pre-attack island fetch.
                 if not _can_launch_attack():
@@ -1137,6 +1176,15 @@ def process_farm_targets(session, in_active_hours=True):
                           else "armazém estimado %d" % est)
                 logger.info("[farm] %s: %s < %d (drenado) — a re-espiar em vez de atacar "
                             "a última vaga por migalhas", name, reason, min_loot)
+            elif (not first_scout and not _next_round_needs_spy(t)
+                    and int(t.get("is_fleet_target", 0)) == 0
+                    and not drained and _spy_stale(t, now)):
+                # P11.7 freshness guard: intel still looks good but the last scout is too old
+                # (likely a long downtime) — re-scout once before the next direct raid instead
+                # of risking a whole wave on a warehouse a co-plunderer may have emptied offline.
+                logger.info("[farm] %s: último scout há %dmin (> frescura) — a re-espiar antes "
+                            "do próximo ataque directo", name,
+                            (now - int(t.get("last_spy_at", 0) or 0)) // 60)
 
             # ── Periodic / first scout ──────────────────────────────────────
             # First contact and fleet targets need the full garrison; a safe target's periodic

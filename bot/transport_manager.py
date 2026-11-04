@@ -45,6 +45,14 @@ _DEFAULT_WINE_SETTINGS = {
     "thresholdHours":    12,   # act when a city's wine runway drops below this
     "targetHours":       48,   # top the city up to this many hours of consumption
     "donorReserveHours": 96,   # non-producing city lends only what exceeds this runway
+    # P11.10: hold trade ships for wine against the farm. The farm recycles transporters
+    # non-stop (same-island raids re-arm them the moment they dock), so without a reserve an
+    # urgent wine transport / the balancer can hit "no free ships" repeatedly while the farm
+    # holds them all (DeathCrow 2026-11-04: ~2h runway, 3 failed wine transports). Mirror of
+    # the farm's own apply_ship_reserve, but in wine's favour.
+    "reserveShipsFromFarm": True,   # master switch for the reserve below
+    "reserveBelowHours":    12,     # any city under this wine runway makes the reserve bite
+    "reserveShips":         6,      # trade ships held free for wine while the reserve is active
 }
 
 
@@ -411,10 +419,51 @@ def save_wine_settings(data):
     settings["targetHours"]    = max(settings["thresholdHours"], min(336, int(data.get("targetHours", 48))))
     settings["donorReserveHours"] = max(settings["targetHours"],
                                         min(720, int(data.get("donorReserveHours", 96))))
+    settings["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
+    settings["reserveBelowHours"] = max(1, min(336, int(data.get("reserveBelowHours", 12))))
+    settings["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 6))))
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(WINE_SETTINGS_PATH, "w") as f:
         json.dump(settings, f, indent=2)
     return settings
+
+
+def wine_ship_reserve():
+    """P11.10: how many trade ships the farm must leave free for wine logistics right now.
+
+    Mirror of the farm's apply_ship_reserve, but in wine's favour. When ANY city's wine runway
+    is below reserveBelowHours (or a city has already run dry), hold `reserveShips` trade ships
+    free so an urgent wine transport / the balancer (F9) can always find ships, instead of the
+    farm — which recycles transporters non-stop — starving them. Freighters are a separate pool
+    and unaffected. Reads local JSON only (no HTTP), so it's cheap to call on the farm's dispatch
+    path. Returns 0 when the reserve is off or no city is low."""
+    settings = get_wine_settings()
+    if not settings.get("reserveShipsFromFarm", True):
+        return 0
+    try:
+        from queue_processor import _load_resources_json
+        resources = _load_resources_json()
+    except Exception:
+        return 0
+    if not resources:
+        return 0
+    threshold = int(settings.get("reserveBelowHours", 12)) * 3600
+    low = False
+    for d in resources.values():
+        runs_out = int(d.get("wineRunsOutIn", -1) or -1)
+        if 0 < runs_out < threshold:
+            low = True
+            break
+        # Already emptied: production 0 and live consumption 0 (you can't consume wine you don't
+        # have, so the game reports 0) with no stock left — same signal the balancer uses.
+        if (int(d.get("wineProductionPerHour", 0) or 0) == 0
+                and int(d.get("wineConsumptionPerHour", 0) or 0) == 0
+                and int(d.get("Wine", 0) or 0) <= 0):
+            low = True
+            break
+    if not low:
+        return 0
+    return max(0, int(settings.get("reserveShips", 6)))
 
 
 def process_wine_balancer(session, in_active_hours=True):

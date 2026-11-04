@@ -37,6 +37,9 @@ interface WineSettings {
   thresholdHours: number
   targetHours:    number
   donorReserveHours: number
+  reserveShipsFromFarm?: boolean
+  reserveBelowHours?:    number
+  reserveShips?:         number
 }
 
 interface WineBuySettings {
@@ -629,6 +632,51 @@ export function TransportTab() {
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                 </div>
+              </div>
+
+              {/* P11.10: reserve trade ships for wine against the farm */}
+              <div className="border-t border-slate-100 pt-3 space-y-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setWine({ ...wine, reserveShipsFromFarm: !(wine.reserveShipsFromFarm ?? true) })}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      (wine.reserveShipsFromFarm ?? true) ? 'bg-indigo-600' : 'bg-slate-300'
+                    }`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      (wine.reserveShipsFromFarm ?? true) ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                  <span className="text-sm text-slate-700">{t('wine_ship_reserve')}</span>
+                </div>
+                <p className="text-xs text-slate-500 max-w-xl">{t('wine_ship_reserve_hint')}</p>
+                {(wine.reserveShipsFromFarm ?? true) && (
+                  <div className="grid grid-cols-2 gap-3 max-w-md">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                        {t('wine_reserve_below')}
+                      </label>
+                      <input
+                        type="number" min={1} max={336}
+                        value={wine.reserveBelowHours ?? 12}
+                        onChange={e => setWine({ ...wine, reserveBelowHours: Math.max(1, Number(e.target.value)) })}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                        {t('wine_reserve_ships')}
+                      </label>
+                      <input
+                        type="number" min={0} max={100}
+                        value={wine.reserveShips ?? 6}
+                        onChange={e => setWine({ ...wine, reserveShips: Math.max(0, Number(e.target.value)) })}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {wineSaved && (

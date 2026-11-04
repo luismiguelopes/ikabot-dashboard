@@ -44,7 +44,8 @@ def _common(monkeypatch):
     """Neutralise everything except payload construction."""
     monkeypatch.setattr(am, "_change_to_origin_city", lambda *a, **k: None)
     monkeypatch.setattr(am, "_parse_attack_feedback", lambda *a, **k: True)
-    monkeypatch.setattr(am, "_cap_to_available_ships", lambda req, session=None: int(req))
+    monkeypatch.setattr(am, "_cap_to_available_ships",
+                        lambda req, session=None, reserve=0: max(0, int(req) - int(reserve)))
 
 
 def test_army_plunder_payload(monkeypatch):
@@ -196,3 +197,36 @@ def test_deploy_fleet_has_no_transporter(monkeypatch):
     assert p["function"] == "deployFleet"
     assert p["cargo_fleet_s401"] == 5
     assert "transporter" not in p                       # only army deployment needs ships
+
+
+# ── P11.10: farm raids yield trade ships to wine logistics ──────────────────────
+
+def test_cap_to_available_ships_honours_wine_reserve(monkeypatch):
+    """The transporter cap holds back `reserve` ships so a farm raid can't take the ones an
+    urgent wine delivery needs; when the reserve exceeds the free pool it caps to 0 (→ defer)."""
+    import ikabot.helpers.naval as naval
+    monkeypatch.setattr(naval, "getAvailableShips", lambda s: 10, raising=False)
+    monkeypatch.setattr(am.time, "sleep", lambda *a, **k: None)
+    s = object()
+    assert am._cap_to_available_ships(8, s) == 8             # no reserve → capped to 10 free
+    assert am._cap_to_available_ships(8, s, reserve=6) == 4  # 10 - 6 reserved → 4 usable
+    assert am._cap_to_available_ships(8, s, reserve=12) == 0  # reserve > free → nothing left
+
+
+def test_farm_item_yields_ships_to_wine(monkeypatch):
+    """A farm-flagged army plunder consults wine_ship_reserve and passes it to the sender; a
+    manual UI attack (unflagged) is unaffected and takes ship priority as the user intends."""
+    import transport_manager as tm
+    captured = {}
+    monkeypatch.setattr(am, "_send_army_plunder",
+                        lambda *a, wine_reserve=0, **k: captured.__setitem__("reserve", wine_reserve))
+    monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 6)
+
+    base = {"originCityId": "1", "targetCityId": "9", "islandId": "7", "missionType": "army",
+            "targetType": "enemy", "units": {}, "transporters": 10}
+    am._dispatch_attack(object(), dict(base, respectWineReserve=1))
+    assert captured["reserve"] == 6                           # farm raid yields
+
+    captured.clear()
+    am._dispatch_attack(object(), base)                      # manual attack, unflagged
+    assert captured["reserve"] == 0                          # no reserve → full ship priority

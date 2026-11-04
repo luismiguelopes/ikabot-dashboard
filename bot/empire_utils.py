@@ -563,7 +563,8 @@ CONFIG_WARNINGS_PATH = os.path.join(LOGS_DIR, "config_warnings.json")
 _CONFIG_SCHEMAS = {
     "farm_settings.json": {
         "army": dict, "fleet": dict, "spyAgents": int, "shipReserveEnabled": bool,
-        "reserveHorizonMin": int, "earlyRespyEnabled": bool,
+        "reserveHorizonMin": int, "earlyRespyEnabled": bool, "earlyReportMaxAgeMins": int,
+        "spyFreshnessHours": int,
     },
     "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
                                 "processingEnabled": bool},

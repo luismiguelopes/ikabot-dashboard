@@ -574,7 +574,17 @@ Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizad
 - **`farm` hoje** → ataca direto entre scouts; re-espia a cada **3 raids** (`respy_every`).
 - **`farm` proposto** → ataca direto; re-espia por **tempo** + quando a estimativa seca.
 
-- [ ] **P11.7 Tirar a re-espionagem periódica por nº de raids nos alvos seguros** (o "Caso 1").
+- [x] **P11.7 Tirar a re-espionagem periódica por nº de raids nos alvos seguros** (o "Caso 1").
+      ✅ 2026-11-04 — o núcleo (remover o termo `respy_every` de `_next_round_needs_spy` para
+      alvos seguros) já tinha saído a 2026-11-01 (`8efab40d`): um alvo seguro espia 1× no início
+      + 1× para confirmar o fim, zero no meio. Fechado agora com o **guard de frescura opcional**
+      (belt-and-suspenders): `spyFreshnessHours` (default 24h, 0 desliga) em `_spy_stale` →
+      um alvo seguro cujo último scout é mais velho que a janela re-espia 1× antes do próximo
+      ataque directo, para não gastar uma vaga num armazém que um co-pilhador possa ter esvaziado
+      enquanto o bot esteve offline. Não é segurança (`_confirm_inactive` continua a cobrir
+      reactivação) — só poupa 1 vaga. `loop` isento. Schedulers (`_idle_needs_attack_slot`)
+      actualizados. Testes: `test_stale_scout_rescouts_before_direct_raid`,
+      `test_freshness_guard_disabled_attacks_directly`, `test_spy_stale_predicate`.
   - **Regra do jogo (confirmada 2026-11-01, ver [[reference-ikariam-inactive-no-fleet]])**: um
     inactivo **não produz recursos** → um alvo seguro drenado **NÃO regenera**. Só volta a ter
     loot se o dono reactivar e depois voltar a ficar inactivo. (A ideia anterior de "re-scout por
@@ -632,6 +642,32 @@ Contexto: os três "modos" de atacar um alvo, depois de alinhados com o utilizad
     novo e frágil (endpoint + parsing narrativo + i18n), e só daria eficiência, não segurança.
     **Veredicto: não construir.** O over-flagging actual é seguro (peca por excesso, nunca
     desprotege) e é o custo aceite. Fecha o Caso 2.
+
+- [x] **P11.10 Prioridade/reserva de navios para o vinho sobre o farm** (incidente 2026-11-04).
+      ✅ 2026-11-04 — implementada a opção (c): **reserva simétrica à `shipReserveEnabled` do farm,
+      mas a favor do vinho**.
+  - **Problema observado**: a DeathCrow desceu a ~2h de autonomia porque o farm monopoliza os
+    transporters (raids na própria ilha reciclam a frota em permanência). Um transporte urgente de
+    vinho falhou **3× seguidas** ("sem navios livres") e o balanceador de vinho (F9) sofre do mesmo —
+    nenhum consegue navios enquanto o farm os agarra assim que regressam. Só saiu via **freighter**
+    (pool separado que o farm não usa).
+  - **Implementado**:
+    - `transport_manager.wine_ship_reserve()` — quando QUALQUER cidade cai abaixo de
+      `reserveBelowHours` (default 12h; ou já está seca), devolve `reserveShips` (default 6) navios
+      a reservar para o vinho. Lê só JSON local (sem HTTP), barato de chamar no caminho do farm.
+    - Os ataques do farm levam a flag `respectWineReserve`; `_dispatch_attack` consulta a reserva e
+      passa-a a `_cap_to_available_ships(..., reserve=N)`, que cede N navios ao vinho. Se a reserva
+      consumir tudo, a pilhagem devolve `_DEFER` (reagenda limpo, sem contar como falha). Ataques
+      **manuais da UI não levam a flag** → mantêm prioridade total, como o utilizador quer.
+    - Settings no card de vinho (`reserveShipsFromFarm`, `reserveBelowHours`, `reserveShips`):
+      `/api/transport/wine` GET/POST + toggle/inputs no `TransportTab`. Schema de validação
+      actualizado.
+    - Simétrico ao `apply_ship_reserve` do farm (que faz o vinho ceder ao farm): agora o farm cede
+      ao vinho quando há défice. Não estrangula o farm — só cede quando há poucos navios E uma
+      cidade baixa; com navios de sobra o farm continua a correr.
+  - Testes: `test_wine_reserve_bites_when_city_low`, `test_wine_reserve_zero_when_all_comfortable`,
+    `test_wine_reserve_off_switch`, `test_wine_reserve_catches_dry_city`,
+    `test_cap_to_available_ships_honours_wine_reserve`, `test_farm_item_yields_ships_to_wine`.
 
 ---
 
