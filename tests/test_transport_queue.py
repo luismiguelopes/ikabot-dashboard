@@ -173,6 +173,52 @@ def test_consolidation_both_does_two_passes(monkeypatch, tmp_path):
     assert [c[0] for c in calls] == [False, True]  # transporters first, then freighters
 
 
+def test_consolidation_caps_to_dest_headroom_and_skips_resources(monkeypatch, tmp_path):
+    """Never overflow the destination: a nearly-full dest only receives its free space,
+    and a resource named in skipResources (wine) is never sent."""
+    import queue_processor as qp
+    monkeypatch.setattr(tm, "CONSOLIDATE_SETTINGS_PATH", str(tmp_path / "cs.json"))
+    monkeypatch.setattr(tm, "CONSOLIDATE_STATE_PATH", str(tmp_path / "st.json"))
+    monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
+    monkeypatch.setattr(tm.random, "randint", lambda a, b: 0)
+
+    with open(tmp_path / "cs.json", "w") as f:
+        json.dump({"enabled": True, "destCityId": "99", "destCityName": "Dest",
+                   "intervalHours": 6, "minSendTotal": 1000, "shipType": "freighters",
+                   "skipResources": ["Wine"]}, f)
+    with open(tmp_path / "own.json", "w") as f:
+        json.dump([{"cityId": 99, "name": "Dest", "x": 1, "y": 1, "islandId": "7"},
+                   {"cityId": 1,  "name": "Src",  "x": 2, "y": 2, "islandId": "8"}], f)
+
+    # Dest cap 1,000,000 already holding 900,000 wood → only 100,000 free wood; wine full room.
+    monkeypatch.setattr(qp, "_load_resources_json", lambda: {
+        "Src":  {"Wood": 5000000, "Wine": 5000000},
+        "Dest": {"Wood": 900000, "Wine": 0, "storageCapacity": 1000000},
+    })
+    monkeypatch.setattr(qp, "_load_empire_json", lambda: {})
+    monkeypatch.setattr(qp, "_calc_city_reserved", lambda *a: [0, 0, 0, 0, 0])
+    monkeypatch.setattr(qp, "_load_queue", lambda: {"queues": {}})
+    monkeypatch.setattr(qp, "_get_resource_buffer", lambda: [0, 0, 0, 0, 0])
+
+    import ikabot.helpers.naval as naval
+    import ikabot.helpers.pedirInfo as pedir
+    monkeypatch.setattr(naval, "getAvailableShips", lambda s: 0, raising=False)
+    monkeypatch.setattr(naval, "getAvailableFreighters", lambda s: 1000, raising=False)
+    monkeypatch.setattr(pedir, "getShipCapacity", lambda s: (5000, 25000), raising=False)
+
+    sent = []
+    def fake_dispatch(session, origin, dest, island, ships, send_list, use_freighters=False):
+        sent.append(list(send_list))
+        return True
+    monkeypatch.setattr(qp, "_dispatch_transport", fake_dispatch)
+
+    tm.process_consolidation(session=object(), in_active_hours=True)
+
+    assert len(sent) == 1
+    assert sent[0][0] == 100000   # Wood capped to the destination's free space
+    assert sent[0][1] == 0        # Wine never sent (skipResources)
+
+
 # ── Wine balancer (F9) ────────────────────────────────────────────────────────
 
 def test_wine_settings_defaults_and_save(tmp_path, monkeypatch):

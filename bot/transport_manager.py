@@ -34,6 +34,8 @@ _DEFAULT_CONSOLIDATE_SETTINGS = {
     "minSendTotal":  1000,
     "shipType":      "transporters",  # transporters | freighters | both
     "ignoreCityIds": [],              # source cities never drained by consolidation
+    "skipResources": [],              # resource names never sent, e.g. ["Wine"]
+    "respectDestCap": True,           # never overflow the destination warehouse
 }
 
 _WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserve
@@ -298,6 +300,20 @@ def process_consolidation(session, in_active_hours=True):
     except Exception:
         pass
 
+    # Destination warehouse headroom — never overflow the destination (cap guard).
+    # When the destination's capacity/stock is known (resources.json), cap each resource to
+    # the free space and decrement it as we allocate across source cities; unknown capacity
+    # → no cap (keeps behaviour unchanged when the data isn't available).
+    respect_cap = bool(settings.get("respectDestCap", True))
+    dest_res = resources.get(dest_name, {}) if respect_cap else {}
+    dest_cap = int(dest_res.get("storageCapacity", 0) or 0)
+    if respect_cap and dest_cap > 0:
+        headroom = [max(0, dest_cap - int(dest_res.get(k, 0) or 0)) for k in _RESOURCES_ENG]
+    else:
+        headroom = None
+    skip_idx = {i for i, k in enumerate(_RESOURCES_ENG)
+                if k in set(settings.get("skipResources") or [])}
+
     ship_type = settings.get("shipType", "transporters")
     if ship_type not in ("transporters", "freighters", "both"):
         ship_type = "transporters"
@@ -379,6 +395,10 @@ def process_consolidation(session, in_active_hours=True):
         stock    = [int(src_res.get(k, 0)) for k in _RESOURCES_ENG]
         reserved = _calc_city_reserved(src_name, queues, empire, costs)
         surplus  = _calc_surplus(stock, buffer, reserved)
+        for i in skip_idx:
+            surplus[i] = 0
+        if headroom is not None:
+            surplus = [min(surplus[i], headroom[i]) for i in range(5)]
         if sum(surplus) < min_send:
             continue
 
@@ -392,6 +412,11 @@ def process_consolidation(session, in_active_hours=True):
             avail["freighters"] -= _send_pass(
                 src, settings["destCityId"], remaining,
                 "freighters", freighter_cap, avail["freighters"])
+        if headroom is not None:
+            for i in range(5):
+                headroom[i] = max(0, headroom[i] - (surplus[i] - remaining[i]))
+            if sum(headroom) <= 0:
+                break
 
     state["lastRun"]  = now
     state["lastSent"] = sent_summary
