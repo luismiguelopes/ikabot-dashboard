@@ -961,7 +961,15 @@ def process_farm_targets(session, in_active_hours=True):
         tid = t["target_city_id"]
         # Fleet targets: read the enemy fleet's real return ETA from a movements scout so we
         # never send unescorted troops into a fleet that is merely dispersed and due back.
-        need_movements = need_garrison and int(t.get("is_fleet_target", 0)) == 1
+        # P12.2: the FIRST live scout of ANY target is a full sweep — garrison AND movements —
+        # not just a garrison snapshot. A fleet out at sea (raiding, or bounced out by another
+        # attacker and still sailing home) reads 0 ships in the harbour, so a garrison-only
+        # first scout would seal a defended port as "clean" (the Tróia 3 bounce, 05/11). The
+        # movements leg reveals any enemy fleet due back, so a target is confirmed safe only
+        # once BOTH legs come back clean.
+        first_contact = int(t.get("last_spy_at", 0) or 0) == 0
+        need_movements = need_garrison and (
+            int(t.get("is_fleet_target", 0)) == 1 or first_contact)
         if not force_fresh:
             from espionage_manager import reexecute_stationed_spy
             if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison,
@@ -1287,8 +1295,18 @@ def process_farm_targets(session, in_active_hours=True):
             # guess). Both t and the DB are updated so _enqueue_attack sees the fresh value.
             mv = m.get("movementsResult")
             if isinstance(mv, dict) and mv.get("enemyReturnAt"):
+                was_safe = int(t.get("is_fleet_target", 0) or 0) == 0
                 t["enemy_return_at"] = int(mv["enemyReturnAt"])
-                farm_update(tid, {"enemy_return_at": int(mv["enemyReturnAt"])})
+                # P12.2: a fleet at sea and due back means this IS a fleet target even if the
+                # garrison snapshot reads 0 ships right now. Lock that in so the direct-raid
+                # shortcut can never fire on it — troops must wait for a blockade or a movements
+                # scout that comes back clean. This is what a garrison-only first scout missed.
+                t["is_fleet_target"] = 1
+                farm_update(tid, {"enemy_return_at": int(mv["enemyReturnAt"]),
+                                  "is_fleet_target": 1})
+                if was_safe:
+                    logger.info("[farm] %s: movimentos revelam frota inimiga a regressar — "
+                                "reclassificado como alvo de frota (sem ataque directo)", name)
             # A rejected/absent garrison scout carries NO fleet intel — it is not the same as
             # "scouted and saw an empty port". Only a scout that actually returned troops data
             # (error-free) tells us the port is clean.

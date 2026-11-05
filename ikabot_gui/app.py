@@ -1288,13 +1288,13 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
     its report says it's the richest — the head would only reorder after draining everything
     above it.
 
-    It also seeds the CLEAN-PORT confirmation (is_fleet_target=0 + last_spy_at +
-    last_enemy_ships=0) from a recent SUCCESSFUL garrison report that shows no naval units, so
-    a target we already scouted safe raids directly instead of re-reading intel we hold. A
-    garrison with any ship, or a failed/absent garrison read, is left to the farm's own scout
-    (fleet timing matters there). last_spy_at is seeded to the REAL report time, so the farm's
-    own freshness guard (spyFreshnessHours) still forces a re-scout once that intel ages out.
-    Only fills fields still at 0: re-adding never overwrites measured stats/runtime state."""
+    It does NOT seed any clean-port / fleet-free confirmation (P12.2): an old garrison report is
+    a point-in-time snapshot and can read 0 ships while a fleet is merely out at sea and due
+    back, so trusting it to unlock a direct raid sent troops into a defended port (the Tróia 3
+    bounce, 05/11). last_spy_at is left at 0 so the farm always runs its own first live full
+    sweep (garrison + movements) before raiding a brand-new target; only a clean live sweep
+    confirms it safe. Only fills fields still at 0: re-adding never overwrites measured
+    stats/runtime state."""
     try:
         t = _db.farm_get(str(city_id))
         if not t:
@@ -1342,18 +1342,13 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
                     updates["last_troop_journey"] = max(600, int(est * ratio))
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
-        # Clean-port seed: a confirmed fleet-free garrison + a known loot figure means we
-        # already hold everything the farm would scout for → let it raid directly. Requires a
-        # SUCCESSFUL garrison read with zero naval units; any ship leaves it a fleet target.
-        loot_known = (best_wh[1] > 0) or (int(t.get("last_loot", 0) or 0) > 0)
-        if (not int(t.get("last_spy_at", 0) or 0)
-                and best_gar[0] >= 0
-                and loot_known
-                and _seed_garrison_fleet_count(best_gar[1]) == 0):
-            seen = [best_gar[0]] + ([best_wh[0]] if best_wh[0] >= 0 else [])
-            updates["last_spy_at"]      = min(seen)   # oldest intel relied on (freshness guard re-checks)
-            updates["is_fleet_target"]  = 0
-            updates["last_enemy_ships"] = 0
+        # P12.2: the seed NO LONGER seals clean-port. An old garrison report showing 0 ships is a
+        # point-in-time snapshot — if the fleet was out at sea (raiding, or bounced out by another
+        # attacker and still sailing back), the harbour read empty while a fleet was due home. A
+        # seed that unlocked direct-attack on that basis sent troops into a defended port (the
+        # Tróia 3 bounce, 05/11). last_spy_at is left at 0 so the farm runs its OWN first live
+        # full sweep (garrison + movements) before ever raiding; only a clean live sweep confirms
+        # a target safe. The loot/journey seed above stays — it only feeds ranking, not safety.
         if updates:
             _db.farm_update(str(city_id), updates)
     except Exception:

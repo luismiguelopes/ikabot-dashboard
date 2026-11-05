@@ -755,6 +755,34 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
       um alvo seguro de que já temos relatório fresco é desperdício. ⚠️ `attack_manager` (fonte de
       `_NAVAL_UNIT_NAMES`) não está montado no gui → `app.py` tem cópia `_SEED_NAVAL_KEYWORDS`, com
       teste-espelho. Só o caminho UI/API semeia; `db.farm_add` cru não. **350 testes.**
+      ⚠️ **Revisto pelo P12.2 (2026-11-05):** o selar de porto-limpo foi REMOVIDO — era fail-open
+      (ver abaixo). O seed continua a semear saque/jornada (ranking), mas já não marca segurança.
+
+- [x] **P12.2 Primeiro scout = varrimento triplo; seed deixa de selar porto-limpo** ✅ 2026-11-05
+      Motivado por um bounce real: um ataque do farm a **Tróia 3** (MARCOS LIMA, saque 5.5M) chegou
+      ao alvo e **regressou vazio** — ricochete naval contra a frota local, "o tipo de situação que
+      queríamos evitar". **Causa-raiz**: Tróia 3 **nunca** teve um scout de guarnição vivo; o
+      `is_fleet_target=0` / `last_enemy_ships=0` veio **só do seed P12.1**, a partir de um relatório
+      antigo que mostrava 0 navios **porque a frota estava no mar** (numa pilhagem / expulsa por outro
+      atacante e a regressar). O seed selou "porto limpo" com base numa fotografia desatualizada,
+      violando o invariante que o ataque directo assume (`farm_manager.py`: *"só um scout completo põe
+      `is_fleet_target=0`"*). E um alvo "seguro" nunca re-espia o cais (só o armazém), por isso a frota
+      ficou invisível até as tropas ricochetarem. **Correção** (ideia do utilizador):
+      - **`farm_manager.py` — primeiro scout vivo = varrimento completo**: `need_movements` deixou de
+        estar amarrado só a `is_fleet_target=1` — corre também no **primeiro contacto**
+        (`last_spy_at==0`). A 1ª espionagem passa a ler **armazém + guarnição + movimentos**; um alvo
+        só é confirmado seguro quando as três pernas vêm limpas. Uma frota no mar aparece na perna de
+        movimentos mesmo com o cais a 0.
+      - **`farm_manager.py` — reclassificação imediata**: quando os movimentos revelam frota a regressar
+        (mesmo com guarnição a 0 agora), o alvo passa logo a `is_fleet_target=1` → o atalho de ataque
+        directo nunca mais dispara nele.
+      - **`app.py` — o seed NÃO sela porto-limpo**: removido o bloco que punha `is_fleet_target=0` /
+        `last_enemy_ships=0` / `last_spy_at`. `last_spy_at` fica a 0 → o farm faz sempre o seu próprio
+        varrimento vivo antes de atacar um alvo novo. O seed de saque/jornada (ranking) mantém-se.
+      - **Mitigação imediata** (DB): Essos (estava selado pelo seed, mesmo risco) e Fidel repostos a
+        primeiro-contacto; Tróia 3 pré-marcado `is_fleet_target=1`.
+      - **Testes**: +2 (primeiro contacto pede movimentos; guarnição limpa + frota a regressar →
+        `is_fleet_target=1`) e 2 testes do seed invertidos. **353 testes.**
 
 ### Por fazer
 

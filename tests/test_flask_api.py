@@ -217,10 +217,11 @@ def _add_with_reports(c, tmp_path, missions):
                                          "islandX": 53, "islandY": 46})
 
 
-def test_farm_add_seeds_clean_port_from_empty_garrison(monkeypatch, tmp_path):
-    """A successful garrison read with NO troops + a known loot figure → the target is sealed
-    as fleet-free (is_fleet_target=0, last_enemy_ships=0) and marked scouted at the real report
-    time, so the farm raids directly instead of re-reading intel we already hold."""
+def test_farm_add_seeds_loot_but_never_seals_clean_port(monkeypatch, tmp_path):
+    """P12.2: a successful garrison read with NO troops + a known loot figure seeds the loot
+    (for ranking) but must NOT seal the target clean. An old garrison snapshot can read 0 ships
+    while a fleet is out at sea and due back, so last_spy_at stays 0 — the farm runs its own
+    first live full sweep (garrison + movements) before ever raiding a brand-new target."""
     c = _client(monkeypatch, tmp_path)
     _add_with_reports(c, tmp_path, [
         {"targetCityId": "900", "state": "DONE",
@@ -229,15 +230,13 @@ def test_farm_add_seeds_clean_port_from_empty_garrison(monkeypatch, tmp_path):
          "garrisonResult": {"success": True, "troops": {}, "reportedAt": 200}},
     ])
     t = db_manager.farm_get("900")
-    assert t["last_loot"] == 300000
-    assert t["is_fleet_target"] == 0
-    assert t["last_enemy_ships"] == 0
-    assert t["last_spy_at"] == 100            # oldest intel relied on (warehouse 100 < garrison 200)
+    assert t["last_loot"] == 300000           # loot IS seeded (ranking)
+    assert t["last_spy_at"] == 0              # but NOT sealed → farm does its own live sweep
 
 
-def test_farm_add_land_only_garrison_is_clean(monkeypatch, tmp_path):
-    """Land units alone are not a fleet — a garrison of hoplites/lancers still seeds clean
-    (the farm's safety model gates on ships, not land defenders)."""
+def test_farm_add_land_only_garrison_not_sealed(monkeypatch, tmp_path):
+    """Land units alone are not a fleet, but the seed still never seals clean (P12.2): loot is
+    seeded, last_spy_at stays 0 so the farm's own first live sweep decides safety."""
     c = _client(monkeypatch, tmp_path)
     _add_with_reports(c, tmp_path, [
         {"targetCityId": "900", "state": "DONE",
@@ -247,7 +246,7 @@ def test_farm_add_land_only_garrison_is_clean(monkeypatch, tmp_path):
                             "troops": {"Hoplita": 300, "Lanceiro": 500}, "reportedAt": 150}},
     ])
     t = db_manager.farm_get("900")
-    assert t["is_fleet_target"] == 0 and t["last_spy_at"] == 100
+    assert t["last_loot"] == 90000 and t["last_spy_at"] == 0
 
 
 def test_farm_add_garrison_with_ship_stays_fleet_target(monkeypatch, tmp_path):

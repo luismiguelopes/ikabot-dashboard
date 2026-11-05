@@ -296,6 +296,54 @@ def test_movements_eta_feeds_enemy_return_at(monkeypatch, tmp_path):
     assert len(army) == 1 and len(fleet) == 0   # troops land before the fleet is back
 
 
+def test_first_contact_scout_requests_movements(monkeypatch, tmp_path):
+    """P12.2: the FIRST live scout of a target (last_spy_at=0) is a full sweep — garrison AND
+    movements — not just a garrison snapshot, so a fleet out at sea is caught before the target
+    is ever trusted as safe (the Tróia 3 bounce, 05/11)."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 48, "islandY": 44,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0,
+                                   "last_spy_at": 0, "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]
+    assert added[0][1]["needGarrison"] is True
+    assert added[0][1]["needMovements"] is True       # first contact → full sweep, not fleet-only
+
+
+def test_clean_garrison_but_returning_fleet_marks_fleet_target(monkeypatch, tmp_path):
+    """P12.2: the garrison snapshot reads 0 ships, but the movements leg shows an enemy fleet
+    out at sea and due back → the target is reclassified is_fleet_target=1 so the direct-raid
+    shortcut can never fire on it again, even when this raid (fleet back long after the troops
+    are home) still goes ahead. This is exactly what a garrison-only first scout missed."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    eta = now + 10000           # fleet back in ~2.7h — troops land & return well before
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia X", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 0, "last_troop_journey": 600,
+                                   "enemy_return_at": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
+        "garrisonResult": {"troops": {}},                 # harbour reads empty NOW
+        "movementsResult": {"enemyReturnAt": eta},        # ...but a fleet is sailing home
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["is_fleet_target"] == 1          # reclassified → no future direct raid
+    assert t["enemy_return_at"] == eta
+
+
 def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
     """With a configured loadout, send min(loadout, available) per unit — not all troops."""
     _setup_db(tmp_path)
