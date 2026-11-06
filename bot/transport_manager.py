@@ -251,6 +251,40 @@ def _calc_surplus(avail, buffer, reserved):
     return [max(0, int(avail[i]) - int(buffer[i]) - int(reserved[i])) for i in range(5)]
 
 
+def _fair_ship_split(needs, avail):
+    """Spread a shared fleet of `avail` ships across cities that each want `needs[i]`.
+
+    Without this, the first rich city in a round grabbed as many ships as it wanted
+    (up to the whole fleet) and starved the rest until the next interval — so the
+    empire drained one city at a time. The fleet is the bottleneck (all own cities
+    are same-island, equal travel time), so spreading it costs no throughput and
+    lets every city start draining in the same round.
+
+    Water-filling: each active city gets an even slice per round; a city needing less
+    than its slice is served in full and its leftover ships flow to the others; any
+    final odd ships go out one at a time. Never grants more than a city needs, and the
+    grants sum to at most `avail`.
+    """
+    n = len(needs)
+    grant = [0] * n
+    remaining = max(0, int(avail))
+    active = [i for i in range(n) if needs[i] > 0]
+    while remaining > 0 and active:
+        share = max(1, remaining // len(active))
+        for i in list(active):
+            give = min(share, needs[i] - grant[i], remaining)
+            if give <= 0:
+                active.remove(i)
+                continue
+            grant[i] += give
+            remaining -= give
+            if grant[i] >= needs[i]:
+                active.remove(i)
+            if remaining <= 0:
+                break
+    return grant
+
+
 def process_consolidation(session, in_active_hours=True):
     """Every intervalHours, send each city's surplus to the destination city.
     Respects the queue resourceBuffer and building-queue reservations, so it never
@@ -383,13 +417,22 @@ def process_consolidation(session, in_active_hours=True):
         return ships_to_use
 
     ignored = {str(c) for c in (settings.get("ignoreCityIds") or [])}
-    for src in random.sample(own_cities, len(own_cities)):
+
+    # ── Pre-pass: collect eligible sources and their shippable surplus ────────
+    # Fullest city first: it gets destination-headroom priority and is relieved of
+    # storage pressure first. (All own cities share an island, so source distance is
+    # uniform — ordering is about pressure, not travel time.) Headroom is reserved
+    # here as we go so two cities never claim the same destination free space.
+    eligible = []  # list of [src, remaining_surplus]
+    for src in sorted(
+            own_cities,
+            key=lambda c: sum(int(resources.get(c.get("name", ""), {}).get(k, 0))
+                              for k in _RESOURCES_ENG),
+            reverse=True):
         if str(src.get("cityId")) == str(settings["destCityId"]):
             continue
         if str(src.get("cityId")) in ignored:
             continue
-        if avail["transporters"] <= 0 and avail["freighters"] <= 0:
-            break
         src_name = src.get("name", "")
         src_res  = resources.get(src_name, {})
         stock    = [int(src_res.get(k, 0)) for k in _RESOURCES_ENG]
@@ -399,24 +442,38 @@ def process_consolidation(session, in_active_hours=True):
             surplus[i] = 0
         if headroom is not None:
             surplus = [min(surplus[i], headroom[i]) for i in range(5)]
+            for i in range(5):
+                headroom[i] = max(0, headroom[i] - surplus[i])
         if sum(surplus) < min_send:
             continue
+        eligible.append([src, surplus])
+        if headroom is not None and sum(headroom) <= 0:
+            break
 
-        remaining = list(surplus)
-        # Transporters first (faster); freighters then mop up any large leftover.
-        if use_trans:
-            avail["transporters"] -= _send_pass(
-                src, settings["destCityId"], remaining,
-                "transporters", ship_cap, avail["transporters"])
-        if use_freight:
-            avail["freighters"] -= _send_pass(
-                src, settings["destCityId"], remaining,
-                "freighters", freighter_cap, avail["freighters"])
-        if headroom is not None:
-            for i in range(5):
-                headroom[i] = max(0, headroom[i] - (surplus[i] - remaining[i]))
-            if sum(headroom) <= 0:
+    # ── Fair allocation of each ship pool across the eligible cities ──────────
+    # Ships a city needs to move its current (remaining) surplus in one go.
+    def _needs(capacity):
+        return [-(-sum(surplus) // capacity) if sum(surplus) > 0 else 0
+                for _, surplus in eligible]
+
+    dest_id = settings["destCityId"]
+    # Transporters first (faster); freighters then mop up any large leftover.
+    if use_trans:
+        alloc = _fair_ship_split(_needs(ship_cap), avail["transporters"])
+        for (src, remaining), cap_ships in zip(eligible, alloc):
+            if avail["transporters"] <= 0:
                 break
+            avail["transporters"] -= _send_pass(
+                src, dest_id, remaining, "transporters", ship_cap,
+                min(cap_ships, avail["transporters"]))
+    if use_freight:
+        alloc = _fair_ship_split(_needs(freighter_cap), avail["freighters"])
+        for (src, remaining), cap_ships in zip(eligible, alloc):
+            if avail["freighters"] <= 0:
+                break
+            avail["freighters"] -= _send_pass(
+                src, dest_id, remaining, "freighters", freighter_cap,
+                min(cap_ships, avail["freighters"]))
 
     state["lastRun"]  = now
     state["lastSent"] = sent_summary

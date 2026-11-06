@@ -173,6 +173,91 @@ def test_consolidation_both_does_two_passes(monkeypatch, tmp_path):
     assert [c[0] for c in calls] == [False, True]  # transporters first, then freighters
 
 
+# ── Fair ship split (water-filling) ────────────────────────────────────────────
+
+def test_fair_ship_split_serves_small_cities_in_full():
+    # One rich city, two small: the small ones are served fully and the rich city
+    # soaks up the rest — no ship wasted when there is slack.
+    assert tm._fair_ship_split([300, 10, 10], 338) == [300, 10, 10]
+
+
+def test_fair_ship_split_spreads_when_fleet_scarce():
+    # Three equally hungry cities, too few ships: spread evenly instead of the first
+    # city grabbing everything.
+    grant = tm._fair_ship_split([300, 300, 300], 338)
+    assert sum(grant) == 338
+    assert max(grant) - min(grant) <= 1          # even to within one ship
+    assert all(g > 0 for g in grant)             # every city gets a slice
+
+
+def test_fair_ship_split_never_exceeds_need_or_supply():
+    assert tm._fair_ship_split([5, 0, 2], 100) == [5, 0, 2]   # capped to need
+    assert sum(tm._fair_ship_split([10, 10], 4)) == 4         # capped to supply
+    assert tm._fair_ship_split([0, 0], 50) == [0, 0]          # nothing wanted
+    assert tm._fair_ship_split([3, 3], 0) == [0, 0]           # nothing available
+
+
+def _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships, cap):
+    """Drive process_consolidation with several surplus-rich source cities sharing a
+    scarce freighter pool; return list of (city_name, total_sent) dispatches."""
+    import queue_processor as qp
+    monkeypatch.setattr(tm, "CONSOLIDATE_SETTINGS_PATH", str(tmp_path / "cs.json"))
+    monkeypatch.setattr(tm, "CONSOLIDATE_STATE_PATH", str(tmp_path / "st.json"))
+    monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
+    monkeypatch.setattr(tm.random, "randint", lambda a, b: 0)
+
+    with open(tmp_path / "cs.json", "w") as f:
+        json.dump({"enabled": True, "destCityId": "99", "destCityName": "Dest",
+                   "intervalHours": 6, "minSendTotal": 1000, "shipType": "freighters",
+                   "respectDestCap": False}, f)
+    own = [{"cityId": 99, "name": "Dest", "x": 1, "y": 1, "islandId": "7"}]
+    for i, name in enumerate(stocks):
+        own.append({"cityId": i + 1, "name": name, "x": 2, "y": 2, "islandId": "8"})
+    with open(tmp_path / "own.json", "w") as f:
+        json.dump(own, f)
+
+    monkeypatch.setattr(qp, "_load_resources_json",
+                        lambda: {name: {"Wood": amt} for name, amt in stocks.items()})
+    monkeypatch.setattr(qp, "_load_empire_json", lambda: {})
+    monkeypatch.setattr(qp, "_calc_city_reserved", lambda *a: [0, 0, 0, 0, 0])
+    monkeypatch.setattr(qp, "_load_queue", lambda: {"queues": {}})
+    monkeypatch.setattr(qp, "_get_resource_buffer", lambda: [0, 0, 0, 0, 0])
+
+    import ikabot.helpers.naval as naval
+    import ikabot.helpers.pedirInfo as pedir
+    monkeypatch.setattr(naval, "getAvailableShips", lambda s: 0, raising=False)
+    monkeypatch.setattr(naval, "getAvailableFreighters", lambda s: ships, raising=False)
+    monkeypatch.setattr(pedir, "getShipCapacity", lambda s: (5000, cap), raising=False)
+
+    calls = []
+    names_by_id = {str(i + 1): name for i, name in enumerate(stocks)}
+
+    def fake_dispatch(session, origin, dest, island, ships_used, send_list, use_freighters=False):
+        calls.append((names_by_id.get(str(origin), str(origin)), sum(send_list)))
+        return True
+    monkeypatch.setattr(qp, "_dispatch_transport", fake_dispatch)
+
+    tm.process_consolidation(session=object(), in_active_hours=True)
+    return calls
+
+
+def test_consolidation_spreads_scarce_fleet_across_cities(monkeypatch, tmp_path):
+    """Two rich cities, only 4 freighters (cap 25000): instead of the first city
+    taking all 4, each city ships in the same round (fair split)."""
+    stocks = {"Rich1": 1_000_000, "Rich2": 1_000_000}
+    calls = _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships=4, cap=25000)
+    assert len(calls) == 2                       # both cities served this round
+    sent_by = dict(calls)
+    assert sent_by["Rich1"] == 50000 and sent_by["Rich2"] == 50000  # 2 freighters each
+
+
+def test_consolidation_fullest_city_first(monkeypatch, tmp_path):
+    """With only enough ships for one city, the fullest is served first."""
+    stocks = {"Small": 60_000, "Huge": 2_000_000}
+    calls = _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships=1, cap=25000)
+    assert calls[0][0] == "Huge"                 # fullest relieved first
+
+
 def test_consolidation_caps_to_dest_headroom_and_skips_resources(monkeypatch, tmp_path):
     """Never overflow the destination: a nearly-full dest only receives its free space,
     and a resource named in skipResources (wine) is never sent."""
