@@ -17,7 +17,7 @@ Three containers run side by side and share a Docker volume (`ikalogs_volume`):
 ## Notable capabilities
 
 - **Empire dashboard** — per-city resources, buildings, movements, world scan, espionage, combat dispatch, calculators; alerts and thresholds stored server-side; pt/en.
-- **Farming (F4)** — per-target state machine (SQLite `farm_targets`), event-driven cadence tuned to real round-trip time, live inactivity confirmation before every action, parallel raids that only open once the priority target is being drained, and a scout-freshness guard so a stale estimate never wastes a wave after downtime.
+- **Farming (F4)** — per-target state machine (SQLite `farm_targets`), event-driven cadence tuned to real round-trip time, live inactivity confirmation before every action, parallel raids that only open once the priority target is being drained, and a scout-freshness guard so a stale estimate never wastes a wave after downtime. A fleet target or a first-contact target is only raided after a **complete** live sweep — warehouse + a successful garrison report + a movements leg that actually ran — so a failed scout or an unread fleet never passes for a clean port (unescorted troops bounce off the local fleet otherwise).
 - **Wine strategy** — the empire produces no wine, so:
   - **Balancer (F9)** redistributes existing wine (and rescues emptied cities);
   - **Market buyer (F10)** buys wine from other players' offers within hard guards — price ceiling, gold floor, per-cycle spend cap, a refill deadband, a dry-run, and a critical mode that borrows the farm's reserved ships in a wine emergency;

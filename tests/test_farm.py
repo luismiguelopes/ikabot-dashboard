@@ -344,6 +344,102 @@ def test_clean_garrison_but_returning_fleet_marks_fleet_target(monkeypatch, tmp_
     assert t["enemy_return_at"] == eta
 
 
+def test_fleet_target_failed_garrison_not_attacked(monkeypatch, tmp_path):
+    """Tróia 3 06/11: a FLEET target whose garrison report came back success=False with an
+    empty troops {} must NOT be raided — a failed scout is not a confirmed clean port. The bot
+    re-scouts instead of sending unescorted troops into the local fleet."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,
+        "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
+        "garrisonResult": {"success": False, "troops": {}},   # FAILED scout, not a clean port
+        "movementsResult": None,
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []                                        # no attack dispatched
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE"
+    assert t["scout_fail_count"] == 1                         # queued for a fresh re-scout
+    assert t["is_fleet_target"] == 1
+
+
+def test_fleet_target_movements_not_run_not_attacked(monkeypatch, tmp_path):
+    """A FLEET target with a CLEAN garrison but whose movements leg never ran (spy returned
+    first → movementsResult=None) is NOT confirmed clean: a fleet could be out at sea. The bot
+    re-scouts rather than raid on half a sweep (second Tróia 3 hole)."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,
+        "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {}},    # harbour clean NOW...
+        "movementsResult": None,                              # ...but movements never confirmed
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    assert db_manager.farm_get("100")["state"] == "IDLE"
+
+
+def test_first_contact_movements_not_run_not_attacked(monkeypatch, tmp_path):
+    """A first-contact scout (needMovements=True even on a not-yet-fleet target) that comes back
+    with a clean garrison but no movements reading is an incomplete sweep → re-scout, never a
+    blind first raid. A target is only 'mega safe' after the full triple sweep comes back."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,   # first contact → full sweep
+        "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {}},
+        "movementsResult": None,
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    assert db_manager.farm_get("100")["state"] == "IDLE"
+
+
+def test_full_clean_sweep_fleet_target_still_attacks(monkeypatch, tmp_path):
+    """Positive guard: a FLEET target whose FULL sweep is clean — garrison success=True with no
+    troops AND a completed movements report showing no returning fleet — IS raided directly.
+    The guard blocks only incomplete sweeps, never a confirmed-clean one."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1,
+                                   "enemy_return_at": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,
+        "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {}},    # clean harbour
+        "movementsResult": {"enemyReturnAt": None},           # movements ran → no fleet returning
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]
+    assert db_manager.farm_get("100")["state"] == "ATTACKING"
+
+
 def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
     """With a configured loadout, send min(loadout, available) per unit — not all troops."""
     _setup_db(tmp_path)

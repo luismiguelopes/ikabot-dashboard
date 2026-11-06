@@ -2089,6 +2089,10 @@ def import_existing_reports(session):
         garrison_result = None
         if g_report is not None:
             garrison_result = {
+                # Only successful reports reach this point (Pass 1 skips success=False), so this
+                # garrison snapshot is a confirmed one — mark it so the farm's garrison_known
+                # gate treats it as a real reading, not a failed/suspect scout.
+                "success":        True,
                 "troops":         troops,
                 "targetCityName": g_report.get("targetCityName", base_report.get("targetCityName", "")),
                 "reportedAt":     g_report.get("reportedAt", reported_at),

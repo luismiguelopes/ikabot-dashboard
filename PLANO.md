@@ -784,6 +784,29 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
       - **Testes**: +2 (primeiro contacto pede movimentos; guarnição limpa + frota a regressar →
         `is_fleet_target=1`) e 2 testes do seed invertidos. **353 testes.**
 
+- [x] **P12.3 Scout incompleto nunca autoriza ataque directo** ✅ 2026-11-06
+      Segunda ricochete real em **Tróia 3** (06/11): o farm despachou tropas apesar de o varrimento
+      **não** estar confirmado — o utilizador recolheu o ataque à mão. **Causa-raiz** (dois buracos no
+      gate de decisão, `farm_manager.py` ramo SPYING):
+      - **A — scout falhado lido como "porto limpo"**: o parser (`espionage_parsers.py`) só põe
+        `success=True` quando o relatório diz *"completada com sucesso"*. O relatório de guarnição do
+        Tróia 3 veio **`success:false`** com `troops:{}` (espião rejeitado/suspeito). Mas
+        `garrison_known = ("troops" in gres) and (error is None)` **não** olhava para `success` → o
+        `{}` de um relatório falhado passou como "0 inimigos" e atacou.
+      - **B — movimentos nunca corridos tidos como "sem frota"**: o espião reutilizado "regressou antes
+        dos movimentos" → `movementsResult: null`. Nada exigia que a perna de movimentos tivesse
+        **corrido** antes de mandar tropas num alvo de frota.
+      **Correção**: um alvo de frota **ou** um primeiro contacto (ambos pedem `needMovements`) só
+      autoriza tropas após um varrimento **completo confirmado** — `garrison_known` passa a exigir
+      `gres.get("success")` (default `True` só para relatórios importados, que vêm sempre de scouts
+      bem-sucedidos), e `movements_ok` exige `movementsResult is not None` quando `needMovements`.
+      `needs_full_sweep and not (garrison_known and movements_ok)` → re-espia, nunca ataca às cegas
+      (com o streak de falhas a saltar a ronda ao fim de N). `app.py`/import semeia agora
+      `garrison_result["success"]=True` para coerência. **Mitigação**: `force_fresh_spy=1` no Tróia 3
+      (os espiões estacionados expiravam antes dos movimentos). **Testes**: +4 (guarnição falhada não
+      ataca; movimentos não corridos não atacam; primeiro contacto incompleto não ataca; varrimento
+      completo e limpo **continua** a atacar). **357 testes.**
+
 ### Por fazer
 
 - [ ] **F14 — Construção autónoma de espiões** (pedido do utilizador 2026-11-04: *"o bot construir

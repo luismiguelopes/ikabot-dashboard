@@ -1307,10 +1307,21 @@ def process_farm_targets(session, in_active_hours=True):
                 if was_safe:
                     logger.info("[farm] %s: movimentos revelam frota inimiga a regressar — "
                                 "reclassificado como alvo de frota (sem ataque directo)", name)
-            # A rejected/absent garrison scout carries NO fleet intel — it is not the same as
-            # "scouted and saw an empty port". Only a scout that actually returned troops data
-            # (error-free) tells us the port is clean.
-            garrison_known = ("troops" in gres) and (gres.get("error") is None)
+            # A rejected/absent/FAILED garrison scout carries NO fleet intel — it is not the
+            # same as "scouted and saw an empty port". A report only confirms a clean port when
+            # it actually COMPLETED ("completada com sucesso" → success=True); a success=False
+            # report with an empty troops {} is a failed/suspect scout, NOT a clean port. Reading
+            # that {} as "0 enemy" sent unescorted troops into Tróia 3's fleet (06/11 bounce).
+            # (Imported reports carry no success key but are built only from successful reports
+            # → default True.)
+            garrison_known = (bool(gres.get("success", True))
+                              and ("troops" in gres) and (gres.get("error") is None))
+            # Movements leg: a fleet target / first-contact scout REQUESTS movements
+            # (needMovements) to catch a fleet that is out at sea and due back. If that leg never
+            # ran (spy returned first → movementsResult is None), the port is NOT confirmed — a
+            # patrolling fleet could still be out. Only a COMPLETED movements report (a dict,
+            # clean or carrying an ETA) confirms it. This was the second hole at Tróia 3.
+            movements_ok = (m.get("movementsResult") is not None) if m.get("needMovements") else True
             # Type-based decision: flee ships (lancha/reparador) are driven off by a blockade;
             # any other warship actually fights → too dangerous. combat ships beyond the
             # tolerated cap (max_enemy_ships, default 0) → skip + alert.
@@ -1360,28 +1371,33 @@ def process_farm_targets(session, in_active_hours=True):
             # (≤ max_enemy_ships) get fought by it — never ignored.
             enemy_ships = flee_ships + combat_ships
 
-            # FLEET TARGET + NO FLEET INTEL: the garrison scout came back rejected/empty, so we
-            # cannot tell whether the port is clean. Never raid on the guess — unescorted troops
-            # bounce off the local fleet and sail home for nothing (seen live: Lançassolar
-            # 29/10, "regressam porque perderiam num combate marítimo"). Re-scout instead; after
-            # a few straight failures skip the round rather than loop forever.
-            if int(t.get("is_fleet_target", 0)) == 1 and not garrison_known:
+            # INCOMPLETE SWEEP → never raid on the guess. A target needs a FULL live sweep before
+            # troops sail: a completed garrison AND (when requested) a completed movements leg.
+            # This fires for a fleet target, or ANY first-contact scout — both set needMovements.
+            # A failed garrison (success=False) or a movements leg that never ran = incomplete
+            # intel; unescorted troops bounce off the local fleet and sail home empty (Lançassolar
+            # 29/10 "regressam porque perderiam num combate marítimo"; Tróia 3 06/11, troops sent
+            # on a success=False garrison {} + null movements). Re-scout instead; after a few
+            # straight failures skip the round rather than loop forever.
+            needs_full_sweep = (int(t.get("is_fleet_target", 0)) == 1
+                                or bool(m.get("needMovements")))
+            if needs_full_sweep and not (garrison_known and movements_ok):
                 tries = int(t.get("scout_fail_count", 0)) + 1
+                why = ("guarnição rejeitada" if not garrison_known else "movimentos não corridos")
                 if tries >= _MAX_SCOUT_FAILS:
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
                                       "last_loot": loot, "scout_fail_count": 0,
                                       "next_action": "spy"})
-                    logger.warning("[farm] %s: guarnição não confirmada %dx (scout rejeitado) — "
-                                   "a saltar a ronda, não arrisco tropas contra frota não vista",
-                                   name, tries)
+                    logger.warning("[farm] %s: varrimento incompleto %dx (%s) — a saltar a ronda, "
+                                   "não arrisco tropas contra frota não confirmada",
+                                   name, tries, why)
                 else:
                     wait = random.randint(3, 8) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
                                       "last_loot": loot, "scout_fail_count": tries,
                                       "next_action": "spy"})
-                    logger.info("[farm] %s: guarnição não confirmada (scout rejeitado) — "
-                                "re-espionagem em %dmin antes de atacar (alvo com frota)",
-                                name, wait // 60)
+                    logger.info("[farm] %s: varrimento incompleto (%s) — re-espionagem em %dmin "
+                                "antes de atacar", name, why, wait // 60)
                 continue
             # A clean scout clears the failure streak.
             if int(t.get("scout_fail_count", 0)):
