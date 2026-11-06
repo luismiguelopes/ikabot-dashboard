@@ -285,6 +285,41 @@ def _fair_ship_split(needs, avail):
     return grant
 
 
+def _spread_resource(caps, total):
+    """Distribute `total` units of one resource across cities, each capped by caps[i].
+
+    Amounts jitter around an even split (±~40%) so the transports don't all carry an
+    identical load, which is an obvious bot tell. The sum is still exactly
+    min(total, sum(caps)) — it fills the destination's free space without overflowing —
+    and no city is asked for more than its surplus. With random.uniform pinned to 1.0
+    (tests) it collapses to an even split.
+    """
+    n = len(caps)
+    caps = [max(0, int(c)) for c in caps]
+    total = min(max(0, int(total)), sum(caps))
+    if total <= 0 or n == 0:
+        return [0] * n
+    weights = [random.uniform(0.6, 1.4) if caps[i] > 0 else 0.0 for i in range(n)]
+    sw = sum(weights) or 1.0
+    alloc = [min(caps[i], int(total * weights[i] / sw)) for i in range(n)]
+    # Hand the rounding/cap leftover to cities that still have room, in even chunks.
+    rem = total - sum(alloc)
+    guard = 0
+    while rem > 0 and guard < 10000:
+        guard += 1
+        room = [i for i in range(n) if alloc[i] < caps[i]]
+        if not room:
+            break
+        step = max(1, rem // len(room))
+        for i in room:
+            if rem <= 0:
+                break
+            add = min(step, caps[i] - alloc[i], rem)
+            alloc[i] += add
+            rem -= add
+    return alloc
+
+
 def process_consolidation(session, in_active_hours=True):
     """Every intervalHours, send each city's surplus to the destination city.
     Respects the queue resourceBuffer and building-queue reservations, so it never
@@ -418,12 +453,10 @@ def process_consolidation(session, in_active_hours=True):
 
     ignored = {str(c) for c in (settings.get("ignoreCityIds") or [])}
 
-    # ── Pre-pass: collect eligible sources and their shippable surplus ────────
-    # Fullest city first: it gets destination-headroom priority and is relieved of
-    # storage pressure first. (All own cities share an island, so source distance is
-    # uniform — ordering is about pressure, not travel time.) Headroom is reserved
-    # here as we go so two cities never claim the same destination free space.
-    eligible = []  # list of [src, remaining_surplus]
+    # ── Pre-pass: candidate sources and their raw surplus, fullest first ──────
+    # (All own cities share an island, so source distance is uniform; fullest-first
+    # decides who contributes when the destination can't take everyone.)
+    candidates = []  # list of [src, surplus]
     for src in sorted(
             own_cities,
             key=lambda c: sum(int(resources.get(c.get("name", ""), {}).get(k, 0))
@@ -440,15 +473,33 @@ def process_consolidation(session, in_active_hours=True):
         surplus  = _calc_surplus(stock, buffer, reserved)
         for i in skip_idx:
             surplus[i] = 0
-        if headroom is not None:
-            surplus = [min(surplus[i], headroom[i]) for i in range(5)]
-            for i in range(5):
-                headroom[i] = max(0, headroom[i] - surplus[i])
-        if sum(surplus) < min_send:
+        if sum(surplus) <= 0:
             continue
-        eligible.append([src, surplus])
-        if headroom is not None and sum(headroom) <= 0:
-            break
+        candidates.append([src, surplus])
+
+    # ── Spread the destination's free space across source cities ──────────────
+    # Transports load their cargo at the origin before sailing (Ikariam charges a
+    # loading time), so many cities loading a small share in parallel beats one city
+    # loading the whole lot in series. When the destination is near-full, split its
+    # limited free space across as many cities as can each still carry min_send, and
+    # hand each one an even share per resource (same water-fill used for ships). An
+    # unknown/uncapped destination keeps the simple path: each city offers its full
+    # surplus and the ship split alone spreads the fleet.
+    if headroom is not None:
+        # How much can actually move this round = per resource, the smaller of the
+        # destination's free space and what the cities together have to give. (Empty
+        # headroom in a resource nobody has surplus of must not inflate the count.)
+        movable = sum(min(headroom[r], sum(s[r] for _, s in candidates))
+                      for r in range(5))
+        max_cities = max(1, movable // max(1, min_send))
+        chosen = candidates[:max_cities]
+        for r in range(5):
+            share = _spread_resource([s[r] for _, s in chosen], headroom[r])
+            for j, (_, s) in enumerate(chosen):
+                s[r] = share[j]
+        eligible = [[src, s] for src, s in chosen if sum(s) > 0]
+    else:
+        eligible = [cs for cs in candidates if sum(cs[1]) >= min_send]
 
     # ── Fair allocation of each ship pool across the eligible cities ──────────
     # Ships a city needs to move its current (remaining) surplus in one go.

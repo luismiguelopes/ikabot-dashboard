@@ -197,27 +197,35 @@ def test_fair_ship_split_never_exceeds_need_or_supply():
     assert tm._fair_ship_split([3, 3], 0) == [0, 0]           # nothing available
 
 
-def _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships, cap):
+def _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships, cap,
+                             dest_res=None, respect_cap=False, min_send=1000, jitter=False):
     """Drive process_consolidation with several surplus-rich source cities sharing a
-    scarce freighter pool; return list of (city_name, total_sent) dispatches."""
+    scarce freighter pool; return list of (city_name, total_sent) dispatches.
+    dest_res (+ respect_cap) injects a destination warehouse with limited headroom.
+    jitter=False pins the per-city amount jitter off (even split) for exact assertions;
+    jitter=True keeps the real random (seed it in the caller for determinism)."""
     import queue_processor as qp
     monkeypatch.setattr(tm, "CONSOLIDATE_SETTINGS_PATH", str(tmp_path / "cs.json"))
     monkeypatch.setattr(tm, "CONSOLIDATE_STATE_PATH", str(tmp_path / "st.json"))
     monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
     monkeypatch.setattr(tm.random, "randint", lambda a, b: 0)
+    if not jitter:
+        monkeypatch.setattr(tm.random, "uniform", lambda a, b: 1.0)
 
     with open(tmp_path / "cs.json", "w") as f:
         json.dump({"enabled": True, "destCityId": "99", "destCityName": "Dest",
-                   "intervalHours": 6, "minSendTotal": 1000, "shipType": "freighters",
-                   "respectDestCap": False}, f)
+                   "intervalHours": 6, "minSendTotal": min_send, "shipType": "freighters",
+                   "respectDestCap": respect_cap}, f)
     own = [{"cityId": 99, "name": "Dest", "x": 1, "y": 1, "islandId": "7"}]
     for i, name in enumerate(stocks):
         own.append({"cityId": i + 1, "name": name, "x": 2, "y": 2, "islandId": "8"})
     with open(tmp_path / "own.json", "w") as f:
         json.dump(own, f)
 
-    monkeypatch.setattr(qp, "_load_resources_json",
-                        lambda: {name: {"Wood": amt} for name, amt in stocks.items()})
+    res = {name: {"Wood": amt} for name, amt in stocks.items()}
+    if dest_res is not None:
+        res["Dest"] = dest_res
+    monkeypatch.setattr(qp, "_load_resources_json", lambda: res)
     monkeypatch.setattr(qp, "_load_empire_json", lambda: {})
     monkeypatch.setattr(qp, "_calc_city_reserved", lambda *a: [0, 0, 0, 0, 0])
     monkeypatch.setattr(qp, "_load_queue", lambda: {"queues": {}})
@@ -258,6 +266,68 @@ def test_consolidation_fullest_city_first(monkeypatch, tmp_path):
     assert calls[0][0] == "Huge"                 # fullest relieved first
 
 
+def test_consolidation_spreads_limited_headroom_across_cities(monkeypatch, tmp_path):
+    """A near-full destination with room for only 300k wood, and six cities each with
+    1M surplus: the free space is split across all six (parallel loading), not dumped
+    on a single city. This is the fix for one city serialising a huge load."""
+    stocks = {f"City{i}": 1_000_000 for i in range(6)}
+    dest_res = {"Wood": 9_700_000, "storageCapacity": 10_000_000}  # 300k wood free
+    calls = _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships=100, cap=25000,
+                                     dest_res=dest_res, respect_cap=True, min_send=1000)
+    assert len(calls) == 6                       # every city loads in parallel
+    sent = dict(calls)
+    assert sum(sent.values()) == 300_000         # never exceeds the destination's room
+    assert max(sent.values()) == 50_000          # evenly split (300k / 6), not one big load
+
+
+def test_consolidation_limited_headroom_caps_city_count_to_min_send(monkeypatch, tmp_path):
+    """When the free space is tiny, don't spread so thin every trip is under min_send:
+    room for 120k with min_send 50k → at most 2 cities (not all 6)."""
+    stocks = {f"City{i}": 1_000_000 for i in range(6)}
+    dest_res = {"Wood": 9_880_000, "storageCapacity": 10_000_000}  # 120k wood free
+    calls = _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships=100, cap=25000,
+                                     dest_res=dest_res, respect_cap=True, min_send=50_000)
+    assert len(calls) == 2                       # 120k / 50k = 2 cities, not 6
+    assert sum(s for _, s in calls) == 120_000
+
+
+def test_spread_resource_even_split_and_jitter():
+    # Pinned uniform → exact even split that fills the headroom without overflow.
+    import random as _r
+    orig = tm.random.uniform
+    try:
+        tm.random.uniform = lambda a, b: 1.0
+        assert tm._spread_resource([1000, 1000, 1000, 1000], 400) == [100, 100, 100, 100]
+        assert sum(tm._spread_resource([1000, 1000, 1000], 500)) == 500   # fills exactly
+        assert tm._spread_resource([50, 1000], 400) == [50, 350]          # capped by surplus
+        assert tm._spread_resource([1000], 0) == [0]
+        # Real jitter → amounts vary but the invariants hold.
+        tm.random.uniform = orig
+        _r.seed(7)
+        out = tm._spread_resource([100000] * 8, 400000)
+        assert sum(out) == 400000            # still fills exactly, no overflow
+        assert len(set(out)) > 1             # not identical → no bot pattern
+        assert all(0 < x <= 100000 for x in out)
+    finally:
+        tm.random.uniform = orig
+
+
+def test_consolidation_jitters_amounts_to_avoid_bot_pattern(monkeypatch, tmp_path):
+    """Identical cargo on every transport is a bot tell. Splitting a near-full
+    destination across many cities, the per-city amounts must vary while the total
+    still exactly fills the free space and respects each city's surplus."""
+    stocks = {f"City{i}": 1_000_000 for i in range(8)}
+    dest_res = {"Wood": 9_600_000, "storageCapacity": 10_000_000}  # 400k wood free
+    tm.random.seed(12345)
+    calls = _run_consolidation_multi(monkeypatch, tmp_path, stocks, ships=100, cap=25000,
+                                     dest_res=dest_res, respect_cap=True, min_send=1000,
+                                     jitter=True)
+    amounts = [s for _, s in calls]
+    assert sum(amounts) == 400_000           # fills exactly, no overflow
+    assert len(set(amounts)) > 1             # varied → not a bot pattern
+    assert all(a > 0 for a in amounts)
+
+
 def test_consolidation_caps_to_dest_headroom_and_skips_resources(monkeypatch, tmp_path):
     """Never overflow the destination: a nearly-full dest only receives its free space,
     and a resource named in skipResources (wine) is never sent."""
@@ -266,6 +336,7 @@ def test_consolidation_caps_to_dest_headroom_and_skips_resources(monkeypatch, tm
     monkeypatch.setattr(tm, "CONSOLIDATE_STATE_PATH", str(tmp_path / "st.json"))
     monkeypatch.setattr(tm, "OWN_CITIES_PATH", str(tmp_path / "own.json"))
     monkeypatch.setattr(tm.random, "randint", lambda a, b: 0)
+    monkeypatch.setattr(tm.random, "uniform", lambda a, b: 1.0)  # even split, no jitter
 
     with open(tmp_path / "cs.json", "w") as f:
         json.dump({"enabled": True, "destCityId": "99", "destCityName": "Dest",
