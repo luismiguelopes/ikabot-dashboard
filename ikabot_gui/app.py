@@ -931,23 +931,57 @@ def api_own_cities():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/world-scan/settings")
-def api_world_scan_settings_get():
+WORLD_SCAN_RADIUS_MIN, WORLD_SCAN_RADIUS_MAX = 1, 60
+
+
+def _world_scan_default_radius():
+    try:
+        return max(WORLD_SCAN_RADIUS_MIN, min(WORLD_SCAN_RADIUS_MAX,
+                                              int(os.getenv("WORLD_SCAN_RADIUS", 10))))
+    except ValueError:
+        return 10
+
+
+def _read_world_scan_settings():
     try:
         with open(WORLD_SCAN_SETTINGS_PATH) as f:
-            return jsonify(json.load(f))
+            s = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return jsonify({"enabled": True})
+        s = {}
+    s.setdefault("enabled", True)
+    try:
+        s["radius"] = max(WORLD_SCAN_RADIUS_MIN, min(WORLD_SCAN_RADIUS_MAX, int(s["radius"])))
+    except (KeyError, TypeError, ValueError):
+        s["radius"] = _world_scan_default_radius()
+    return s
+
+
+@app.route("/api/world-scan/settings")
+def api_world_scan_settings_get():
+    return jsonify(_read_world_scan_settings())
 
 
 @app.route("/api/world-scan/settings", methods=["POST"])
 def api_world_scan_settings_post():
+    """Partial update: only the keys present in the body change, so toggling `enabled`
+    never resets the radius and vice-versa."""
     body = request.get_json(silent=True) or {}
-    settings = {"enabled": bool(body.get("enabled", True))}
+    settings = _read_world_scan_settings()
+    if "enabled" in body:
+        settings["enabled"] = bool(body["enabled"])
+    if "radius" in body:
+        try:
+            radius = int(body["radius"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "radius must be an integer"}), 400
+        if not WORLD_SCAN_RADIUS_MIN <= radius <= WORLD_SCAN_RADIUS_MAX:
+            return jsonify({"error": f"radius must be between {WORLD_SCAN_RADIUS_MIN} "
+                                     f"and {WORLD_SCAN_RADIUS_MAX}"}), 400
+        settings["radius"] = radius
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(WORLD_SCAN_SETTINGS_PATH, "w") as f:
         json.dump(settings, f, indent=2)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, **settings})
 
 
 @app.route("/api/espionage/settings")

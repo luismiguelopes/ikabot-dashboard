@@ -97,3 +97,22 @@ def test_respects_interval(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "_scan_one_island", lambda *a, **k: scanned.append(1) or None)
     sc.process_watchlist(session=object(), in_active_hours=True)
     assert scanned == []
+
+
+# ── Editable world-scan radius ────────────────────────────────────────────────
+
+def test_scan_radius_reads_setting_with_env_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(sc, "LOGS_DIR", str(tmp_path))
+    monkeypatch.setattr(sc, "WORLD_SCAN_RADIUS", 10)
+    settings = tmp_path / "world_scan_settings.json"
+    assert sc._scan_radius() == 10                          # no file → env default
+    settings.write_text('{"enabled": true, "radius": 22}')
+    assert sc._scan_radius() == 22                          # configured value wins
+    settings.write_text('{"radius": 999}')
+    assert sc._scan_radius() == 60                          # clamped to the maximum
+    settings.write_text('{"radius": 0}')
+    assert sc._scan_radius() == 1                           # clamped to the minimum
+    settings.write_text('{"radius": "abc"}')
+    assert sc._scan_radius() == 10                          # junk → env default
+    settings.write_text("not json")
+    assert sc._scan_radius() == 10

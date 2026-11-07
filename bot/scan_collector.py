@@ -32,6 +32,17 @@ def _world_scan_enabled():
         return True
 
 
+def _scan_radius():
+    """Scan radius in island units. Editable from the dashboard (world_scan_settings.json
+    "radius"); falls back to the WORLD_SCAN_RADIUS env default when unset or invalid."""
+    try:
+        with open(os.path.join(LOGS_DIR, "world_scan_settings.json")) as f:
+            r = int(json.load(f).get("radius"))
+        return max(1, min(60, r))
+    except Exception:
+        return WORLD_SCAN_RADIUS
+
+
 def should_start_scan():
     """True if a new world scan should be started.
     Returns False if a scan is already in progress (checkpoint exists)."""
@@ -107,7 +118,7 @@ def _publish_partial(cp):
         with open(scan_path, "w") as f:
             json.dump({
                 "lastUpdated":    int(time.time()),
-                "scanRadius":     WORLD_SCAN_RADIUS,
+                "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
                 "ownCities":      cp["ownCities"],
                 "players":        cp["players"],
                 "islands":        cp["islands"],
@@ -125,7 +136,7 @@ def _finalize_scan(cp):
         with open(scan_path, "w") as f:
             json.dump({
                 "lastUpdated":    int(time.time()),
-                "scanRadius":     WORLD_SCAN_RADIUS,
+                "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
                 "ownCities":      cp["ownCities"],
                 "players":        cp["players"],
                 "islands":        cp["islands"],
@@ -177,7 +188,8 @@ def collect_shallow_scan(session):
             except Exception:
                 pass
 
-        logger.info(lm("world_scan_start", ts=time.strftime('%H:%M:%S'), radius=WORLD_SCAN_RADIUS))
+        radius = _scan_radius()
+        logger.info(lm("world_scan_start", ts=time.strftime('%H:%M:%S'), radius=radius))
         _write_scan_status("running", "shallow_scan", 0, 4, lm("scan_status_shallow"))
 
         shallow_islands = []
@@ -210,12 +222,12 @@ def collect_shallow_scan(session):
             if not island["players"] or island["id"] in seen_ids:
                 continue
             for city in own_cities:
-                if _dist(island["x"], island["y"], city["x"], city["y"]) <= WORLD_SCAN_RADIUS:
+                if _dist(island["x"], island["y"], city["x"], city["y"]) <= radius:
                     seen_ids.add(island["id"])
                     islands_to_scan.append(island)
                     break
 
-        logger.info(lm("scan_islands_count", n=len(islands_to_scan), radius=WORLD_SCAN_RADIUS))
+        logger.info(lm("scan_islands_count", n=len(islands_to_scan), radius=radius))
         logger.info(lm("scan_shallow_complete", n=len(islands_to_scan)))
 
         cp = {
@@ -223,6 +235,7 @@ def collect_shallow_scan(session):
             "ownCities":    own_cities,
             "islandsQueue": islands_to_scan,
             "totalIslands": len(islands_to_scan),
+            "radius":       radius,
             "players":      [],
             "islands":      [],
         }

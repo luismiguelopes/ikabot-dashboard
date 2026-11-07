@@ -92,3 +92,18 @@ def test_migration_keeps_existing_total(monkeypatch, tmp_path):
     assert "garrisonThresholds" not in data         # dead key dropped
     assert data["garrisonThresholdTotal"] == 70000  # real total untouched
     assert eu.validate_configs() == {}
+
+
+def test_world_scan_settings_with_radius_is_clean(monkeypatch, tmp_path):
+    """The dashboard writes {"enabled", "radius"}; the schema must know both, otherwise a
+    valid radius shows up as an 'unknown key' banner."""
+    _point_logs_at(monkeypatch, tmp_path)
+    _write(tmp_path, "world_scan_settings.json", {"enabled": True, "radius": 18})
+    assert eu.validate_configs() == {}
+
+
+def test_world_scan_radius_wrong_type_is_flagged(monkeypatch, tmp_path):
+    _point_logs_at(monkeypatch, tmp_path)
+    _write(tmp_path, "world_scan_settings.json", {"enabled": True, "radius": "wide"})
+    warnings = eu.validate_configs()
+    assert any("radius" in w for w in warnings["world_scan_settings.json"])

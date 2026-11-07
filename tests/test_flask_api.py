@@ -33,7 +33,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(flask_app, "_db", db_manager)
     monkeypatch.setattr(flask_app, "LOGS_DIR", str(tmp_path))
     for const in ("ALERT_THRESHOLDS_PATH", "ESPIONAGE_SETTINGS_PATH",
-                  "WORLD_SCAN_JSON_PATH", "PLAYER_MARKS_JSON_PATH",
+                  "WORLD_SCAN_JSON_PATH", "WORLD_SCAN_SETTINGS_PATH", "PLAYER_MARKS_JSON_PATH",
                   "TRAVEL_CALIBRATION_PATH", "SPY_MISSIONS_PATH"):
         monkeypatch.setattr(flask_app, const,
                             str(tmp_path / os.path.basename(getattr(flask_app, const))))
@@ -340,3 +340,32 @@ def test_login_logout_flow(monkeypatch, tmp_path):
     assert c.get("/api/transport/wine").status_code == 200     # session carried
     assert c.post("/api/logout").status_code == 200
     assert c.get("/api/transport/wine").status_code == 401
+
+
+# ── /api/world-scan/settings: editable scan radius ───────────────────────────
+
+def test_world_scan_settings_default_radius_from_env(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setenv("WORLD_SCAN_RADIUS", "14")
+    d = c.get("/api/world-scan/settings").get_json()
+    assert d == {"enabled": True, "radius": 14}
+
+
+def test_world_scan_settings_radius_roundtrip_and_partial_update(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/world-scan/settings", json={"radius": 18}).status_code == 200
+    assert c.get("/api/world-scan/settings").get_json() == {"enabled": True, "radius": 18}
+    # Toggling `enabled` must not reset the radius, nor setting the radius re-enable.
+    c.post("/api/world-scan/settings", json={"enabled": False})
+    d = c.get("/api/world-scan/settings").get_json()
+    assert d == {"enabled": False, "radius": 18}
+    c.post("/api/world-scan/settings", json={"radius": 7})
+    assert c.get("/api/world-scan/settings").get_json() == {"enabled": False, "radius": 7}
+
+
+def test_world_scan_settings_rejects_bad_radius(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    for bad in (0, -3, 61, "abc", None):
+        r = c.post("/api/world-scan/settings", json={"radius": bad})
+        assert r.status_code == 400, bad
+    assert c.get("/api/world-scan/settings").get_json()["radius"] == flask_app._world_scan_default_radius()

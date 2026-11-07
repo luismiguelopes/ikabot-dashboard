@@ -25,6 +25,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
   const [spyOriginCityId, setSpyOriginCityId] = useState<string>(() => loadSpyDefaults().originCityId)
   const [worldScanEnabled,     setWorldScanEnabled]     = useState(true)
   const [spyProcessingEnabled, setSpyProcessingEnabled] = useState(true)
+  const [radiusInput,          setRadiusInput]          = useState('')
+  const [radiusSaved,          setRadiusSaved]          = useState<number | null>(null)
   const [importingReports,     setImportingReports]     = useState(false)
   const [importMsg,            setImportMsg]            = useState<string | null>(null)
   const [recallingUnused,      setRecallingUnused]      = useState(false)
@@ -49,7 +51,10 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       }
     }).catch(() => {})
     fetch('/api/world-scan/settings').then(r => r.json())
-      .then(d => { if (d.enabled !== undefined) setWorldScanEnabled(d.enabled) }).catch(() => {})
+      .then(d => {
+        if (d.enabled !== undefined) setWorldScanEnabled(d.enabled)
+        if (typeof d.radius === 'number') { setRadiusSaved(d.radius); setRadiusInput(String(d.radius)) }
+      }).catch(() => {})
     fetch('/api/espionage/settings').then(r => r.json())
       .then(d => { if (d.processingEnabled !== undefined) setSpyProcessingEnabled(d.processingEnabled) }).catch(() => {})
   }, [])
@@ -68,6 +73,24 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       body: JSON.stringify({ enabled: next }),
     }).catch(() => setWorldScanEnabled(!next))
   }, [worldScanEnabled])
+
+  const handleRadiusSave = useCallback(() => {
+    const n = Number.parseInt(radiusInput, 10)
+    if (!Number.isInteger(n) || n < 1 || n > 60) {
+      setRadiusInput(radiusSaved !== null ? String(radiusSaved) : '')
+      return
+    }
+    if (n === radiusSaved) return
+    fetch('/api/world-scan/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ radius: n }),
+    }).then(r => {
+      if (!r.ok) throw new Error('save failed')
+      setRadiusSaved(n)
+      pushToast(t('scan_radius_saved', { n }), 'ok')
+    }).catch(() => setRadiusInput(radiusSaved !== null ? String(radiusSaved) : ''))
+  }, [radiusInput, radiusSaved, pushToast, t])
 
   const handleSpyProcessingToggle = useCallback(() => {
     const next = !spyProcessingEnabled
@@ -229,6 +252,23 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
                   {spyProcessingEnabled ? 'ON' : 'OFF'}
                 </span>
               </button>
+              <label
+                title={t('scan_radius_hint')}
+                className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border bg-white text-slate-600 border-slate-200"
+              >
+                <i className="fa-solid fa-circle-dot text-[10px] text-slate-400" />
+                {t('scan_radius')}
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={radiusInput}
+                  onChange={e => setRadiusInput(e.target.value)}
+                  onBlur={handleRadiusSave}
+                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                  className="w-14 px-1.5 py-0.5 text-xs text-center border border-slate-200 rounded-md focus:outline-none focus:border-indigo-400"
+                />
+              </label>
             </div>
           </div>
           <div className="flex flex-col items-end gap-2 shrink-0">
