@@ -472,10 +472,15 @@ def apply_ship_reserve(ships_available, label, now=None):
 
 
 def _pick_spy_origin(own_cities, spy_counts, target):
-    """Closest own city that has a safehouse and spies available to send."""
+    """Closest own city that has a safehouse and spies available to send.
+
+    Ties on distance (all own cities often share one island, hence identical
+    coordinates) go to the city with the MOST spies at home — never just the first in
+    the list, which sent every scout from a city holding a single spy and had the
+    server reject the rest once that spy was gone."""
     by_city = spy_counts.get("byCityId", {})
     tx, ty = target.get("island_x", 0), target.get("island_y", 0)
-    best, best_d = None, float("inf")
+    best, best_key = None, None
     for c in own_cities:
         if c.get("safehousePosition") is None:
             continue
@@ -486,8 +491,9 @@ def _pick_spy_origin(own_cities, spy_counts, target):
         if not avail or avail <= 0:
             continue
         d = (c.get("x", 0) - tx) ** 2 + (c.get("y", 0) - ty) ** 2
-        if d < best_d:
-            best_d, best = d, c
+        key = (d, -int(avail))
+        if best_key is None or key < best_key:
+            best_key, best = key, c
     return best
 
 

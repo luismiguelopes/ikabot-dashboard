@@ -1583,3 +1583,29 @@ def test_scheduler_withholds_raid_wake_when_slots_full(monkeypatch, tmp_path):
     # Turn #3 into a fleet target (next move is a scout, not a raid) → must wake
     db_manager.farm_update("3", {"is_fleet_target": 1})
     assert fm.has_due_farm() is True
+
+
+def test_pick_spy_origin_ties_go_to_city_with_most_spies():
+    """All own cities share one island (identical coordinates). The distance tie must go
+    to the city with the most spies at home, not the first in the list — otherwise every
+    scout leaves from a city holding a single spy and the rest are rejected."""
+    own = [
+        {"cityId": 1, "name": "First",  "x": 47, "y": 38, "safehousePosition": 8},
+        {"cityId": 2, "name": "Rich",   "x": 47, "y": 38, "safehousePosition": 8},
+        {"cityId": 3, "name": "NoHouse", "x": 47, "y": 38, "safehousePosition": None},
+        {"cityId": 4, "name": "Empty",  "x": 47, "y": 38, "safehousePosition": 8},
+    ]
+    counts = {"byCityId": {"1": {"inDefense": 1}, "2": {"inDefense": 37},
+                           "3": {"inDefense": 99}, "4": {"inDefense": 0}}}
+    target = {"island_x": 47, "island_y": 38}
+    assert fm._pick_spy_origin(own, counts, target)["name"] == "Rich"
+
+
+def test_pick_spy_origin_still_prefers_closer_city():
+    own = [
+        {"cityId": 1, "name": "Far",  "x": 90, "y": 90, "safehousePosition": 8},
+        {"cityId": 2, "name": "Near", "x": 11, "y": 11, "safehousePosition": 8},
+    ]
+    counts = {"byCityId": {"1": {"inDefense": 40}, "2": {"inDefense": 2}}}
+    assert fm._pick_spy_origin(own, counts, {"island_x": 10, "island_y": 10})["name"] == "Near"
+    assert fm._pick_spy_origin(own, {"byCityId": {}}, {"island_x": 10, "island_y": 10}) is None
