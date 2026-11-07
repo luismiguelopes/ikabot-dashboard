@@ -343,7 +343,20 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       enriched.push(enrichOne(synth))
     }
 
-    enriched.sort((a, b) => {
+    // Below-minimum-loot cities are noise: keep a row only if the farm is actively working it,
+    // or its known loot reaches the minimum. Unknown loot (never scouted) stays. This must apply
+    // to the farm-synthesized rows too — a drained, disabled target that dropped out of the scan
+    // would otherwise be re-created here with no filter at all. The farm's own figure wins for
+    // farm targets (it is updated by every real return); the scout total covers the rest.
+    const visible = enriched.filter(p => {
+      const farm = p.cityId ? farmByCity[String(p.cityId)] : undefined
+      if (farm?.enabled) return true
+      const farmLootKnown = !!farm && ((farm.last_loot || 0) > 0 || (farm.total_raids || 0) > 0)
+      const known = farmLootKnown ? (farm!.last_loot || 0) : p.totalResources
+      return known === null || known === undefined || known >= minLootTotal
+    })
+
+    visible.sort((a, b) => {
       // Queued (farmed, enabled) targets lead, in queue order; discoveries follow.
       const qa = a.cityId ? queuePos[String(a.cityId)] : undefined
       const qb = b.cityId ? queuePos[String(b.cityId)] : undefined
@@ -359,7 +372,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       return a.cKey.localeCompare(b.cKey)
     })
 
-    return enriched
+    return visible
   }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
