@@ -542,3 +542,135 @@ def test_save_prunes_old_terminal_missions(monkeypatch, tmp_path):
     ]})
     names = {m["targetCityName"] for m in em._load_missions()["missions"]}
     assert names == {"RecenteDone", "VivoAntigo", "SemData"}
+
+
+# ── Live-state coverage & mid-sleep wake-up (Castle, 06/11) ────────────────────
+
+_ALL_NON_TERMINAL = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING", "EXECUTING_WAREHOUSE",
+                     "WAITING_FOR_GARRISON", "EXECUTING_GARRISON",
+                     "WAITING_FOR_MOVEMENTS", "EXECUTING_MOVEMENTS")
+
+
+def test_every_in_flight_state_counts_as_live(monkeypatch):
+    """A mission mid-sweep must read as live. The movements states were missing, so the farm
+    saw a spy between garrison and movements as 'never launched' and restarted the target."""
+    for state in _ALL_NON_TERMINAL:
+        _patch(monkeypatch, [_mission(state=state, dispatchedAt=_now())])
+        assert em.has_live_mission("100", _now() - 60), state
+
+
+def test_terminal_states_are_not_live(monkeypatch):
+    for state in ("DONE", "FAILED", "RECALLED"):
+        _patch(monkeypatch, [_mission(state=state, dispatchedAt=_now())])
+        assert not em.has_live_mission("100", _now() - 60), state
+
+
+def test_live_states_cover_every_mission_state_the_machine_writes():
+    """Guard against the same omission recurring: every state the machine assigns, other
+    than the terminal ones, must be in _LIVE_MISSION_STATES."""
+    import re
+    src = open(em.__file__, encoding="utf-8").read()
+    written = set(re.findall(r'\["state"\]\s*=\s*"([A-Z_]+)"', src))
+    terminal = {"DONE", "FAILED", "RECALLED"}
+    missing = (written - terminal) - set(em._LIVE_MISSION_STATES)
+    assert not missing, f"states written but not treated as live: {sorted(missing)}"
+
+
+def test_has_due_spy_steps_per_state(monkeypatch):
+    now = _now()
+    cases = [
+        ("WAITING_AT_CITY",       "executeAfter"),
+        ("WAITING_FOR_GARRISON",  "garrisonExecuteAfter"),
+        ("EXECUTING_WAREHOUSE",   "collectAfter"),
+        ("EXECUTING_GARRISON",    "garrisonCollectAfter"),
+        ("WAITING_FOR_MOVEMENTS", "movementsExecuteAfter"),
+        ("EXECUTING_MOVEMENTS",   "movementsCollectAfter"),
+    ]
+    for state, field in cases:
+        _patch(monkeypatch, [_mission(state=state, **{field: now - 5})])
+        assert em.has_due_spy_steps(), f"{state} due"
+        _patch(monkeypatch, [_mission(state=state, **{field: now + 300})])
+        assert not em.has_due_spy_steps(), f"{state} not yet due"
+
+
+def test_has_due_spy_steps_ignores_terminal_and_untimed(monkeypatch):
+    now = _now()
+    _patch(monkeypatch, [_mission(state="DONE", executeAfter=now - 5),
+                         _mission(state="TRAVELING", executeAfter=now - 5)])
+    assert not em.has_due_spy_steps()
+
+
+def test_next_spy_eta_includes_movements_legs(monkeypatch):
+    """The sleep-wake ETA must see the movements leg too, or the bot sleeps through it."""
+    import queue_processor as qp
+    now = _now()
+    _patch(monkeypatch, [_mission(state="WAITING_FOR_MOVEMENTS", movementsExecuteAfter=now + 40),
+                         _mission(state="EXECUTING_MOVEMENTS", movementsCollectAfter=now + 90)])
+    assert qp._get_next_spy_eta() == now + 40
+
+
+# ── Verified full sweep mark (fullSweepAt) ──────────────────────────────────────
+
+def _full(now, **over):
+    m = _mission(state="DONE", needMovements=True, movementsResult={"enemyReturnAt": None},
+                 movementsExecutedAt=now - 60,
+                 result={"resources": {"wood": 5}, "reportedAt": now - 120},
+                 garrisonResult={"success": True, "troops": {}, "reportedAt": now - 90})
+    m.update(over)
+    return m
+
+
+def test_full_sweep_at_is_the_oldest_leg_of_a_complete_sweep():
+    now = _now()
+    assert em.full_sweep_at(_full(now)) == now - 120
+
+
+def test_full_sweep_at_none_unless_every_leg_succeeded():
+    now = _now()
+    bad = {
+        "not DONE":              {"state": "EXECUTING_MOVEMENTS"},
+        "no movements asked":    {"needMovements": False},
+        "movements never ran":   {"movementsResult": None},
+        "garrison failed":       {"garrisonResult": {"success": False, "troops": {}, "reportedAt": now - 90}},
+        "garrison unread":       {"garrisonResult": {"success": True, "reportedAt": now - 90}},
+        "garrison errored":      {"garrisonResult": {"success": True, "troops": {}, "error": "x", "reportedAt": now - 90}},
+        "no warehouse":          {"result": {"reportedAt": now - 120}},
+        "imported":              {"importedFromReport": True},
+        "no spy origin":         {"originCityId": ""},
+        "undated movements":     {"movementsExecutedAt": None},
+        "undated warehouse":     {"result": {"resources": {"wood": 5}}},
+    }
+    for why, over in bad.items():
+        assert em.full_sweep_at(_full(now, **over)) is None, why
+
+
+def test_collect_movements_stamps_full_sweep_when_all_legs_ok(monkeypatch):
+    now = _now()
+    h = _patch(monkeypatch, [_full(now, state="EXECUTING_MOVEMENTS", movementsResult=None,
+                                   movementsCollectAfter=now - 1)])
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: "<movements/>")
+    monkeypatch.setattr(em, "_enemy_return_from_movements", lambda html, name, now=None: None)
+    em.collect_movements_results(session=object())
+    assert h["missions"][0]["fullSweepAt"] == now - 120
+
+
+def test_collect_movements_does_not_stamp_when_garrison_failed(monkeypatch):
+    """The movements leg finishing is not enough: a failed garrison read must not earn the mark."""
+    now = _now()
+    h = _patch(monkeypatch, [_full(now, state="EXECUTING_MOVEMENTS", movementsResult=None,
+                                   movementsCollectAfter=now - 1,
+                                   garrisonResult={"success": False, "troops": {}, "reportedAt": now - 90})])
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: "<movements/>")
+    monkeypatch.setattr(em, "_enemy_return_from_movements", lambda html, name, now=None: None)
+    em.collect_movements_results(session=object())
+    assert h["missions"][0]["state"] == "DONE"
+    assert h["missions"][0]["fullSweepAt"] is None
+
+
+def test_rearming_a_parked_spy_clears_the_mark(monkeypatch):
+    """A re-run is a new sweep: the previous run's mark must not survive into it."""
+    now = _now()
+    h = _patch(monkeypatch, [_full(now, fullSweepAt=now - 120)])
+    assert em.reexecute_stationed_spy("100", fast=True, need_garrison=True, need_movements=True)
+    assert h["missions"][0]["state"] == "WAITING_AT_CITY"
+    assert h["missions"][0]["fullSweepAt"] is None

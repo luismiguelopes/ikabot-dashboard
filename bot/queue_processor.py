@@ -224,18 +224,13 @@ def _get_next_spy_eta():
     next hourly cycle, which was stalling the spy pipeline ~1h between each step."""
     try:
         from espionage_manager import _load_missions
+        from espionage_manager import _spy_step_due_times
         etas = []
         now = time.time()
         for m in _load_missions().get("missions", []):
-            st = m.get("state")
-            if st == "WAITING_AT_CITY" and m.get("executeAfter", 0) > now:
-                etas.append(m["executeAfter"])
-            elif st == "WAITING_FOR_GARRISON" and m.get("garrisonExecuteAfter", 0) > now:
-                etas.append(m["garrisonExecuteAfter"])
-            elif st in ("EXECUTING", "EXECUTING_WAREHOUSE") and m.get("collectAfter", 0) > now:
-                etas.append(m["collectAfter"])
-            elif st == "EXECUTING_GARRISON" and m.get("garrisonCollectAfter", 0) > now:
-                etas.append(m["garrisonCollectAfter"])
+            due = _spy_step_due_times(m)
+            if due and due > now:
+                etas.append(due)
         return min(etas) if etas else None
     except Exception:
         return None
@@ -447,6 +442,21 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 from farm_manager import has_due_farm, process_farm_targets
                 if has_due_farm():
                     process_farm_targets(session, in_active_hours=True)
+                    continue
+            except Exception:
+                pass
+
+        # Spy pipeline steps that came due while asleep (execute warehouse/garrison/movements,
+        # collect a report). The sleep length was fixed on entry from the ETAs known THEN, so
+        # spies the farm re-armed mid-sleep would otherwise idle until it ended. Spaced ≥15s
+        # apart so a step that cannot progress can never spin this loop hot.
+        if session and _in_scan_hours() and not is_paused():
+            try:
+                from espionage_manager import has_due_spy_steps, process_spy_cycle
+                if (has_due_spy_steps()
+                        and time.time() - getattr(smart_sleep, "_last_spy_step", 0) >= 15):
+                    smart_sleep._last_spy_step = time.time()
+                    process_spy_cycle(session)
                     continue
             except Exception:
                 pass

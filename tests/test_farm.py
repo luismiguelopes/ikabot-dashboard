@@ -1609,3 +1609,145 @@ def test_pick_spy_origin_still_prefers_closer_city():
     counts = {"byCityId": {"1": {"inDefense": 40}, "2": {"inDefense": 2}}}
     assert fm._pick_spy_origin(own, counts, {"island_x": 10, "island_y": 10})["name"] == "Near"
     assert fm._pick_spy_origin(own, {"byCityId": {}}, {"island_x": 10, "island_y": 10}) is None
+
+
+# ── Reuse of a fresh, COMPLETE manual scout as the first contact ─────────────────
+
+def _manual_sweep(now, **over):
+    """A complete, fresh hand-run scout for target 100 (all three legs, ~1-2 min old)."""
+    m = {
+        "state": "DONE", "targetCityId": "100", "originCityId": "1", "needMovements": True,
+        "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": now - 120},
+        "garrisonResult": {"success": True, "troops": {}, "reportedAt": now - 90},
+        "movementsResult": {"enemyReturnAt": None}, "movementsExecutedAt": now - 60,
+    }
+    m.update(over)
+    return m
+
+
+def test_recent_full_sweep_accepts_complete_fresh_scout(monkeypatch):
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+    now = int(time.time())
+    got = fm._recent_full_sweep([_manual_sweep(now)], {"target_city_id": "100"}, now)
+    assert got is not None
+    assert got[1] == now - 120          # the OLDEST leg dates the scout
+
+
+def test_recent_full_sweep_valid_for_the_whole_freshness_window(monkeypatch):
+    """The mark holds for the farm's freshness window (not just minutes): a clean sweep from
+    several hours ago still stands in for the first scout, a day-old one does not."""
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+    now = int(time.time())
+    t = {"target_city_id": "100"}
+    hours_old = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 6 * 3600},
+                              garrisonResult={"success": True, "troops": {}, "reportedAt": now - 6 * 3600 + 30},
+                              movementsExecutedAt=now - 6 * 3600 + 60)
+    assert fm._recent_full_sweep([hours_old], t, now) is not None
+    day_old = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 25 * 3600},
+                            garrisonResult={"success": True, "troops": {}, "reportedAt": now - 25 * 3600 + 30},
+                            movementsExecutedAt=now - 25 * 3600 + 60)
+    assert fm._recent_full_sweep([day_old], t, now) is None
+
+
+def test_recent_full_sweep_window_follows_freshness_setting(monkeypatch):
+    now = int(time.time())
+    t = {"target_city_id": "100"}
+    two_h = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 7200},
+                          garrisonResult={"success": True, "troops": {}, "reportedAt": now - 7190},
+                          movementsExecutedAt=now - 7180)
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 3600)        # 1h window
+    assert fm._recent_full_sweep([two_h], t, now) is None
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 0)           # guard disabled → 24h default
+    assert fm._recent_full_sweep([two_h], t, now) is not None
+
+
+def test_recent_full_sweep_rejects_anything_short_of_complete_and_fresh(monkeypatch):
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+    now = int(time.time())
+    t = {"target_city_id": "100"}
+    bad = {
+        "no movements flag (classic manual scout)": {"needMovements": False},
+        "movements leg never ran":     {"movementsResult": None},
+        "garrison read failed":        {"garrisonResult": {"success": False, "troops": {},
+                                                           "reportedAt": now - 90}},
+        "garrison has no troops key":  {"garrisonResult": {"success": True, "reportedAt": now - 90}},
+        "no warehouse resources":      {"result": {"reportedAt": now - 120}},
+        "imported report":             {"importedFromReport": True},
+        "no real spy origin":          {"originCityId": ""},
+        "movements leg undated":       {"movementsExecutedAt": None},
+        "warehouse leg too old":       {"result": {"resources": {"wood": 1}, "reportedAt": now - 90000}},
+        "movements leg too old":       {"movementsExecutedAt": now - 90000},
+    }
+    for why, over in bad.items():
+        assert fm._recent_full_sweep([_manual_sweep(now, **over)], t, now) is None, why
+
+
+def test_recent_full_sweep_judges_the_newest_report_only(monkeypatch):
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+    """A newer warehouse-only DONE mission supersedes an older complete one: the farm would
+    evaluate that newer, incomplete report, so it must not be vouched for by the older sweep."""
+    now = int(time.time())
+    newer = {"state": "DONE", "targetCityId": "100", "originCityId": "1",
+             "result": {"resources": {"wood": 9}, "reportedAt": now - 20}}
+    older_full = _manual_sweep(now)
+    assert fm._recent_full_sweep([older_full, newer], {"target_city_id": "100"}, now) is None
+
+
+def test_first_contact_reuses_fresh_full_manual_scout_and_attacks(monkeypatch, tmp_path):
+    """The owner scouted by hand with all three legs a minute ago and then adds the target:
+    no new spies go out; the normal SPYING gate evaluates that scout and the raid launches."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    added = _common_patches(monkeypatch, tmp_path, missions=[_manual_sweep(now)])
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)      # IDLE → SPYING (reuse)
+    t = db_manager.farm_get("100")
+    assert t["state"] == "SPYING"
+    assert t["spy_dispatched_at"] == now - 120 and t["last_spy_at"] == now - 120
+    assert [q for q, _ in added if q == "spy_dispatch"] == []            # nothing re-spied
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)      # gate → attack
+    assert [q for q, _ in added] == ["attack"]
+    assert db_manager.farm_get("100")["state"] == "ATTACKING"
+
+
+def test_first_contact_with_expired_manual_scout_still_scouts_live(monkeypatch, tmp_path):
+    """Same scout but older than the freshness window (25h): the loot estimate is stale → the
+    farm does its own live scout instead of trusting it."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+    stale = _manual_sweep(now, result={"resources": {"wood": 50000}, "reportedAt": now - 90000},
+                          garrisonResult={"success": True, "troops": {}, "reportedAt": now - 89990},
+                          movementsExecutedAt=now - 89980)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    added = _common_patches(monkeypatch, tmp_path, missions=[stale])
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert [q for q, _ in added if q == "attack"] == []                  # never raids on stale intel
+    assert t["state"] == "SPYING" and t["spy_dispatched_at"] >= now - 5  # a NEW scout, dated now
+
+
+def test_first_contact_with_incomplete_manual_scout_scouts_live(monkeypatch, tmp_path):
+    """Fresh but the movements leg is missing (what a plain manual scout used to be): not a
+    proof of safety → live scout, no raid."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    added = _common_patches(monkeypatch, tmp_path,
+                            missions=[_manual_sweep(now, needMovements=False, movementsResult=None)])
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert [q for q, _ in added if q == "attack"] == []
+    assert t["state"] == "SPYING" and t["spy_dispatched_at"] >= now - 5

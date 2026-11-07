@@ -369,3 +369,23 @@ def test_world_scan_settings_rejects_bad_radius(monkeypatch, tmp_path):
         r = c.post("/api/world-scan/settings", json={"radius": bad})
         assert r.status_code == 400, bad
     assert c.get("/api/world-scan/settings").get_json()["radius"] == flask_app._world_scan_default_radius()
+
+
+# ── /api/espionage/dispatch: manual scouts read all three legs by default ────
+
+_SPY_BODY = {"originCityId": "1", "targetCityId": "100", "islandId": "7",
+             "targetPlayerName": "P", "targetCityName": "Castle", "islandX": 40, "islandY": 50}
+
+
+def test_manual_spy_dispatch_requests_the_full_sweep_by_default(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/espionage/dispatch", json=_SPY_BODY).status_code == 200
+    item = db_manager.queue_items("spy_dispatch")[-1]
+    assert item["needGarrison"] is True and item["needMovements"] is True
+
+
+def test_manual_spy_dispatch_can_opt_out_of_movements(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post("/api/espionage/dispatch", json={**_SPY_BODY, "needMovements": False})
+    item = db_manager.queue_items("spy_dispatch")[-1]
+    assert item["needMovements"] is False and item["needGarrison"] is True

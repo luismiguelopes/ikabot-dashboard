@@ -12,6 +12,9 @@ import { FarmSettings } from '../dispatch/FarmSettings'
 import type { WorldScanData, WorldScanPlayer, OwnCity } from '../../types'
 import type { CitySpyCounts, FarmTarget, LootStat, SpyMission } from './types'
 
+// A verified full sweep counts as "safe" for this long (the farm's default spyFreshnessHours = 24h).
+const SAFE_SWEEP_VALID_MIN = 24 * 60
+
 const NAVAL_KEYWORDS = ['navio', 'ship', 'steam giant', 'galley', 'trireme', 'balloon', 'ram', 'mortar', 'catapult', 'flamethrower']
 
 function isNavalUnit(name: string): boolean {
@@ -535,6 +538,21 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <i className="fa-solid fa-magnifying-glass" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
+                          {/* Safe target: warehouse + garrison + movements all succeeded */}
+                          {p.mission?.fullSweepAt ? (() => {
+                            const ageMin = Math.max(0, Math.round((Date.now() / 1000 - p.mission.fullSweepAt!) / 60))
+                            const expired = ageMin > SAFE_SWEEP_VALID_MIN
+                            return (
+                              <span
+                                title={t(expired ? 'safe_target_expired' : 'safe_target_hint', { n: ageMin })}
+                                className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs ${
+                                  expired ? 'text-slate-300' : 'text-emerald-600 bg-emerald-50'
+                                }`}
+                              >
+                                <i className="fa-solid fa-shield-halved" />
+                              </span>
+                            )
+                          })() : <span className="block w-7 h-7" />}
                           {(p.mission?.originCityId && !['RECALLED'].includes(p.mission?.state ?? '')) ? (
                             <button
                               onClick={() => handleRecallSpy(p)}
@@ -599,6 +617,20 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                 <p className="text-xs text-slate-400 italic">{t('spy_no_resources')}</p>
                               )}
                             </div>
+
+                            {/* Verified full sweep: warehouse + garrison + movements all succeeded */}
+                            {p.mission.fullSweepAt && (
+                              <div
+                                title={t('sweep_verified_hint')}
+                                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-xs text-emerald-700"
+                              >
+                                <i className="fa-solid fa-circle-check" />
+                                <span className="font-semibold">{t('sweep_verified')}</span>
+                                <span className="text-emerald-600/80">
+                                  {t('sweep_verified_age', { n: Math.max(0, Math.round((Date.now() / 1000 - p.mission.fullSweepAt) / 60)) })}
+                                </span>
+                              </div>
+                            )}
 
                             {/* Garrison */}
                             {p.mission.garrisonResult && !p.mission.garrisonResult.error && (

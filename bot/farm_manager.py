@@ -512,6 +512,38 @@ def _latest_done_report(missions, target_city_id, since):
     return best
 
 
+# Window in which a verified full sweep may stand in for the first live scout. It is the same
+# freshness the farm already accepts for a confirmed-safe target (spyFreshnessHours): the limit
+# is about the loot estimate not going stale, not about safety — reactivation is still caught
+# live by _confirm_inactive before the target is scouted or raided.
+_DEFAULT_SWEEP_REUSE_SECS = 24 * 3600
+
+
+def _sweep_reuse_window():
+    return _spy_freshness_secs() or _DEFAULT_SWEEP_REUSE_SECS
+
+
+def _recent_full_sweep(missions, t, now):
+    """A verified COMPLETE sweep already on file for a never-scouted target, or None.
+
+    A first-contact target needs the full triple sweep (warehouse + garrison + movements) before
+    any raid. If the owner already ran exactly that — every leg succeeded, see
+    espionage_manager.full_sweep_at — redoing it only burns minutes, so it stands in for the
+    first live scout, provided it is within the freshness window. It is judged on the NEWEST
+    report for the target (the one the farm would evaluate): a newer, incomplete report
+    supersedes an older complete one. Returns (mission, oldest_leg_timestamp), else None → the
+    normal live scout. The farm still runs its usual gate (garrison_known and movements_ok)."""
+    from espionage_manager import full_sweep_at
+    window = _sweep_reuse_window()
+    m = _latest_done_report(missions, t["target_city_id"], now - window)
+    if not m:
+        return None
+    oldest = full_sweep_at(m)
+    if oldest is None or now - oldest > window:
+        return None
+    return m, oldest
+
+
 def _free_ships(session):
     """Live count of free transport ships — the farm must not launch a sea raid while
     the previous raid's ships are still returning (would fail with type=11)."""
@@ -1222,6 +1254,19 @@ def process_farm_targets(session, in_active_hours=True):
             if verdict in ("disable", "skip"):
                 continue
             need_garrison = (verdict == "garrison")
+
+            # A complete, fresh scout the owner ran by hand stands in for the first live one:
+            # evaluate it through the normal SPYING gate instead of repeating the whole sweep.
+            if first_scout:
+                reuse = _recent_full_sweep(missions, t, now)
+                if reuse:
+                    ts = reuse[1]
+                    farm_update(tid, {"state": "SPYING", "spy_dispatched_at": ts,
+                                      "last_spy_at": ts, "respy_launched_at": 0,
+                                      "force_fresh_spy": 0})
+                    logger.info("[farm] %s: scout manual completo há %dmin (armazém+guarnição+"
+                                "movimentos) — a avaliar sem re-espiar", name, (now - ts) // 60)
+                    continue
 
             # P11.9: one dispatch per cycle (scout or raid). If spent, hold this scout for the
             # next wake so launches never fire in a burst.

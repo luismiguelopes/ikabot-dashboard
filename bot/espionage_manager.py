@@ -1439,6 +1439,9 @@ def collect_movements_results(session):
         eta = _enemy_return_from_movements(html, m.get("targetCityName"), now)
         missions[i]["movementsResult"] = {"enemyReturnAt": eta}
         missions[i]["state"] = "DONE"
+        # Mark a fully verified sweep so the dashboard can show it and the farm can skip a
+        # redundant re-scout when the target is added (None when any leg is missing/failed).
+        missions[i]["fullSweepAt"] = full_sweep_at(missions[i])
         if eta:
             logger.info("[espionage] movimentos %s: frota inimiga regressa em ~%dmin",
                         m["targetCityName"], max(0, (eta - now) // 60))
@@ -1543,7 +1546,7 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
             missions[i]["missionType"] = None
             missions[i]["warehouseRetries"] = 0
             missions[i]["error"] = None
-            for k in ("result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
+            for k in ("fullSweepAt", "result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
                       "garrisonCollectAfter", "collectAfter", "executedAt",
                       "movementsResult", "movementsExecutedAt", "movementsExecuteAfter",
                       "movementsCollectAfter"):
@@ -1569,8 +1572,69 @@ def latest_failed_after(target_city_id, since):
 
 # States a spy mission passes through while still in flight — anything not terminal
 # (DONE/FAILED). Used to tell "the spy is still working" from "the spy is gone".
+# Must list EVERY non-terminal state, movements leg included: a missing state makes the farm
+# read a spy that is mid-sweep as "never launched" and restart the target (Castle, 06/11).
 _LIVE_MISSION_STATES = ("TRAVELING", "WAITING_AT_CITY", "EXECUTING",
-                        "EXECUTING_WAREHOUSE", "WAITING_FOR_GARRISON", "EXECUTING_GARRISON")
+                        "EXECUTING_WAREHOUSE", "WAITING_FOR_GARRISON", "EXECUTING_GARRISON",
+                        "WAITING_FOR_MOVEMENTS", "EXECUTING_MOVEMENTS")
+
+
+def _spy_step_due_times(m):
+    """(state-specific) timestamp at which this mission's next step may run, or None when
+    the state has no timed step. Shared by the sleep-wake ETA and the due check so they can
+    never disagree about which states count."""
+    st = m.get("state")
+    if st == "WAITING_AT_CITY":
+        return m.get("executeAfter")
+    if st == "WAITING_FOR_GARRISON":
+        return m.get("garrisonExecuteAfter")
+    if st in ("EXECUTING", "EXECUTING_WAREHOUSE"):
+        return m.get("collectAfter")
+    if st == "EXECUTING_GARRISON":
+        return m.get("garrisonCollectAfter")
+    if st == "WAITING_FOR_MOVEMENTS":
+        return m.get("movementsExecuteAfter")
+    if st == "EXECUTING_MOVEMENTS":
+        return m.get("movementsCollectAfter")
+    return None
+
+
+def full_sweep_at(m):
+    """Epoch of the OLDEST leg of a complete, successful three-leg sweep, else None.
+
+    "Complete" means the mission is DONE, came from a real spy run (not an imported report),
+    asked for movements and that leg actually ran (movementsResult is not None — a spy that
+    came home early leaves it None), the warehouse leg returned resources, and the garrison
+    leg succeeded (success=True with a troops reading; a failed read is not a clean port).
+    Every leg must be dated. The single definition used by the farm (to skip repeating a sweep
+    that was just done by hand) and stamped on the mission for the dashboard badge."""
+    if m.get("state") != "DONE" or m.get("importedFromReport") or not m.get("originCityId"):
+        return None
+    if not m.get("needMovements") or m.get("movementsResult") is None:
+        return None
+    res = m.get("result") or {}
+    gres = m.get("garrisonResult") or {}
+    if not isinstance(res.get("resources"), dict):
+        return None
+    if not (gres.get("success") and "troops" in gres and gres.get("error") is None):
+        return None
+    legs = [res.get("reportedAt"), gres.get("reportedAt"), m.get("movementsExecutedAt")]
+    if not all(isinstance(x, (int, float)) and x > 0 for x in legs):
+        return None
+    return int(min(legs))
+
+
+def has_due_spy_steps():
+    """True if any in-flight spy mission has a step whose time has come (execute a leg or
+    collect its report). smart_sleep uses it to progress the spy pipeline mid-sleep: work
+    the farm or UI creates while the bot is asleep would otherwise wait for the whole
+    remaining sleep (seen live: 8 min lost on the Castle targets)."""
+    now = time.time()
+    for m in _load_missions().get("missions", []):
+        due = _spy_step_due_times(m)
+        if due and due <= now:
+            return True
+    return False
 
 
 def has_live_mission(target_city_id, since):

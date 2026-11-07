@@ -1037,6 +1037,11 @@ def api_espionage_dispatch():
         "islandY":          body["islandY"],
         "numAgents":        int(body.get("numAgents", 1)),
         "numDecoys":        int(body.get("numDecoys", 0)),
+        # Full sweep by default (warehouse + garrison + movements): a scout that also reads the
+        # movements can stand in for the farm's first contact, so adding the target afterwards
+        # does not repeat the whole sweep. Pass needMovements=false for a quicker look.
+        "needGarrison":     True,
+        "needMovements":    bool(body.get("needMovements", True)),
         "queuedAt":         int(time.time()),
     }
 

@@ -28,4 +28,6 @@ export interface SpyMission {
   dispatchedAt: number; arrivedAt: number | null; executedAt: number | null
   garrisonExecuteAfter: number | null; garrisonExecutedAt: number | null
   missionType: string | null; result: SpyMissionResult | null; garrisonResult: SpyGarrisonResult | null; error?: string
+  /** Epoch of the oldest leg when warehouse + garrison + movements all succeeded; null/undefined otherwise. */
+  fullSweepAt?: number | null
 }
