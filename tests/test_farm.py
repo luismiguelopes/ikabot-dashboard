@@ -450,8 +450,8 @@ def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
                  "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
                  "garrisonResult": {"troops": {}}}]
     added = _common_patches(monkeypatch, tmp_path, missions=missions)
-    # loadout asks 50 hoplites (city has 200) and 999 of a unit it doesn't have
-    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 50, "s999": 999})
+    # loadout asks 50 hoplites (city has 200) and 5 of a unit it doesn't have
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 50, "s999": 5})
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
@@ -1124,6 +1124,10 @@ def test_bounced_return_forces_garrison_respy(monkeypatch, tmp_path):
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now - 10,
                                    "last_attack_at": now - 7200, "raids_since_spy": 1,
                                    "last_enemy_ships": 0, "is_fleet_target": 0})
+    # The raid really left port (a successful dispatch is on record) but brought nothing home.
+    db_manager.log_attack({"ts": now - 7100, "originCity": "Home", "targetCity": "Vinhedo B",
+                           "targetPlayer": "J", "islandX": 40, "islandY": 50, "missionType": "army",
+                           "source": "auto", "units": {"s303": 10}, "transporters": 20, "success": True})
     _common_patches(monkeypatch, tmp_path)   # loot_log stays empty → bounce signal
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
@@ -1131,6 +1135,95 @@ def test_bounced_return_forces_garrison_respy(monkeypatch, tmp_path):
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE" and t["next_action"] == "spy"
     assert t["is_fleet_target"]              # next scout reads the port (full garrison)
+
+
+def test_raid_that_never_left_is_not_a_bounce(monkeypatch, tmp_path):
+    """Castle 07/11: the farm marked the target ATTACKING, but the attack manager deferred the raid
+    for lack of ships and finally dropped it, so no dispatch was ever logged. Troops 'back with
+    no loot' there is NOT a naval bounce — the target must keep its classification, the phantom
+    raid must be un-counted, and the attack is simply retried (no forced full re-scout)."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle-VII"})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now - 10,
+                                   "last_attack_at": now - 3600, "raids_since_spy": 2,
+                                   "total_raids": 3, "last_enemy_ships": 0, "is_fleet_target": 0,
+                                   "last_spy_at": now - 7200})
+    _common_patches(monkeypatch, tmp_path)    # no attack_log row, no loot_log row
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "attack"
+    assert not t["is_fleet_target"]                       # NOT reclassified as a fleet target
+    assert t["total_raids"] == 2 and t["raids_since_spy"] == 1   # phantom raid un-counted
+
+
+def test_dispatch_logged_for_another_target_does_not_count(monkeypatch, tmp_path):
+    """A successful dispatch to a DIFFERENT city (or older than this raid) is not proof that this
+    target's raid left."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle-VII"})
+    t = {"target_city_name": "Castle-VII", "last_attack_at": now - 3600}
+    db_manager.log_attack({"ts": now - 3000, "targetCity": "Castle-V", "targetPlayer": "RxDxR",
+                           "success": True})                       # other target
+    db_manager.log_attack({"ts": now - 9000, "targetCity": "Castle-VII", "targetPlayer": "RxDxR",
+                           "success": True})                       # same target, but a past raid
+    db_manager.log_attack({"ts": now - 3000, "targetCity": "Castle-VII", "targetPlayer": "RxDxR",
+                           "success": False})                      # failed dispatch
+    assert fm._attack_was_sent(t) is False
+    db_manager.log_attack({"ts": now - 3500, "targetCity": "Castle-VII", "targetPlayer": "RxDxR",
+                           "success": True})                       # this raid, really sent
+    assert fm._attack_was_sent(t) is True
+
+
+def test_direct_raid_deferred_when_ships_below_floor(monkeypatch, tmp_path):
+    """Castle 07/11: a safe/loop target was raided directly with 4 ships free, so the attack
+    manager deferred it 13 times and dropped it. With fewer usable ships than the floor, the farm
+    must not queue a raid at all — it keeps the intel and waits for the fleet to return."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 4)            # fleet still out
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added if q == "attack"] == []            # nothing enqueued
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "attack"   # keeps its intel, retries
+    assert t["next_run_at"] > now
+    assert t["total_raids"] == 0                                    # no phantom raid counted
+
+
+def test_wine_reserve_counts_against_the_ship_floor(monkeypatch, tmp_path):
+    """The floor is on USABLE ships: 54 free minus a 5-ship wine reserve is 49 < 50 → defer."""
+    import transport_manager as tm
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "respyEvery": 3})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now,
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 5, raising=False)
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 54)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert [q for q, _ in added if q == "attack"] == []
+
+    monkeypatch.setattr(fm, "_free_ships", lambda s: 55)           # exactly at the floor → launches
+    db_manager.farm_update("100", {"next_run_at": 0, "state": "IDLE"})
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert [q for q, _ in added if q == "attack"] == ["attack"]
 
 
 def test_return_with_loot_relaunches_attack(monkeypatch, tmp_path):
@@ -1626,43 +1719,43 @@ def _manual_sweep(now, **over):
 
 
 def test_recent_full_sweep_accepts_complete_fresh_scout(monkeypatch):
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
     now = int(time.time())
     got = fm._recent_full_sweep([_manual_sweep(now)], {"target_city_id": "100"}, now)
     assert got is not None
     assert got[1] == now - 120          # the OLDEST leg dates the scout
 
 
-def test_recent_full_sweep_valid_for_the_whole_freshness_window(monkeypatch):
-    """The mark holds for the farm's freshness window (not just minutes): a clean sweep from
-    several hours ago still stands in for the first scout, a day-old one does not."""
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
+def test_recent_full_sweep_window_is_twenty_four_hours(monkeypatch):
+    """For a NON-fleet target a complete sweep stays valid for 24h; past that it is re-scouted."""
     now = int(time.time())
-    t = {"target_city_id": "100"}
-    hours_old = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 6 * 3600},
-                              garrisonResult={"success": True, "troops": {}, "reportedAt": now - 6 * 3600 + 30},
-                              movementsExecutedAt=now - 6 * 3600 + 60)
-    assert fm._recent_full_sweep([hours_old], t, now) is not None
-    day_old = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 25 * 3600},
-                            garrisonResult={"success": True, "troops": {}, "reportedAt": now - 25 * 3600 + 30},
-                            movementsExecutedAt=now - 25 * 3600 + 60)
-    assert fm._recent_full_sweep([day_old], t, now) is None
+    t = {"target_city_id": "100", "is_fleet_target": 0}
+    def sweep(age):
+        return _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - age},
+                             garrisonResult={"success": True, "troops": {}, "reportedAt": now - age + 20},
+                             movementsExecutedAt=now - age + 40)
+    assert fm._recent_full_sweep([sweep(20 * 60)], t, now) is not None
+    assert fm._recent_full_sweep([sweep(6 * 3600)], t, now) is not None
+    assert fm._recent_full_sweep([sweep(23 * 3600)], t, now) is not None
+    assert fm._recent_full_sweep([sweep(25 * 3600)], t, now) is None
 
 
-def test_recent_full_sweep_window_follows_freshness_setting(monkeypatch):
+def test_fleet_target_never_reuses_an_earlier_sweep(monkeypatch):
+    """07/11: a state reset zeroed last_spy_at, so a fleet target looked 'never scouted' and an
+    8h-old complete sweep was reused — the raid went out blind. A fleet target is re-scouted live
+    before every raid, however fresh the old sweep looks."""
     now = int(time.time())
-    t = {"target_city_id": "100"}
-    two_h = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 7200},
-                          garrisonResult={"success": True, "troops": {}, "reportedAt": now - 7190},
-                          movementsExecutedAt=now - 7180)
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 3600)        # 1h window
-    assert fm._recent_full_sweep([two_h], t, now) is None
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 0)           # guard disabled → 24h default
-    assert fm._recent_full_sweep([two_h], t, now) is not None
+    fresh = _manual_sweep(now)                                        # 1-2 min old, complete
+    assert fm._recent_full_sweep([fresh], {"target_city_id": "100", "is_fleet_target": 1}, now) is None
+    assert fm._recent_full_sweep([fresh], {"target_city_id": "100", "is_fleet_target": 0}, now) is not None
+    old = _manual_sweep(now, result={"resources": {"wood": 5}, "reportedAt": now - 498 * 60},
+                        garrisonResult={"success": True, "troops": {}, "reportedAt": now - 497 * 60},
+                        movementsExecutedAt=now - 496 * 60)           # the actual Indiota sweep
+    assert fm._recent_full_sweep([old], {"target_city_id": "100", "is_fleet_target": 1}, now) is None
+    # a NON-fleet target may reuse it (8h < 24h) — only fleet targets must always be re-scouted
+    assert fm._recent_full_sweep([old], {"target_city_id": "100", "is_fleet_target": 0}, now) is not None
 
 
 def test_recent_full_sweep_rejects_anything_short_of_complete_and_fresh(monkeypatch):
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
     now = int(time.time())
     t = {"target_city_id": "100"}
     bad = {
@@ -1683,7 +1776,6 @@ def test_recent_full_sweep_rejects_anything_short_of_complete_and_fresh(monkeypa
 
 
 def test_recent_full_sweep_judges_the_newest_report_only(monkeypatch):
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
     """A newer warehouse-only DONE mission supersedes an older complete one: the farm would
     evaluate that newer, incomplete report, so it must not be vouched for by the older sweep."""
     now = int(time.time())
@@ -1715,11 +1807,10 @@ def test_first_contact_reuses_fresh_full_manual_scout_and_attacks(monkeypatch, t
 
 
 def test_first_contact_with_expired_manual_scout_still_scouts_live(monkeypatch, tmp_path):
-    """Same scout but older than the freshness window (25h): the loot estimate is stale → the
-    farm does its own live scout instead of trusting it."""
+    """Same scout but 25 hours old: too stale to vouch for the target → the farm does its own live
+    scout instead of trusting it."""
     _setup_db(tmp_path)
     now = int(time.time())
-    monkeypatch.setattr(fm, "_spy_freshness_secs", lambda: 24 * 3600)
     stale = _manual_sweep(now, result={"resources": {"wood": 50000}, "reportedAt": now - 90000},
                           garrisonResult={"success": True, "troops": {}, "reportedAt": now - 89990},
                           movementsExecutedAt=now - 89980)
@@ -1751,3 +1842,146 @@ def test_first_contact_with_incomplete_manual_scout_scouts_live(monkeypatch, tmp
     t = db_manager.farm_get("100")
     assert [q for q, _ in added if q == "attack"] == []
     assert t["state"] == "SPYING" and t["spy_dispatched_at"] >= now - 5
+
+
+# ── Origin = the city with the most military units; minimum army (Castle 07/11) ──
+
+def _cities_setup(tmp_path, cities):
+    """Rewrite the harness files: one entry per city, all with the same coordinates (one island),
+    ids 1..n in the given order. `cities` = {name: {unit_id: amount}} (the cached military)."""
+    mk = lambda d: {u: {"name": u, "amount": n} for u, n in d.items()}
+    with open(tmp_path / "own.json", "w") as f:
+        json.dump([{"cityId": i + 1, "name": n, "x": 41, "y": 50, "safehousePosition": 3, "islandId": "8"}
+                   for i, n in enumerate(cities)], f)
+    with open(tmp_path / "mil.json", "w") as f:
+        json.dump({"byCityName": {n: {"troops": mk(t), "fleet": {}} for n, t in cities.items()}}, f)
+
+
+def _spying_target_with_clean_report(loot=90000):
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    return [{"state": "DONE", "targetCityId": "100",
+             "result": {"resources": {"wood": loot}, "reportedAt": 2000},
+             "garrisonResult": {"success": True, "troops": {}}}]
+
+
+def _army_items(added):
+    return [it for q, it in added if q == "attack" and it["missionType"] == "army"]
+
+
+def test_raid_leaves_from_the_city_with_most_units(monkeypatch, tmp_path):
+    """The real case: a city with 15 mortars vs the city holding the hoplites. The army goes from
+    the city with the most units — whichever it is — not 'the first/closest with any troops'."""
+    _setup_db(tmp_path)
+    added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"DeathCrow": {"s305": 15}, "Polis": {"s303": 138, "s305": 25}, "Noct": {}})
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    army = _army_items(added)
+    assert len(army) == 1 and army[0]["originCityName"] == "Polis"
+    assert army[0]["units"] == {"s303": 138, "s305": 22}
+
+
+def test_not_hardcoded_to_one_city(monkeypatch, tmp_path):
+    """Same rule, army elsewhere: when the units are in another city, THAT city is used."""
+    _setup_db(tmp_path)
+    added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"Polis": {"s305": 3}, "Baphomet": {"s303": 140, "s305": 22}})
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert _army_items(added)[0]["originCityName"] == "Baphomet"
+
+
+def test_stale_cache_does_not_hide_the_army(monkeypatch, tmp_path):
+    """The 8h cache was written while the army was out: Polis looks EMPTY there and five other
+    cities look better. The city of the previous raid is always checked live, the live count
+    shows the army is home, and Polis wins."""
+    import empire_collector
+    _setup_db(tmp_path)
+    added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"A": {"s305": 15}, "B": {"s305": 12}, "C": {"s305": 10},
+                             "D": {"s305": 9}, "Polis": {}})
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    db_manager.log_attack({"ts": int(time.time()) - 7200, "originCity": "Polis", "targetCity": "Antigo",
+                           "missionType": "army", "units": {"s303": 140}, "success": True})
+    live = {"A": {"s305": 15}, "B": {"s305": 12}, "C": {"s305": 10}, "D": {"s305": 9},
+            "Polis": {"s303": 138, "s305": 25}}
+    mk = lambda d: {u: {"name": u, "amount": n} for u, n in d.items()}
+    monkeypatch.setattr(empire_collector, "refresh_city_military",
+                        lambda sess, cid, name: {"cityId": str(cid), "troops": mk(live[name]), "fleet": {}},
+                        raising=False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    army = _army_items(added)
+    assert len(army) == 1 and army[0]["originCityName"] == "Polis"
+
+
+def test_origin_search_stops_once_a_city_can_field_the_whole_loadout(monkeypatch, tmp_path):
+    """No point fetching more cities live once one can send everything (fewer game requests)."""
+    import empire_collector
+    _setup_db(tmp_path)
+    _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"Polis": {"s303": 140, "s305": 22}, "B": {"s303": 50}, "C": {"s303": 40}})
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    calls = []
+    monkeypatch.setattr(empire_collector, "refresh_city_military",
+                        lambda sess, cid, name: calls.append(name) or None, raising=False)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert calls == ["Polis"]
+
+
+def test_token_force_is_refused_when_no_city_has_the_army(monkeypatch, tmp_path):
+    """Every city is far below half the loadout (army still out): no raid, no wasted fleet."""
+    _setup_db(tmp_path)
+    added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"DeathCrow": {"s305": 15}, "Polis": {"s303": 20}})
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert _army_items(added) == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["next_action"] == "attack"        # retried when troops return
+
+
+def test_half_the_loadout_is_enough_to_launch(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
+    _cities_setup(tmp_path, {"Polis": {"s303": 90}})                 # 90 of 162 ≥ 50%
+    monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert _army_items(added)[0]["units"] == {"s303": 90}
+
+
+
+def test_reset_fleet_target_with_old_complete_sweep_is_scouted_not_raided(monkeypatch, tmp_path):
+    """The 07/11 incident end to end: a fleet target whose state was reset (last_spy_at=0) and
+    that has a complete 8h-old sweep on file. It must go to a LIVE scout, never to a raid."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Indiota", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_spy_at": 0,
+                                   "is_fleet_target": 1, "next_action": "spy"})
+    old = _manual_sweep(now, result={"resources": {"wood": 134510}, "reportedAt": now - 498 * 60},
+                        garrisonResult={"success": True, "troops": {}, "reportedAt": now - 497 * 60},
+                        movementsExecutedAt=now - 496 * 60)
+    added = _common_patches(monkeypatch, tmp_path, missions=[old])
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added if q == "attack"] == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "SPYING" and t["spy_dispatched_at"] >= now - 5     # a NEW scout, dated now

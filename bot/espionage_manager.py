@@ -945,6 +945,12 @@ def _enemy_return_from_movements(html, city_name, now=None):
 
 # ── Phase 2: public state machine functions ───────────────────────────────────
 
+# A spy reaches its target in minutes. One that is still not found in the safehouse after this much
+# ACTIVE time (downtime is discounted) was caught or lost; waiting longer only leaves the farm
+# target stuck in SPYING for hours (Indiota / Lançassolar / Porto Real sat 4-9h on 07/11).
+_SPY_ARRIVAL_TIMEOUT_SECS = 3 * 3600
+
+
 def check_spy_arrivals(session):
     """TRAVELING → WAITING_AT_CITY for missions whose spy has arrived at target."""
     data = _load_missions()
@@ -994,10 +1000,10 @@ def check_spy_arrivals(session):
                         m["targetCityName"], spy_id,
                         max(0, (missions[i]["executeAfter"] - int(now)) // 60))
             changed = True
-        elif active_elapsed(m.get("dispatchedAt", 0), now) > 43200:  # 12h active no arrival → failed (B7: discounts downtime)
+        elif active_elapsed(m.get("dispatchedAt", 0), now) > _SPY_ARRIVAL_TIMEOUT_SECS:  # B7: discounts downtime
             missions[i]["state"] = "FAILED"
-            missions[i]["error"] = "Sem chegada detectada após 12h — possivelmente capturado"
-            logger.warning("[espionage] %s: sem chegada após 12h → FAILED", m["targetCityName"])
+            missions[i]["error"] = "Sem chegada detectada após 3h — possivelmente capturado"
+            logger.warning("[espionage] %s: sem chegada após 3h → FAILED", m["targetCityName"])
             changed = True
         elif execute_after and now >= execute_after - 120:
             # Expected arrival time passed but spy not found — refresh countdown

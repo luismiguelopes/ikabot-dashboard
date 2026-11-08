@@ -60,11 +60,31 @@ def test_arrival_promotes_to_waiting(monkeypatch):
     assert m["executeAfter"] > _now()
 
 
-def test_arrival_fails_after_12h(monkeypatch):
-    h = _patch(monkeypatch, [_mission(state="TRAVELING", dispatchedAt=_now() - 50000)])
+def test_arrival_fails_after_3h(monkeypatch):
+    """A spy not found at the target after 3h of active time was caught/lost: fail it so the
+    farm target is released instead of staying stuck in SPYING for the old 12h."""
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", dispatchedAt=_now() - 3 * 3600 - 60)])
     monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (0, ""))
     em.check_spy_arrivals(session=object())
     assert h["missions"][0]["state"] == "FAILED"
+    assert "3h" in h["missions"][0]["error"]
+
+
+def test_arrival_keeps_waiting_before_3h(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", dispatchedAt=_now() - 2 * 3600)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (0, ""))
+    em.check_spy_arrivals(session=object())
+    assert h["missions"][0]["state"] == "TRAVELING"
+
+
+def test_arrival_timeout_discounts_downtime(monkeypatch):
+    """Time the bot spent offline does not count toward the 3h (B7)."""
+    now = _now()
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", dispatchedAt=now - 5 * 3600)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(em, "active_elapsed", lambda since, n=None: 2 * 3600)   # 3h of the 5h offline
+    em.check_spy_arrivals(session=object())
+    assert h["missions"][0]["state"] == "TRAVELING"
 
 
 # ── execute_waiting_missions: WAITING_AT_CITY → EXECUTING_WAREHOUSE / FAILED ─────

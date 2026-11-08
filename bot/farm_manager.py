@@ -64,7 +64,7 @@ _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the rep
 _MAX_CONCURRENT_FARM = 2
 _PARALLEL_SHIP_FLOOR = 50
 _PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor / cap just blocked
-_DISPATCH_SPACING_RANGE = (30, 90)  # jitter (s) between launches when only the per-cycle cap held
+_DISPATCH_SPACING_RANGE = (15, 30)  # jitter (s) between launches when only the per-cycle cap held
 _MAX_LAUNCHES_PER_CYCLE = 1
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
@@ -87,6 +87,12 @@ def get_farm_army():
         return {str(k): int(v) for k, v in army.items() if int(v) > 0}
     except (ValueError, TypeError):
         return {}
+
+
+# A raid must field at least this fraction of the configured loadout (by unit count), counted on
+# the origin's LIVE troops. Below it the army is still out or the wrong city was picked, and a
+# token force wastes the whole trade fleet for nothing.
+_MIN_ARMY_FRACTION = 0.5
 
 
 def get_farm_spy_agents():
@@ -512,15 +518,11 @@ def _latest_done_report(missions, target_city_id, since):
     return best
 
 
-# Window in which a verified full sweep may stand in for the first live scout. It is the same
-# freshness the farm already accepts for a confirmed-safe target (spyFreshnessHours): the limit
-# is about the loot estimate not going stale, not about safety — reactivation is still caught
-# live by _confirm_inactive before the target is scouted or raided.
-_DEFAULT_SWEEP_REUSE_SECS = 24 * 3600
-
-
-def _sweep_reuse_window():
-    return _spy_freshness_secs() or _DEFAULT_SWEEP_REUSE_SECS
+# A verified full sweep may stand in for the first live scout for this long — NON-fleet targets
+# only (a fleet target is always re-scouted live, see _recent_full_sweep). 24h is the same window
+# the farm already trusts for a confirmed-safe target (spyFreshnessHours): an inactive owner can't
+# gain a fleet, and reactivation is caught live by _confirm_inactive before every scout and raid.
+_SWEEP_REUSE_MAX_AGE = 24 * 3600
 
 
 def _recent_full_sweep(missions, t, now):
@@ -529,17 +531,22 @@ def _recent_full_sweep(missions, t, now):
     A first-contact target needs the full triple sweep (warehouse + garrison + movements) before
     any raid. If the owner already ran exactly that — every leg succeeded, see
     espionage_manager.full_sweep_at — redoing it only burns minutes, so it stands in for the
-    first live scout, provided it is within the freshness window. It is judged on the NEWEST
+    first live scout, provided it is under 24 hours old and the target is not a fleet target.
+    It is judged on the NEWEST
     report for the target (the one the farm would evaluate): a newer, incomplete report
     supersedes an older complete one. Returns (mission, oldest_leg_timestamp), else None → the
     normal live scout. The farm still runs its usual gate (garrison_known and movements_ok)."""
     from espionage_manager import full_sweep_at
-    window = _sweep_reuse_window()
-    m = _latest_done_report(missions, t["target_city_id"], now - window)
+    # A fleet target is NEVER trusted from an earlier sweep: its fleet flees and returns, so it
+    # is re-scouted live before every raid. (An 8h-old sweep of a fleet target was reused on
+    # 07/11 after a state reset zeroed last_spy_at — that raid went out blind.)
+    if int(t.get("is_fleet_target", 0) or 0) == 1:
+        return None
+    m = _latest_done_report(missions, t["target_city_id"], now - _SWEEP_REUSE_MAX_AGE)
     if not m:
         return None
     oldest = full_sweep_at(m)
-    if oldest is None or now - oldest > window:
+    if oldest is None or now - oldest > _SWEEP_REUSE_MAX_AGE:
         return None
     return m, oldest
 
@@ -600,6 +607,26 @@ def _raid_in_flight(target):
             if (city and city in v) or (player and player in v):
                 return True
     return False
+
+
+def _attack_was_sent(target):
+    """True if a successful dispatch to this target was logged since the farm queued the raid.
+
+    The farm marks a target ATTACKING when it ENQUEUES the raid; the attack manager sends it later
+    and may defer it (no free ships, wine reserve) and finally drop it after repeated deferrals.
+    Only an actual dispatch reaches attack_log, so its absence means the troops never left.
+    Without this check a dropped raid looked like "troops back with no loot" and was read as a
+    naval bounce (Castle, 07/11), reclassifying a clean target as a fleet target for nothing.
+    Unknown (log unreadable) → True, i.e. the legacy behaviour."""
+    try:
+        from db_manager import get_attack_log
+        since = int(target.get("last_attack_at", 0) or 0) - 120
+        for r in get_attack_log(limit=50, target=target.get("target_city_name") or ""):
+            if r.get("success") and int(r.get("ts", 0) or 0) >= since:
+                return True
+        return False
+    except Exception:
+        return True
 
 
 def _ships_back_eta(target, now, session=None, first_city_id=None):
@@ -847,8 +874,79 @@ def process_farm_targets(session, in_active_hours=True):
         name = t.get("target_city_name", t["target_city_id"])
         ix, iy = t.get("island_x", 0), t.get("island_y", 0)
         required = set(farm_army) if farm_army else None
-        origin = _get_best_origin_city(ix, iy, military, needs_fleet=(enemy_ships > 0),
-                                       required_units=required)
+
+        refreshed = set()   # cities whose military counts were fetched live during this call
+
+        def _units(city_name):
+            """(loadout units this city could send, all its troops, has a combat fleet) from the
+            CURRENT military data. 'Sendable' is capped per unit at the configured quantity, so a
+            city is judged on what a raid would actually field."""
+            m = military.get("byCityName", {}).get(city_name, {})
+            troops = m.get("troops", {}) or {}
+            amt = lambda u: int((troops.get(u) or {}).get("amount", 0) or 0)
+            total = sum(int((v or {}).get("amount", 0) or 0) for v in troops.values())
+            sendable = (sum(min(q, amt(u)) for u, q in farm_army.items()) if farm_army else total)
+            has_fleet = any(int((v or {}).get("amount", 0) or 0) > 0
+                            for v in (m.get("fleet", {}) or {}).values())
+            return sendable, total, has_fleet
+
+        def _last_raid_origin():
+            """Name of the city the last successful raid left from (it may hold the army)."""
+            try:
+                from db_manager import get_attack_log
+                for r in get_attack_log(limit=20):
+                    if r.get("success") and r.get("mission_type", "army") == "army":
+                        return r.get("origin_city") or ""
+            except Exception:
+                pass
+            return ""
+
+        def _live_refresh(c):
+            nm, cid = c.get("name", ""), str(c.get("cityId"))
+            if nm in refreshed:
+                return
+            try:
+                from empire_collector import refresh_city_military
+                fresh = refresh_city_military(session, cid, nm)
+                if fresh:
+                    military.setdefault("byCityName", {})[nm] = fresh
+            except Exception:
+                pass
+            refreshed.add(nm)
+
+        def _pick_origin(needs_fleet):
+            """The city holding the most military units for this raid — always, not a fixed city.
+
+            The 8h military cache lags troops that were out on a raid when it was written, so a
+            city that really holds the army can look empty (and a city with a handful of mortars
+            can look best). So: rank by the cache, but confirm the best few LIVE, always including
+            the city the previous raid left from, and choose by the live counts. Stops early once
+            a city can field the whole loadout (nothing can beat that)."""
+            cities = [c for c in own_cities if c.get("name")]
+            ranked = sorted(cities, key=lambda c: _units(c["name"])[:2], reverse=True)
+            cand = ranked[:3]
+            last = _last_raid_origin()
+            if last and all(c["name"] != last for c in cand):
+                cand += [c for c in cities if c["name"] == last][:1]
+            loadout = sum(farm_army.values()) if farm_army else 0
+            best, best_key = None, None
+            for i, c in enumerate(cand):
+                if i:
+                    time.sleep(random.randint(2, 5))
+                _live_refresh(c)
+                sendable, total, has_fleet = _units(c["name"])
+                if needs_fleet and not has_fleet:
+                    continue
+                key = (sendable, total)
+                if best is None or key > best_key:
+                    best, best_key = c, key
+                if loadout and sendable >= loadout:
+                    break
+            if best is None or best_key[0] <= 0:
+                return None
+            return (best.get("name", ""), str(best.get("cityId")), best.get("x", 0), best.get("y", 0))
+
+        origin = _pick_origin(enemy_ships > 0)
         if not origin:
             return None
         # ── F4.b: decide whether this wave needs a blockade first ───────────────
@@ -872,21 +970,21 @@ def process_farm_targets(session, in_active_hours=True):
                 and now - int(t.get("last_spy_at", 0) or 0) > _early_report_max_age_secs()):
             need_fleet = True
 
-        origin = _get_best_origin_city(ix, iy, military, needs_fleet=need_fleet,
-                                       required_units=required)
+        origin = _pick_origin(need_fleet)
         if not origin:
             return None
         origin_name, origin_id, ox, oy = origin
 
         # Size troops/fleet from LIVE origin counts: the 8h military cache lags the loadout
         # units cycling through raids, so cached counts get rejected with "no units selected".
-        try:
-            from empire_collector import refresh_city_military
-            fresh = refresh_city_military(session, origin_id, origin_name)
-            if fresh:
-                military.setdefault("byCityName", {})[origin_name] = fresh
-        except Exception:
-            pass
+        if origin_name not in refreshed:
+            try:
+                from empire_collector import refresh_city_military
+                fresh = refresh_city_military(session, origin_id, origin_name)
+                if fresh:
+                    military.setdefault("byCityName", {})[origin_name] = fresh
+            except Exception:
+                pass
 
         fleet_travel = _calc_travel_secs(ox, oy, ix, iy)
         troop_travel = int(fleet_travel * 2 / 3)   # rough fallback (real times below)
@@ -900,6 +998,13 @@ def process_farm_targets(session, in_active_hours=True):
             troop_units = _build_troop_units(origin_name, military)
         if not troop_units:
             return None
+        if farm_army:
+            fielded, wanted = sum(troop_units.values()), sum(farm_army.values())
+            if fielded < wanted * _MIN_ARMY_FRACTION:
+                logger.info("[farm] %s: %s só tem %d tropas (< %d%% da carga configurada, %d) — "
+                            "raide adiado até as tropas regressarem", name, origin_name, fielded,
+                            int(_MIN_ARMY_FRACTION * 100), wanted)
+                return None
 
         # Combat fleet for the blockade: the configured small loadout (e.g. 10 steam rams)
         # capped to what the origin has; empty loadout → whole fleet (legacy).
@@ -913,6 +1018,10 @@ def process_farm_targets(session, in_active_hours=True):
                                if avail_f.get(uid, {}).get("amount", 0) > 0}
             if not fleet_units:
                 fleet_units = _build_fleet_units(origin_name, military)
+            if not fleet_units:
+                logger.info("[farm] %s: %s sem frota de combate para o bloqueio — raide adiado",
+                            name, origin_name)
+                return None
 
         # Real travel time from the game form (slowest unit sets the pace). Fetched for EVERY
         # raid now, not just fleet ones: the cheap _calc_travel_secs estimate can overshoot
@@ -1098,6 +1207,22 @@ def process_farm_targets(session, in_active_hours=True):
         spaces every launch, so parallel raids open on consecutive wakes, never in one burst."""
         return _state["budget"] > 0
 
+    def _raid_ships_ready():
+        """Enough usable trade ships (live free count minus the wine reserve) to make a raid
+        worth sending. The direct-raid path had no ship check at all, so raids were enqueued with
+        4 ships free and then silently dropped by the attack manager."""
+        return _free_ships_once() >= _PARALLEL_SHIP_FLOOR
+
+    def _defer_for_ships(t, **extra):
+        """Hold a raid until the previous one's ships are back, keeping its intel."""
+        eta = _ships_back_eta(t, now, session, first_city_id)
+        fields = {"state": "IDLE", "next_run_at": eta, "next_action": "attack"}
+        fields.update(extra)
+        farm_update(t["target_city_id"], fields)
+        logger.info("[farm] %s: só %d navios livres (< %d) — ataque agendado para o regresso (~%dmin)",
+                    t.get("target_city_name", ""), _free_ships_once(), _PARALLEL_SHIP_FLOOR,
+                    max(0, (eta - now) // 60))
+
     def _can_launch_attack():
         """True if a NEW raid may be enqueued now: a dispatch is left this cycle, the concurrency
         cap is not reached, and (for a parallel 2nd+ slot) the ship floor is met."""
@@ -1192,6 +1317,11 @@ def process_farm_targets(session, in_active_hours=True):
                 # hold the target (keep intel) instead of spending the pre-attack island fetch.
                 if not _can_launch_attack():
                     _defer_parallel(t, _attack_backoff())
+                    continue
+                # No point sending (or even queuing) a raid the attack manager would defer for
+                # lack of ships — keep the intel and retry when the fleet is back.
+                if not _raid_ships_ready():
+                    _defer_for_ships(t)
                     continue
                 # Live inactivity check at the coordinates immediately before the raid
                 # (user rule): False → target gone; None → scout instead of blind attack.
@@ -1464,7 +1594,7 @@ def process_farm_targets(session, in_active_hours=True):
             # Don't launch while the previous raid's ships are still returning — keep
             # the fresh intel and retry directly in a few minutes once they're back. Uses the
             # reserve-aware count (P11.10): only the wine reserve free → nothing for the farm.
-            if enemy_ships == 0 and _free_ships_once() < 1:
+            if enemy_ships == 0 and not _raid_ships_ready():
                 eta = _ships_back_eta(t, now, session, first_city_id)
                 farm_update(tid, {"state": "IDLE", "next_run_at": eta,
                                   "last_loot": loot, "last_enemy_ships": enemy_ships,
@@ -1569,6 +1699,20 @@ def process_farm_targets(session, in_active_hours=True):
                 # re-attack blind: force a FULL garrison re-scout (fleet targets always get
                 # one) so the blockade/skip logic can see the port. Worst case (loot_log
                 # missed a real return) costs one spy round instead of a 6h bounced raid.
+                if (int(t.get("last_attack_at", 0) or 0) > 0 and _recent_return_loot(t) is None
+                        and not _attack_was_sent(t)):
+                    # The raid never left port (deferred for lack of ships, then dropped from the
+                    # attack queue). Not a bounce: keep the target's classification and intel,
+                    # un-count the phantom raid and retry the attack.
+                    delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
+                                      "next_action": "attack", "respy_launched_at": 0,
+                                      "total_raids": max(0, int(t.get("total_raids", 0)) - 1),
+                                      "raids_since_spy": max(0, int(t.get("raids_since_spy", 0)) - 1)})
+                    logger.warning("[farm] %s: o ataque nunca saiu (adiado/removido da fila de "
+                                   "ataques) — não é ricochete; nova tentativa em %dmin",
+                                   name, delay // 60)
+                    continue
                 if int(t.get("last_attack_at", 0) or 0) > 0 and _recent_return_loot(t) is None:
                     delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
