@@ -12,7 +12,8 @@ import { FarmSettings } from '../dispatch/FarmSettings'
 import type { WorldScanData, WorldScanPlayer, OwnCity } from '../../types'
 import type { CitySpyCounts, FarmTarget, LootStat, SpyMission } from './types'
 
-// A verified full sweep counts as "safe" for this long (the farm's default spyFreshnessHours = 24h).
+// A verified full sweep lets a NON-fleet target be added to farm/loop without re-scouting for this long
+// (mirrors the farm's _SWEEP_REUSE_MAX_AGE). Fleet targets are always re-scouted regardless.
 const SAFE_SWEEP_VALID_MIN = 24 * 60
 
 const NAVAL_KEYWORDS = ['navio', 'ship', 'steam giant', 'galley', 'trireme', 'balloon', 'ram', 'mortar', 'catapult', 'flamethrower']
@@ -141,7 +142,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   // Farm membership + per-target loot brought — for the unified target row (Phase 3)
   const [farmIds,     setFarmIds]     = useState<Set<string>>(new Set())
   const [farmByCity,  setFarmByCity]  = useState<Record<string, FarmTarget>>({})
-  const [lootByPlayer, setLootByPlayer] = useState<Record<string, LootStat>>({})
+  // Real loot per source CITY (not per player): an owner with several cities must not show the sum
+  // of all of them on each row. Keyed by player + city because city names repeat across players.
+  const lootKey = (player?: string, city?: string) => `${(player || '').toLowerCase()}|${(city || '').toLowerCase()}`
+  const [lootByCity, setLootByCity] = useState<Record<string, LootStat>>({})
   const [showFarmSettings, setShowFarmSettings] = useState(false)
   const loadFarm = () => fetch('/api/farm').then(r => r.json())
     .then((d: FarmTarget[]) => {
@@ -151,9 +155,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     }).catch(() => {})  // background poll — stays silent on failure
   useEffect(() => {
     loadFarm()
-    const loadLoot = () => fetch('/api/loot-stats').then(r => r.json())
+    const loadLoot = () => fetch('/api/loot-stats?by=city').then(r => r.json())
       .then((d: LootStat[]) => {
-        if (Array.isArray(d)) setLootByPlayer(Object.fromEntries(d.map(s => [(s.from_player || '').toLowerCase(), s])))
+        if (Array.isArray(d)) setLootByCity(Object.fromEntries(d.map(s => [lootKey(s.from_player, s.from_city), s])))
       }).catch(() => {})
     loadLoot()
     const id = setInterval(() => { loadFarm(); loadLoot() }, 30000)
@@ -191,6 +195,20 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (!key) continue
       if (!map[key] || m.dispatchedAt > map[key].dispatchedAt) map[key] = m
     }
+    return map
+  }, [missions])
+
+  // Verified full sweep per city, taken from the newest COMPLETED scout — the same report the farm
+  // judges. A newer scout that is still running or failed must not hide it (the farm keeps
+  // re-scouting fleet targets, so the latest mission of a city rarely carries the mark).
+  const sweepAtByCityId = useMemo(() => {
+    const newest: Record<string, SpyMission> = {}
+    for (const m of missions) {
+      if (!m.targetCityId || m.state !== 'DONE') continue
+      if (!newest[m.targetCityId] || m.dispatchedAt > newest[m.targetCityId].dispatchedAt) newest[m.targetCityId] = m
+    }
+    const map: Record<string, number> = {}
+    for (const [cid, m] of Object.entries(newest)) if (m.fullSweepAt) map[cid] = m.fullSweepAt
     return map
   }, [missions])
 
@@ -476,7 +494,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
                         )}
                         {(() => {
-                          const ls = lootByPlayer[(p.playerName || '').toLowerCase()]
+                          const ls = lootByCity[lootKey(p.playerName, p.cityName)]
                           if (!ls || ls.total <= 0) return null
                           return (
                             <div className="text-[10px] text-amber-600 mt-0.5" title={t('farm_loot_brought')}>
@@ -552,14 +570,17 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                             </button>
                           ) : <span className="block w-7 h-7" />}
                           {/* Safe target: warehouse + garrison + movements all succeeded */}
-                          {p.mission?.fullSweepAt ? (() => {
-                            const ageMin = Math.max(0, Math.round((Date.now() / 1000 - p.mission.fullSweepAt!) / 60))
+                          {p.cityId && sweepAtByCityId[String(p.cityId)] ? (() => {
+                            const ageMin = Math.max(0, Math.round((Date.now() / 1000 - sweepAtByCityId[String(p.cityId)]) / 60))
+                            const isFleet = !!p.cityId && farmByCity[String(p.cityId)]?.is_fleet_target === 1
                             const expired = ageMin > SAFE_SWEEP_VALID_MIN
+                            const tip = isFleet ? 'safe_target_fleet' : expired ? 'safe_target_expired' : 'safe_target_hint'
                             return (
                               <span
-                                title={t(expired ? 'safe_target_expired' : 'safe_target_hint', { n: ageMin })}
+                                title={t(tip, { n: ageMin })}
                                 className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs ${
-                                  expired ? 'text-slate-300' : 'text-emerald-600 bg-emerald-50'
+                                  isFleet ? 'text-amber-500 bg-amber-50'
+                                    : expired ? 'text-slate-300' : 'text-emerald-600 bg-emerald-50'
                                 }`}
                               >
                                 <i className="fa-solid fa-shield-halved" />
@@ -675,9 +696,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <p className="text-xs text-slate-400 italic px-1">{p.mission.garrisonResult.error}</p>
                             )}
 
-                            {/* Real loot brought from this player (F1.b) */}
+                            {/* Real loot brought home from THIS city (F1.b) */}
                             {(() => {
-                              const ls = lootByPlayer[(p.playerName || '').toLowerCase()]
+                              const ls = lootByCity[lootKey(p.playerName, p.cityName)]
                               if (!ls || ls.total <= 0) return null
                               const vals = [ls.wood, ls.wine, ls.marble, ls.crystal, ls.sulfur]
                               const icons = ['fa-tree', 'fa-wine-bottle', 'fa-mountain', 'fa-gem', 'fa-flask']

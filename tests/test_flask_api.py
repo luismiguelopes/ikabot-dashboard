@@ -389,3 +389,15 @@ def test_manual_spy_dispatch_can_opt_out_of_movements(monkeypatch, tmp_path):
     c.post("/api/espionage/dispatch", json={**_SPY_BODY, "needMovements": False})
     item = db_manager.queue_items("spy_dispatch")[-1]
     assert item["needMovements"] is False and item["needGarrison"] is True
+
+
+# ── /api/loot-stats: per player by default, per city with ?by=city ─────────────
+
+def test_loot_stats_endpoint_per_player_and_per_city(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    db_manager.log_loot({"ts": 1, "fromCity": "Castle-V", "fromPlayer": "RxDxR", "resources": [200000, 0, 0, 0, 0], "returnKey": "a"})
+    db_manager.log_loot({"ts": 2, "fromCity": "Castle-VIII", "fromPlayer": "RxDxR", "resources": [50000, 0, 0, 0, 0], "returnKey": "b"})
+    per_player = c.get("/api/loot-stats").get_json()
+    assert len(per_player) == 1 and per_player[0]["total"] == 250000
+    per_city = {r["from_city"]: r["total"] for r in c.get("/api/loot-stats?by=city").get_json()}
+    assert per_city == {"Castle-V": 200000, "Castle-VIII": 50000}

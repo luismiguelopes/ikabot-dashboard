@@ -665,6 +665,36 @@ def get_loot_stats():
     return out
 
 
+def get_loot_stats_by_city():
+    """Aggregate loot per source CITY: what was actually plundered from each city, not the sum of
+    every city its owner has. Keyed by (player, city) because city names repeat across players
+    ("Polis" is everywhere). Sorted by total desc."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute("""
+            SELECT from_player, from_city,
+                   COUNT(*)        AS raids,
+                   MAX(ts)         AS last_ts,
+                   SUM(wood)       AS wood,
+                   SUM(wine)       AS wine,
+                   SUM(marble)     AS marble,
+                   SUM(crystal)    AS crystal,
+                   SUM(sulfur)     AS sulfur
+            FROM loot_log
+            GROUP BY from_player, from_city
+        """).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["total"] = sum((d[k] or 0) for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+        out.append(d)
+    out.sort(key=lambda x: x["total"], reverse=True)
+    return out
+
+
 def _migrate_shared_queues():
     """One-time import of pending items from the legacy JSON queue files.
     The file is renamed to .migrated afterwards so stale copies of the old code

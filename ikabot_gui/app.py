@@ -1688,6 +1688,9 @@ def api_loot_stats():
     if not _db:
         return jsonify([])
     try:
+        # ?by=city → per source city (the targets list); default → per player (history panel)
+        if request.args.get("by") == "city":
+            return jsonify(_db.get_loot_stats_by_city())
         return jsonify(_db.get_loot_stats())
     except Exception as e:
         return jsonify({"error": str(e)}), 500

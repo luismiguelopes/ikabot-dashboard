@@ -15,7 +15,7 @@ export interface FarmTarget {
   is_fleet_target?: number; fleet_lead_min?: number; disperse_min?: number
 }
 export interface LootStat {
-  from_player: string; raids: number; last_ts: number; total: number
+  from_player: string; from_city?: string; raids: number; last_ts: number; total: number
   wood: number; wine: number; marble: number; crystal: number; sulfur: number
 }
 
