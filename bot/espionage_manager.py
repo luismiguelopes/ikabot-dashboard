@@ -194,7 +194,7 @@ RECALL_QUEUE       = "spy_recall"
 # UI-triggered mass recall of unused stationed spies (flag written by Flask)
 FORCE_RECALL_UNUSED_FLAG   = os.path.join(LOGS_DIR, ".force_recall_unused")
 _RECALL_SWEEP_BATCH        = 20        # recalls sent per spacing window — no bursts
-_RECALL_SWEEP_SPACING_SECS = 10 * 60
+_RECALL_SWEEP_SPACING_SECS = 5 * 60
 
 
 def _dispatch_queue_items():
@@ -1753,8 +1753,8 @@ def process_recall_unused_flag(session):
     accumulates stale entries), throttled per city. Kept out of the sweep: enabled farm
     targets and targets with a mission still in progress. Recalls are queued in batches of
     _RECALL_SWEEP_BATCH spaced _RECALL_SWEEP_SPACING_SECS apart — the queue processor honours
-    nextAttemptAfter, so a big sweep never turns into a request burst. If one target holds
-    spies from several origins, one press recalls the first — pressing again catches the rest."""
+    nextAttemptAfter, so a big sweep never turns into a request burst. A target holding spies
+    from several origins gets one recall per origin."""
     if not os.path.exists(FORCE_RECALL_UNUSED_FLAG):
         return
     try:
@@ -1780,7 +1780,10 @@ def process_recall_unused_flag(session):
                 and not m.get("recalledAt")
                 and not (m.get("state") == "WAITING_AT_CITY"
                          and m.get("syntheticFromSafehouse"))}
-    pending  = {str(it.get("targetCityId", "")) for it in _recall_queue_items()}
+    # Keyed by (target, origin): a target can hold spy pools from several own cities and the
+    # recall is per origin, so keying by target alone left every pool but the first abroad.
+    pending  = {(str(it.get("targetCityId", "")), str(it.get("originCityId", "")))
+                for it in _recall_queue_items()}
 
     now = int(time.time())
     queued = skipped_farm = skipped_busy = 0
@@ -1822,7 +1825,7 @@ def process_recall_unused_flag(session):
             if target_id in busy:
                 skipped_busy += 1
                 continue
-            if target_id in pending:
+            if (target_id, origin_id) in pending:
                 continue
             # Enrich from the newest mission record for this target and mark it recalled.
             # The agent count comes from the safehouse itself ("N estão em uso") when parsed.
@@ -1831,6 +1834,8 @@ def process_recall_unused_flag(session):
                 m = missions[i]
                 if str(m.get("targetCityId", "")) != target_id or m.get("recalledAt"):
                     continue
+                if str(m.get("originCityId") or "") not in ("", origin_id):
+                    continue   # another origin's pool — its own safehouse entry handles it
                 num_agents = entry.get("numAgents") or m.get("numAgents") or 1
                 spy_sid    = m.get("spySessionId")
                 island_tid = str(m.get("targetIslandId", ""))
@@ -1858,7 +1863,7 @@ def process_recall_unused_flag(session):
             })
             if ok:
                 queued += 1
-                pending.add(target_id)
+                pending.add((target_id, origin_id))
     if changed:
         data["missions"] = missions
         _save_missions(data)

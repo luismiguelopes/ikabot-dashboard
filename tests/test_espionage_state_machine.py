@@ -453,11 +453,24 @@ def test_sweep_skips_targets_already_pending(monkeypatch, tmp_path):
     """A target already in the recall queue (e.g. double press) is not queued twice."""
     entries = [{"cityId": "200", "cityName": "Ocioso", "state": "WAITING_AT_CITY"}]
     _, _, queued = _sweep_setup(monkeypatch, tmp_path, [], entries)
-    monkeypatch.setattr(em, "_recall_queue_items", lambda: [{"targetCityId": "200"}])
+    monkeypatch.setattr(em, "_recall_queue_items",
+                        lambda: [{"targetCityId": "200", "originCityId": "1"}])
 
     em.process_recall_unused_flag(session=object())
 
     assert queued == []
+
+
+def test_sweep_recalls_every_origin_pool_of_a_target(monkeypatch, tmp_path):
+    """Spies from two own cities sit at the same target: both pools come home in one press
+    (the recall is per origin; keying 'pending' by target alone left the second abroad)."""
+    entries = [{"cityId": "200", "cityName": "Ocioso", "state": "WAITING_AT_CITY"}]
+    _, _, queued = _sweep_setup(monkeypatch, tmp_path, [], entries)
+    own = tmp_path / "own.json"
+    own.write_text('[{"cityId": "1", "name": "A", "safehousePosition": 3},'
+                   ' {"cityId": "2", "name": "B", "safehousePosition": 4}]')
+    em.process_recall_unused_flag(session=object())
+    assert sorted(q["originCityId"] for q in queued) == ["1", "2"]
 
 
 def test_sweep_recalls_synthetic_waiting_spies(monkeypatch, tmp_path):
