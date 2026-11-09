@@ -744,3 +744,19 @@ def test_rearming_a_parked_spy_clears_the_mark(monkeypatch):
     assert em.reexecute_stationed_spy("100", fast=True, need_garrison=True, need_movements=True)
     assert h["missions"][0]["state"] == "WAITING_AT_CITY"
     assert h["missions"][0]["fullSweepAt"] is None
+
+
+def test_sweep_keeps_only_the_newest_pool_of_a_farm_target(monkeypatch, tmp_path):
+    """A farm target with pools from two origins keeps the newest live one and recalls the
+    older idle pool (09/11: 2-11 idle pools per farm target, ~100 spies parked abroad)."""
+    missions = [_mission(state="DONE", targetCityId="300", originCityId="1", dispatchedAt=1000),
+                _mission(state="DONE", targetCityId="300", originCityId="2", dispatchedAt=5000)]
+    entries = [{"cityId": "300", "cityName": "FarmAlvo", "state": "WAITING_AT_CITY"}]
+    h, _, queued = _sweep_setup(monkeypatch, tmp_path, missions, entries, farm_ids={"300"})
+    (tmp_path / "own.json").write_text(
+        '[{"cityId": "1", "name": "A", "safehousePosition": 3},'
+        ' {"cityId": "2", "name": "B", "safehousePosition": 4}]')
+    em.process_recall_unused_flag(session=object())
+    assert [q["originCityId"] for q in queued] == ["1"]
+    assert h["missions"][0]["state"] == "RECALLED"
+    assert h["missions"][1]["state"] == "DONE"

@@ -1751,7 +1751,8 @@ def process_recall_unused_flag(session):
     """UI-triggered sweep (.force_recall_unused): recall every spy stationed abroad that
     nothing is using. Ground truth comes from each city's safehouse view (spy_missions.json
     accumulates stale entries), throttled per city. Kept out of the sweep: enabled farm
-    targets and targets with a mission still in progress. Recalls are queued in batches of
+    targets and targets with a mission still in progress keep ONE pool (the newest live
+    mission's origin); their other pools are recalled. Recalls are queued in batches of
     _RECALL_SWEEP_BATCH spaced _RECALL_SWEEP_SPACING_SECS apart — the queue processor honours
     nextAttemptAfter, so a big sweep never turns into a request burst. A target holding spies
     from several origins gets one recall per origin."""
@@ -1784,6 +1785,23 @@ def process_recall_unused_flag(session):
     # recall is per origin, so keying by target alone left every pool but the first abroad.
     pending  = {(str(it.get("targetCityId", "")), str(it.get("originCityId", "")))
                 for it in _recall_queue_items()}
+
+    # A farm / busy target keeps ONE spy pool: the origin of its newest live mission (the one
+    # the pipeline is running or would re-arm — see reexecute_stationed_spy). Every older pool
+    # from another origin sits idle in the safehouse forever: seen 09/11, 2-11 pools per farm
+    # target (~100 spies) while the farm only ever used the newest.
+    keep_origin = {}
+    newest = {}
+    for m in missions:
+        t, o = str(m.get("targetCityId", "")), str(m.get("originCityId") or "")
+        if not o or m.get("recalledAt") or m.get("state") == "RECALLED":
+            continue
+        if m.get("state") == "FAILED" and _spy_pool_gone(m.get("error")):
+            continue
+        if t not in newest or int(m.get("dispatchedAt") or 0) >= int(newest[t].get("dispatchedAt") or 0):
+            newest[t] = m
+    for t, m in newest.items():
+        keep_origin[t] = str(m.get("originCityId"))
 
     now = int(time.time())
     queued = skipped_farm = skipped_busy = 0
@@ -1819,12 +1837,15 @@ def process_recall_unused_flag(session):
                 logger.info("[espionage] recall em massa: entrada sem cityId (%s) — a saltar",
                             entry.get("cityName"))
                 continue
-            if target_id in farm_ids:
-                skipped_farm += 1
-                continue
-            if target_id in busy:
-                skipped_busy += 1
-                continue
+            if target_id in farm_ids or target_id in busy:
+                keep = keep_origin.get(target_id)
+                if keep is None or keep == origin_id:
+                    if target_id in farm_ids:
+                        skipped_farm += 1
+                    else:
+                        skipped_busy += 1
+                    continue
+                # an older, idle pool from another origin → recalled below
             if (target_id, origin_id) in pending:
                 continue
             # Enrich from the newest mission record for this target and mark it recalled.
