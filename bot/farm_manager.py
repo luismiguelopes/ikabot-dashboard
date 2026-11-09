@@ -385,6 +385,46 @@ def _returned_since_scout(t):
     return total
 
 
+# ── Per-raid loot ceiling ─────────────────────────────────────────────────────
+# Seen live (07-09/11): EVERY raid comes home with ~206-207k whatever the ship count —
+# 6016 ships on Castle-VIII, 217 on Indiota, 1459 on Tróia 5 all returned ~207k. The game
+# caps what one wave carries off (tied to the army sent), so sizing transporters on the
+# scouted warehouse (3.5M → ~6000 ships) only parked thousands of trade ships at sea for
+# nothing, starving the parallel slot and logistics for hours. When the recent returns
+# cluster at a ceiling, size the wave to that ceiling (+ headroom, so a bigger army or a
+# rule change shows up as a higher return and the ceiling re-learns itself).
+_LOOT_CAP_WINDOW_SECS = 7 * 86400
+_LOOT_CAP_MIN_SAMPLES = 3
+_LOOT_CAP_CLUSTER_TOL = 0.05     # top returns within 5% of each other = a hard ceiling
+_LOOT_CAP_HEADROOM = 1.25
+
+
+def per_raid_loot_cap(now=None):
+    """Loot one wave can bring home, or None if unknown. `lootCapPerRaid` in farm settings
+    overrides (>0); otherwise learned from the recent real returns (loot_log)."""
+    try:
+        manual = int(_load_farm_settings().get("lootCapPerRaid", 0) or 0)
+    except (ValueError, TypeError):
+        manual = 0
+    if manual > 0:
+        return manual
+    now = int(now or time.time())
+    try:
+        from db_manager import get_loot_log
+        rows = get_loot_log(limit=200)
+    except Exception:
+        return None
+    totals = sorted((sum(int(r.get(k, 0) or 0) for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+                     for r in rows if now - int(r.get("ts", 0) or 0) <= _LOOT_CAP_WINDOW_SECS),
+                    reverse=True)
+    if len(totals) < _LOOT_CAP_MIN_SAMPLES or totals[0] <= 0:
+        return None
+    top = totals[:_LOOT_CAP_MIN_SAMPLES]
+    if top[-1] < top[0] * (1 - _LOOT_CAP_CLUSTER_TOL):
+        return None    # no ceiling visible — returns are just whatever the targets held
+    return int(top[0] * _LOOT_CAP_HEADROOM)
+
+
 def _estimated_warehouse(t):
     """How much loot is likely in the target RIGHT NOW: the scouted warehouse minus what we've
     already brought home since that scout. Ignores regeneration, so it's conservative — it may
@@ -988,7 +1028,13 @@ def process_farm_targets(session, in_active_hours=True):
 
         fleet_travel = _calc_travel_secs(ox, oy, ix, iy)
         troop_travel = int(fleet_travel * 2 / 3)   # rough fallback (real times below)
-        transporters = max(1, math.ceil(loot / ship_cap))
+        wave_loot = loot
+        raid_cap = per_raid_loot_cap(now)
+        if raid_cap and raid_cap < loot:
+            wave_loot = raid_cap
+            logger.info("[farm] %s: saque estimado %d > tecto por vaga %d — navios dimensionados "
+                        "ao tecto", name, loot, raid_cap)
+        transporters = max(1, math.ceil(wave_loot / ship_cap))
         if farm_army:
             avail = military.get("byCityName", {}).get(origin_name, {}).get("troops", {})
             troop_units = {uid: min(qty, avail.get(uid, {}).get("amount", 0))

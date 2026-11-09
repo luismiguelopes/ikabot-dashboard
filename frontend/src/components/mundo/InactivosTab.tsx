@@ -84,6 +84,27 @@ function MissionStatePill({ priority, mission }: {
   return <span className="text-slate-300 text-xs">—</span>
 }
 
+// Number field for a farm setting: edits a local draft and saves once on blur/Enter. Bound
+// straight to the server value with a POST per keystroke, every keypress was reverted until the
+// next 30s poll, so the fields could not actually be typed into.
+function FarmNumInput({ value, min, max, className, onCommit }: {
+  value: number, min: number, max: number, className: string, onCommit: (v: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => { setDraft(String(value)) }, [value])
+  const commit = () => {
+    const n = Math.min(max, Math.max(min, Math.round(Number(draft))))
+    if (!Number.isFinite(n)) { setDraft(String(value)); return }
+    setDraft(String(n))
+    if (n !== value) onCommit(n)
+  }
+  return (
+    <input type="number" min={min} max={max} value={draft} className={className}
+      onChange={e => setDraft(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+  )
+}
+
 // ── InactivosTab ──────────────────────────────────────────────────────────────
 
 interface InactivosTabProps {
@@ -325,7 +346,11 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (p.state !== 'inactive') continue
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
       const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
-      if (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey)) {
+      // An ENABLED farm target is never hidden: the ignore mark is keyed per player+island, so
+      // draining one city (Castle-V) auto-ignored every city of that owner on the island and hid
+      // Castle-VIV / Castle-VII while the farm was still raiding them.
+      const farmOn = !!(p.cityId && farmByCity[String(p.cityId)]?.enabled)
+      if (!farmOn && (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey))) {
         // Ignored (e.g. auto-ignored after the farm drained it): keep it out of the active list
         // AND mark its city seen, so the farm-target synthesis below can't re-add it — a drained
         // target belongs only in the Ignoradas tab, not here. (A paused-but-not-ignored target is
@@ -340,9 +365,21 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     // 2) Farm targets absent from the current scan (e.g. added manually, or the scan is stale).
     //    Synthesize a row from the farm record so every target lives in one unified list
     //    instead of being split between this page and the Combat/Farm tab (Phase 3).
+    //    When the scan still lists the city (owner now on vacation / active), reuse that real
+    //    record: the 🚫 ignore button needs the real playerId — a synthetic `farm_<id>` key was
+    //    written to the marks table and never matched anything, so ignoring did nothing.
+    const scanByCity: Record<string, WorldScanPlayer> = {}
+    for (const sp of scanData?.players || []) if (sp.cityId) scanByCity[String(sp.cityId)] = sp
     for (const [cid, f] of Object.entries(farmByCity)) {
       if (seenCityIds.has(String(cid))) continue
       seenCityIds.add(String(cid))
+      const real = scanByCity[String(cid)]
+      if (real) {
+        const pKey = `${real.playerId}_${real.islandX}_${real.islandY}`
+        if (!f.enabled && (ignoredKeys.has(`${real.playerId}_${real.cityId}`) || ignoredKeys.has(pKey))) continue
+        enriched.push(enrichOne(real))
+        continue
+      }
       const synth: WorldScanPlayer = {
         playerId: `farm_${cid}`,
         cityId: String(cid),
@@ -596,6 +633,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <i className="fa-solid fa-arrow-rotate-left" />
                             </button>
                           ) : <span className="block w-7 h-7" />}
+                          {/* A farm-only row (city absent from the scan) has no real playerId to
+                              mark — the farm-remove button next to it is the way out. */}
+                          {!p.playerId.startsWith('farm_') ? (
                           <button
                             onClick={() => handleIgnore(p)}
                             title={t('btn_ignore_city')}
@@ -603,6 +643,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           >
                             🚫
                           </button>
+                          ) : <span className="block w-7 h-7" />}
                           {p.cityId && farmByCity[String(p.cityId)] ? (
                             <button
                               onClick={() => farmAction(String(p.cityId), {}, true)}
@@ -742,29 +783,25 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                   <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-400">
                                     <span className="flex items-center gap-1" title={t('farm_maxships_hint')}>
                                       {t('farm_maxships')}
-                                      <input type="number" min={0} max={9999} value={f.max_enemy_ships ?? 0}
-                                        onChange={e => farmAction(String(p.cityId), { maxEnemyShips: Math.max(0, Number(e.target.value)) })}
-                                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right" />
+                                      <FarmNumInput min={0} max={9999} value={f.max_enemy_ships ?? 0} className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right"
+                                        onCommit={v => farmAction(String(p.cityId), { maxEnemyShips: v })} />
                                     </span>
                                     <span className="flex items-center gap-1">
                                       {t('farm_respy')}
-                                      <input type="number" min={1} max={50} value={f.respy_every ?? 1}
-                                        onChange={e => farmAction(String(p.cityId), { respyEvery: Math.max(1, Number(e.target.value)) })}
-                                        className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right" />
+                                      <FarmNumInput min={1} max={50} value={f.respy_every ?? 1} className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right"
+                                        onCommit={v => farmAction(String(p.cityId), { respyEvery: v })} />
                                     </span>
                                     {f.is_fleet_target === 1 && (
                                       <>
                                         <span className="flex items-center gap-1" title={t('farm_fleetlead_hint')}>
                                           {t('farm_fleetlead')}
-                                          <input type="number" min={1} max={120} value={f.fleet_lead_min ?? 5}
-                                            onChange={e => farmAction(String(p.cityId), { fleetLeadMin: Math.max(1, Number(e.target.value)) })}
-                                            className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right" />min
+                                          <FarmNumInput min={1} max={120} value={f.fleet_lead_min ?? 5} className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right"
+                                        onCommit={v => farmAction(String(p.cityId), { fleetLeadMin: v })} />min
                                         </span>
                                         <span className="flex items-center gap-1" title={t('farm_disperse_hint')}>
                                           {t('farm_disperse')}
-                                          <input type="number" min={1} max={1440} value={f.disperse_min ?? 240}
-                                            onChange={e => farmAction(String(p.cityId), { disperseMin: Math.max(1, Number(e.target.value)) })}
-                                            className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right" />min
+                                          <FarmNumInput min={1} max={1440} value={f.disperse_min ?? 240} className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right"
+                                        onCommit={v => farmAction(String(p.cityId), { disperseMin: v })} />min
                                         </span>
                                       </>
                                     )}

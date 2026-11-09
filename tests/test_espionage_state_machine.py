@@ -542,6 +542,43 @@ def test_reexecute_waits_when_another_mission_for_target_is_active(monkeypatch):
     assert h["missions"][1]["state"] == "EXECUTING_GARRISON"
 
 
+def test_reexecute_prefers_newest_pool_over_older_ghost(monkeypatch):
+    """Tróia 3 (09/11): an old mission listed first in the file must not be re-armed ahead of
+    the previous evening's full sweep from another origin — the newest live pool wins."""
+    old = _mission(state="DONE", originCityId="1", dispatchedAt=1000)
+    new = _mission(state="DONE", originCityId="2", dispatchedAt=5000)
+    h = _patch(monkeypatch, [old, new])
+    assert em.reexecute_stationed_spy("100") is True
+    assert h["missions"][0]["state"] == "DONE"
+    assert h["missions"][1]["state"] == "WAITING_AT_CITY"
+
+
+def test_reexecute_skips_origin_whose_newest_mission_lost_the_spies(monkeypatch):
+    """Missions from one origin share one spy pool: a later capture supersedes an older DONE."""
+    done_old = _mission(state="DONE", originCityId="1", dispatchedAt=1000)
+    caught = _mission(state="FAILED", originCityId="1", dispatchedAt=2000,
+                      error="Espião não encontrado ao tentar executar — possivelmente detectado")
+    h = _patch(monkeypatch, [done_old, caught])
+    assert em.reexecute_stationed_spy("100") is False      # → caller dispatches fresh spies
+    assert [m["state"] for m in h["missions"]] == ["DONE", "FAILED"]
+
+
+def test_reexecute_never_rearms_a_refused_dispatch(monkeypatch):
+    """A refused sendSpy never left home — there is no stationed spy to reuse."""
+    h = _patch(monkeypatch, [_mission(state="FAILED", dispatchedAt=1000,
+                                      error="Servidor rejeitou o dispatch (tipos [11]): x")])
+    assert em.reexecute_stationed_spy("100") is False
+    assert h["missions"][0]["state"] == "FAILED"
+
+
+def test_reexecute_still_rearms_missing_report(monkeypatch):
+    """A missing report is NOT a capture — the spy may still sit in the safehouse."""
+    h = _patch(monkeypatch, [_mission(state="FAILED", dispatchedAt=1000,
+                                      error="Relatório não encontrado após 2h")])
+    assert em.reexecute_stationed_spy("100") is True
+    assert h["missions"][0]["state"] == "WAITING_AT_CITY"
+
+
 # ── Mission retention: _save_missions prunes old terminal history ───────────────
 
 def test_save_prunes_old_terminal_missions(monkeypatch, tmp_path):

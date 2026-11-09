@@ -639,14 +639,20 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                             success = True
                             break
         if not success:
-            feedback_types = []
+            feedback_types, feedback_texts = [], []
             for entry in resp_data:
                 if isinstance(entry, list) and entry[0] == "provideFeedback":
                     fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
                     feedback_types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]
-            logger.warning("[espionage] dispatch falhou — provideFeedback types=%s raw: %s",
-                           feedback_types, resp[:400])
-            return False, f"Servidor rejeitou o dispatch (sem type=10; tipos recebidos: {feedback_types})"
+                    feedback_texts = [_strip_tags(str(fb.get("text") or fb.get("locakey") or ""))
+                                      for fb in fb_list if isinstance(fb, dict)]
+            # The game's reason lives in provideFeedback[].text — the raw response starts with a
+            # long updateGlobalData blob, so a truncated raw dump never reached it (we spent days
+            # seeing only "types=[11, 11]" with no reason).
+            reason = " | ".join(t for t in feedback_texts if t) or "sem texto"
+            logger.warning("[espionage] dispatch falhou para %s (%s) — types=%s motivo: %s",
+                           target_player_name, target_city_name, feedback_types, reason)
+            return False, f"Servidor rejeitou o dispatch (tipos {feedback_types}): {reason}"
     except Exception as e:
         logger.error("[espionage] dispatch exception: %s", e)
         return False, str(e)
@@ -1503,6 +1509,31 @@ def force_warehouse_mission(target_city_id):
         logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
+# FAILED reasons that mean no spy is stationed any more (captured / vanished) or ever was
+# (the dispatch was refused or never attempted). Re-arming such a mission only burns a
+# safehouse fetch + a farm scout attempt on a ghost.
+_SPY_GONE_MARKERS = (
+    "não encontrado ao tentar executar",   # safehouse showed 0 spies
+    "possivelmente capturado",             # never arrived
+    "servidor rejeitou o dispatch",        # sendSpy refused → nothing left home
+    "não está inactivo",                   # dispatch cancelled by the reactivation guard
+    "férias",                              # dispatch cancelled: vacation
+    "espiões insuficientes",               # dispatch cancelled: no spies at origin
+    "reposto no arranque",                 # manual clean-start reset
+)
+
+
+def _strip_tags(s):
+    import html as _html
+    import re as _re
+    return _html.unescape(_re.sub(r"<[^>]+>", " ", s)).strip()[:300]
+
+
+def _spy_pool_gone(error):
+    e = str(error or "").lower()
+    return any(k in e for k in _SPY_GONE_MARKERS)
+
+
 def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_movements=False):
     """Reuse spies already stationed at the target instead of sending fresh ones: a real
     player re-runs the warehouse mission on the spies sitting in the safehouse. Returns
@@ -1532,15 +1563,33 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
         if _reusable(m) and m.get("state") in _ACTIVE:
             return True
     # Second pass: no active op — re-arm a parked mission's stationed spy.
+    # Every mission from the same origin to this target shares ONE spy pool (the safehouse
+    # view is per origin+target), so only the NEWEST mission of each origin tells whether that
+    # pool is still alive: an older DONE from the same origin is superseded by a later capture
+    # or recall. Among the live pools, the newest wins. Iterating in file order instead re-armed
+    # weeks-old ghosts first (Tróia 3, 09/11: three "espião desapareceu" in a row, round skipped,
+    # while the previous evening's full sweep sat unused further down the list).
+    newest_by_origin = {}
     for i, m in enumerate(missions):
         if not _reusable(m):
             continue
+        o = str(m.get("originCityId"))
+        j = newest_by_origin.get(o)
+        if j is None or int(missions[j].get("dispatchedAt") or 0) <= int(m.get("dispatchedAt") or 0):
+            newest_by_origin[o] = i
+    pools = sorted(newest_by_origin.values(),
+                   key=lambda k: int(missions[k].get("dispatchedAt") or 0), reverse=True)
+    for i in pools:
+        m = missions[i]
         st = m.get("state")
         # DONE = spy parked after a clean run. FAILED = a run was abandoned, but the spy
         # may still be sitting in the safehouse (a transient executeMission rejection, or
         # a report that never arrived — NOT the same as "detected/gone"). In both cases we
         # re-arm the mission and let execute_waiting_missions re-fetch the safehouse: if the
         # spy is truly gone it fails there with spy_count==0, so this never attacks a ghost.
+        # A FAILED whose spies were captured or never left (dispatch refused) is skipped.
+        if st == "FAILED" and _spy_pool_gone(m.get("error")):
+            continue
         if st in ("DONE", "FAILED"):
             offset = random.randint(30, 90) if fast else random.randint(5, 15) * 60
             missions[i]["state"] = "WAITING_AT_CITY"

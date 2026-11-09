@@ -1943,6 +1943,17 @@ def _save_json(path, data):
         json.dump(data, f, indent=2)
 
 
+_SPY_GONE_MARKERS = ("não encontrado ao tentar executar", "possivelmente capturado",
+                     "servidor rejeitou o dispatch", "não está inactivo", "férias",
+                     "espiões insuficientes", "reposto no arranque")
+
+
+def _missions_newest_first(missions, city_id):
+    """Indices of the city's spy missions, newest dispatch first."""
+    idx = [i for i, m in enumerate(missions) if str(m.get("targetCityId", "")) == city_id]
+    return sorted(idx, key=lambda i: int(missions[i].get("dispatchedAt") or 0), reverse=True)
+
+
 @app.route("/api/espionage/force-warehouse", methods=["POST"])
 def api_espionage_force_warehouse():
     body    = request.get_json(force=True)
@@ -1953,9 +1964,10 @@ def api_espionage_force_warehouse():
     data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
     missions = data.get("missions", [])
     now      = int(time.time())
-    for i, m in enumerate(missions):
-        if str(m.get("targetCityId", "")) != city_id:
-            continue
+    # Act on the NEWEST mission for the city — the one the UI shows. File order is not
+    # chronological, so the first match was often a weeks-old ghost (or an imported report).
+    for i in _missions_newest_first(missions, city_id):
+        m = missions[i]
         if m.get("state") == "WAITING_AT_CITY":
             missions[i]["executeAfter"] = now - 1
             data["missions"] = missions
@@ -1975,6 +1987,11 @@ def api_espionage_force_warehouse():
             if not m.get("originCityId"):
                 # Synthetic imported mission — no real spy stationed, cannot re-execute
                 return jsonify({"error": "Missão importada sem espião activo — usa o dispatch normal"}), 400
+            err = str(m.get("error") or "").lower()
+            if m.get("state") == "FAILED" and any(k in err for k in _SPY_GONE_MARKERS):
+                # Mirrors espionage_manager._SPY_GONE_MARKERS: re-arming would only end in
+                # "espião desapareceu" again — tell the user to send fresh spies instead.
+                return jsonify({"error": "Os espiões desta cidade foram capturados ou nunca partiram — envia espiões novos"}), 409
             missions[i]["state"] = "WAITING_AT_CITY"
             missions[i]["executeAfter"] = now - 1
             missions[i]["garrisonResult"] = None
@@ -2005,9 +2022,8 @@ def api_espionage_recall_spy():
     # as success, so recalling a genuinely-gone spy is harmless).
     recallable = {"TRAVELING", "WAITING_AT_CITY", "EXECUTING_WAREHOUSE",
                   "WAITING_FOR_GARRISON", "EXECUTING_GARRISON", "DONE", "FAILED"}
-    for i, m in enumerate(missions):
-        if str(m.get("targetCityId", "")) != city_id:
-            continue
+    for i in _missions_newest_first(missions, city_id):
+        m = missions[i]
         if m.get("state") not in recallable:
             continue
         origin_id = str(m.get("originCityId") or "")

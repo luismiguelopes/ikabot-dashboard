@@ -1985,3 +1985,39 @@ def test_reset_fleet_target_with_old_complete_sweep_is_scouted_not_raided(monkey
     assert [q for q, _ in added if q == "attack"] == []
     t = db_manager.farm_get("100")
     assert t["state"] == "SPYING" and t["spy_dispatched_at"] >= now - 5     # a NEW scout, dated now
+
+
+# ── Per-raid loot ceiling (09/11: every wave returned ~207k whatever the ship count) ──
+
+def _loot(ts, total, key):
+    db_manager.log_loot({"ts": ts, "fromCity": "C", "fromPlayer": "P", "toCity": "Polis",
+                         "resources": [total, 0, 0, 0, 0], "returnKey": key})
+
+
+def test_loot_cap_learned_from_clustered_returns(tmp_path, monkeypatch):
+    _setup_db(tmp_path)
+    monkeypatch.setattr(fm, "_load_farm_settings", lambda: {})
+    now = int(time.time())
+    for i, v in enumerate([206500, 207100, 206900, 1200, 81000]):
+        _loot(now - 3600 * (i + 1), v, f"k{i}")
+    assert fm.per_raid_loot_cap(now) == int(207100 * 1.25)
+
+
+def test_loot_cap_none_without_a_ceiling(tmp_path, monkeypatch):
+    _setup_db(tmp_path)
+    monkeypatch.setattr(fm, "_load_farm_settings", lambda: {})
+    now = int(time.time())
+    for i, v in enumerate([900000, 400000, 207000]):
+        _loot(now - 3600 * (i + 1), v, f"k{i}")
+    assert fm.per_raid_loot_cap(now) is None
+
+
+def test_loot_cap_ignores_old_returns_and_honours_manual(tmp_path, monkeypatch):
+    _setup_db(tmp_path)
+    now = int(time.time())
+    for i in range(3):
+        _loot(now - 10 * 86400 - i, 207000, f"old{i}")
+    monkeypatch.setattr(fm, "_load_farm_settings", lambda: {})
+    assert fm.per_raid_loot_cap(now) is None
+    monkeypatch.setattr(fm, "_load_farm_settings", lambda: {"lootCapPerRaid": 300000})
+    assert fm.per_raid_loot_cap(now) == 300000
