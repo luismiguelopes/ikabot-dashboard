@@ -425,7 +425,7 @@ def test_sweep_recalls_only_unused(monkeypatch, tmp_path):
 
     assert [q["targetCityId"] for q in queued] == ["200"]   # only the idle one
     assert queued[0]["numAgents"] == 2                       # enriched from the mission record
-    assert queued[0]["spySessionId"] == "S200"
+    assert queued[0]["spySessionId"] is None   # read live from the safehouse at send time
     assert h["missions"][0]["state"] == "RECALLED"
     assert h["missions"][1]["state"] == "EXECUTING_WAREHOUSE"   # untouched
     assert not flag.exists()                                 # single sweep per press

@@ -1850,7 +1850,7 @@ def process_recall_unused_flag(session):
                 continue
             # Enrich from the newest mission record for this target and mark it recalled.
             # The agent count comes from the safehouse itself ("N estão em uso") when parsed.
-            num_agents, spy_sid, island_tid = entry.get("numAgents") or 1, None, ""
+            num_agents, island_tid = entry.get("numAgents") or 1, ""
             for i in range(len(missions) - 1, -1, -1):
                 m = missions[i]
                 if str(m.get("targetCityId", "")) != target_id or m.get("recalledAt"):
@@ -1858,7 +1858,6 @@ def process_recall_unused_flag(session):
                 if str(m.get("originCityId") or "") not in ("", origin_id):
                     continue   # another origin's pool — its own safehouse entry handles it
                 num_agents = entry.get("numAgents") or m.get("numAgents") or 1
-                spy_sid    = m.get("spySessionId")
                 island_tid = str(m.get("targetIslandId", ""))
                 if (m.get("state") == "DONE"
                         or (m.get("state") == "WAITING_AT_CITY"
@@ -1876,7 +1875,10 @@ def process_recall_unused_flag(session):
                 "originCityId":     origin_id,
                 "position":         position,
                 "cityName":         entry.get("cityName") or "",
-                "spySessionId":     spy_sid,
+                # No stored id: the processor reads it live from this origin's safehouse view
+                # for this target. Mission records go stale (re-arms/syncs copy ids across
+                # pools) — 09/11 the same spy id was recalled twice from two different origins.
+                "spySessionId":     None,
                 "numAgents":        num_agents,
                 "queuedAt":         now,
                 "nextAttemptAfter": (now + batch * _RECALL_SWEEP_SPACING_SECS
