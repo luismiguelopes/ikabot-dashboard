@@ -49,6 +49,31 @@ def _load_alert_settings():
         return dict(_DEFAULT_ALERT_SETTINGS)
 
 
+def _target_coords(city_name, island_id=""):
+    """Island coordinates (x, y) of a plundered city, for the loot alert/log. The movement
+    payload has only the city name and islandId, so look it up in the farm targets (by name),
+    then in the world scan (by name or islandId). None when unknown — never fails the caller."""
+    try:
+        from db_manager import farm_list
+        for t in farm_list():
+            if t.get("target_city_name") == city_name and t.get("island_x") is not None:
+                return (t["island_x"], t["island_y"])
+    except Exception:
+        pass
+    for fname in ("world_scan.json", "world_scan_prev.json"):
+        try:
+            with open(os.path.join(LOGS_DIR, fname)) as f:
+                scan = json.load(f)
+        except Exception:
+            continue
+        for p in scan.get("players", []):
+            if p.get("cityName") == city_name or (
+                    island_id and str(p.get("islandId", "")) == str(island_id)):
+                if p.get("islandX") is not None:
+                    return (p["islandX"], p["islandY"])
+    return None
+
+
 def _alert_incoming_attacks(hostiles, time_now):
     """Telegram on each newly-seen incoming hostile movement (F6). Deduped by a
     persistent set of keys, pruned of arrivals already in the past."""
@@ -181,6 +206,7 @@ def _collect_movements(session, city_id):
                         "fromCity":   m["target"].get("name", ""),
                         "fromPlayer": m["target"].get("avatarName", ""),
                         "toCity":     m["origin"].get("name", ""),
+                        "islandId":   str(m["target"].get("islandId", "") or ""),
                         "resources":  loot,
                         "returnKey":  event_key,
                     })
@@ -198,14 +224,24 @@ def _collect_movements(session, city_id):
                     is_new = log_loot(lr)
                     if is_new:
                         new_count += 1
+                        coords = _target_coords(lr["fromCity"], lr.get("islandId", ""))
+                        logger.info("💰 [loot] %s (%s)%s → %s: %s = %d, chega às %s",
+                                    lr["fromCity"], lr["fromPlayer"],
+                                    " [%s:%s]" % coords if coords else "",
+                                    lr["toCity"],
+                                    {k: v for k, v in zip(materials_names_english, lr["resources"]) if v},
+                                    sum(lr["resources"]),
+                                    time.strftime("%H:%M", time.localtime(lr["ts"])))
                         if _settings.get("returnEnabled", True):
                             try:
                                 from telegram_notifier import notify_returned_loot
-                                notify_returned_loot(lr["fromPlayer"] or lr["fromCity"],
-                                                     lr["toCity"], sum(lr["resources"]))
+                                notify_returned_loot(lr["fromCity"], lr["fromPlayer"], lr["toCity"],
+                                                     lr["resources"], coords, lr["ts"])
                             except Exception:
-                                pass
-                logger.info("💰 [loot] %d regresso(s) com saque (%d novo(s))", len(loot_returns), new_count)
+                                logger.warning("[loot] falha a enviar alerta Telegram", exc_info=True)
+                # Every movements refresh re-sees in-flight returns; only new ones are news.
+                (logger.info if new_count else logger.debug)(
+                    "💰 [loot] %d regresso(s) com saque (%d novo(s))", len(loot_returns), new_count)
             except Exception:
                 logger.warning("[loot] falha ao registar saque", exc_info=True)
 

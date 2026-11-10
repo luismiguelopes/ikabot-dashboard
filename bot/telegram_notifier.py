@@ -100,9 +100,39 @@ def notify_farm_active(target_city: str, player: str) -> None:
           f"— desactivado do farm (já não é seguro atacar às cegas).")
 
 
-def notify_returned_loot(origin_player: str, to_city: str, loot_total: int) -> None:
-    _send(f"💰 <b>Tropas regressaram com saque</b>\n{to_city} ← {origin_player} · "
-          f"{loot_total:,} recursos")
+_LOOT_ICONS = ("🪵", "🍷", "🪨", "💎", "🌋")   # wood, wine, marble, crystal, sulfur
+
+
+def _pt_int(n: int) -> str:
+    """Thousands with '.' like the game UI (72.517)."""
+    return f"{int(n):,}".replace(",", ".")
+
+
+def format_returned_loot(from_city: str, from_player: str, to_city: str, resources,
+                         coords=None, arrival_ts: int = 0) -> str:
+    """Telegram text for plunder on its way home. Names the plundered CITY, its owner and the
+    island coordinates (the old message only had the player name where the place belonged),
+    with the per-resource breakdown and the arrival time."""
+    import time as _time
+    res = [int(x or 0) for x in (list(resources or []) + [0] * 5)[:5]]
+    where = from_city or "?"
+    if from_player:
+        where += f" ({from_player})"
+    if coords and coords[0] is not None and coords[1] is not None:
+        where += f" [{coords[0]}:{coords[1]}]"
+    parts = [f"{icon} {_pt_int(v)}" for icon, v in zip(_LOOT_ICONS, res) if v > 0]
+    lines = ["💰 <b>Saque a caminho de casa</b>",
+             f"{where} → {to_city or '?'}",
+             " · ".join(parts) if parts else "sem recursos",
+             f"Total: <b>{_pt_int(sum(res))}</b>"]
+    if arrival_ts:
+        lines[-1] += f" · chega às {_time.strftime('%H:%M', _time.localtime(int(arrival_ts)))}"
+    return "\n".join(lines)
+
+
+def notify_returned_loot(from_city: str, from_player: str, to_city: str, resources,
+                         coords=None, arrival_ts: int = 0) -> None:
+    _send(format_returned_loot(from_city, from_player, to_city, resources, coords, arrival_ts))
 
 
 def notify_subsystem_down(subsystem: str, consecutive: int, error: str) -> None:
