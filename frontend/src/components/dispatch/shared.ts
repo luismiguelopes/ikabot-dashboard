@@ -20,6 +20,9 @@ export interface FarmTarget {
   target_city_id:   string
   target_city_name: string
   target_player:    string
+  island_id?:       string
+  island_x?:        number
+  island_y?:        number
   enabled:          boolean
   interval_hours:   number
   min_loot:         number

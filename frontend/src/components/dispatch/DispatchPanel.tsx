@@ -45,6 +45,7 @@ export function DispatchPanel() {
   const [pending,        setPending]        = useState<PendingAttack[]>([])
   const [availableShips, setAvailableShips] = useState<number | null>(null)
   const [farmTargets,    setFarmTargets]    = useState<FarmTarget[]>([])
+  const [spyTargets,     setSpyTargets]     = useState<DispatchTarget[]>([])
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
   const [shipCapacity,   setShipCapacity]   = useState<number | null>(null)
   const [lootByCity,     setLootByCity]     = useState<Record<string, number>>({})
@@ -90,7 +91,22 @@ export function DispatchPanel() {
     // Known warehouse loot per target city, from the latest DONE spy report (F3)
     fetch('/api/espionage/missions').then(r => r.json()).then((d: any) => {
       const map: Record<string, { ts: number; loot: number }> = {}
+      // Every city we have ever sent spies to is a known target, even when it sits outside
+      // the world-scan radius — keep them searchable as destinations.
+      const spied: Record<string, DispatchTarget> = {}
       for (const m of d?.missions ?? []) {
+        // islandId is required by /api/dispatch/combat — skip reports that lack it.
+        if (m.targetCityId && m.targetCityName && m.islandId) {
+          spied[String(m.targetCityId)] = {
+            type:       'enemy',
+            cityId:     String(m.targetCityId),
+            cityName:   m.targetCityName,
+            playerName: m.targetPlayerName ?? '',
+            islandId:   String(m.islandId ?? ''),
+            islandX:    Number(m.islandX ?? 0),
+            islandY:    Number(m.islandY ?? 0),
+          }
+        }
         if (m.state !== 'DONE' || !m.targetCityId || !m.result?.resources) continue
         const loot = Object.values(m.result.resources as Record<string, number>).reduce((a, b) => a + b, 0)
         const ts = m.result.reportedAt ?? m.executedAt ?? 0
@@ -98,6 +114,7 @@ export function DispatchPanel() {
         if (!cur || ts >= cur.ts) map[String(m.targetCityId)] = { ts, loot }
       }
       setLootByCity(Object.fromEntries(Object.entries(map).map(([k, v]) => [k, v.loot])))
+      setSpyTargets(Object.values(spied))
     }).catch(() => {})
 
     fetch('/api/farm').then(r => r.json()).then((data: any) => {
@@ -143,22 +160,39 @@ export function DispatchPanel() {
           islandY:    c.y,
         }))
     }
-    return scanPlayers
-      .filter(p =>
-        p.cityName?.toLowerCase().includes(q) ||
-        p.playerName?.toLowerCase().includes(q)
-      )
+    // The world scan only covers islands within its radius, so it is NOT the full list of
+    // known targets: farm targets and spied cities further out (e.g. Tróia 3 once the radius
+    // dropped 10 → 5) vanished from this search. Merge all three, scan first (it carries the
+    // player state), de-duplicated by city id.
+    const fromScan: DispatchTarget[] = scanPlayers.map(p => ({
+      type:       'enemy' as const,
+      cityId:     String(p.cityId ?? ''),
+      cityName:   p.cityName,
+      playerName: p.playerName,
+      islandId:   String(p.islandId ?? ''),
+      islandX:    p.islandX,
+      islandY:    p.islandY,
+      state:      p.state,
+    }))
+    const fromFarm: DispatchTarget[] = farmTargets.map(f => ({
+      type:       'enemy' as const,
+      cityId:     String(f.target_city_id),
+      cityName:   f.target_city_name,
+      playerName: f.target_player ?? '',
+      islandId:   String(f.island_id ?? ''),
+      islandX:    Number(f.island_x ?? 0),
+      islandY:    Number(f.island_y ?? 0),
+    }))
+    const seen = new Set<string>()
+    return [...fromScan, ...fromFarm, ...spyTargets]
+      .filter(r => {
+        if (r.cityId) {
+          if (seen.has(r.cityId)) return false
+          seen.add(r.cityId)
+        }
+        return r.cityName?.toLowerCase().includes(q) || r.playerName?.toLowerCase().includes(q)
+      })
       .slice(0, 10)
-      .map(p => ({
-        type:       'enemy' as const,
-        cityId:     p.cityId ?? '',
-        cityName:   p.cityName,
-        playerName: p.playerName,
-        islandId:   p.islandId ?? '',
-        islandX:    p.islandX,
-        islandY:    p.islandY,
-        state:      p.state,
-      }))
   })()
 
   // ── Derived: travel time + arrival estimate (F2) ───────────────────────────
