@@ -766,13 +766,22 @@ def _attack_slots_free(targets):
     return max(0, _MAX_CONCURRENT_FARM - attacking)
 
 
+def _never_swept(t):
+    """First contact = the target has NEVER passed a confirmed full live sweep (garrison
+    success + completed movements leg) through the SPYING gate. Deliberately NOT
+    last_spy_at == 0: last_spy_at is stamped when a scout is DISPATCHED, so a first scout that
+    failed left it non-zero and the target fell straight into the direct-raid path with no
+    sweep at all — unescorted troops bounced off the local fleet (Esparta, 10/11)."""
+    return int(t.get("swept_at", 0) or 0) == 0
+
+
 def _idle_needs_attack_slot(t, now):
     """P11.9: whether a due IDLE target's next move is a direct RAID (consumes an attack slot)
     rather than a scout (spies, no slot). Mirrors the body's branching so the scheduler only
     withholds a wake for a would-be raid when both slots are busy — a scout still wakes. First
     contact, fleet targets, a re-spy round and a stale-scout refresh (P11.7) all scout; a
     confirmed-safe target with fresh intel raids directly."""
-    if int(t.get("last_spy_at", 0)) == 0:          # first contact → full scout
+    if _never_swept(t):                            # first contact → full scout
         return False
     if int(t.get("is_fleet_target", 0)) == 1:      # fleet target → always re-scout first
         return False
@@ -1160,7 +1169,7 @@ def process_farm_targets(session, in_active_hours=True):
         # first scout would seal a defended port as "clean" (the Tróia 3 bounce, 05/11). The
         # movements leg reveals any enemy fleet due back, so a target is confirmed safe only
         # once BOTH legs come back clean.
-        first_contact = int(t.get("last_spy_at", 0) or 0) == 0
+        first_contact = _never_swept(t)
         need_movements = need_garrison and (
             int(t.get("is_fleet_target", 0)) == 1 or first_contact)
         if not force_fresh:
@@ -1207,7 +1216,7 @@ def process_farm_targets(session, in_active_hours=True):
         if confirmed == "vacation":
             _skip_vacation_target(t)
             return "skip"
-        if int(t.get("last_spy_at", 0)) == 0 or int(t.get("is_fleet_target", 0)) == 1:
+        if _never_swept(t) or int(t.get("is_fleet_target", 0)) == 1:
             return "garrison"
         if confirmed is not True:
             return "garrison"
@@ -1335,7 +1344,7 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
 
             min_loot   = int(t.get("min_loot", 50000))
-            first_scout = int(t.get("last_spy_at", 0)) == 0
+            first_scout = _never_swept(t)
 
             # ── Direct raid on a safe target (no scout) ─────────────────────
             # A target counts as DRAINED (→ re-scout, don't raid on stale intel) when EITHER
@@ -1548,7 +1557,9 @@ def process_farm_targets(session, in_active_hours=True):
             # ran (spy returned first → movementsResult is None), the port is NOT confirmed — a
             # patrolling fleet could still be out. Only a COMPLETED movements report (a dict,
             # clean or carrying an ETA) confirms it. This was the second hole at Tróia 3.
-            movements_ok = (m.get("movementsResult") is not None) if m.get("needMovements") else True
+            never_swept = _never_swept(t)
+            movements_ok = ((m.get("movementsResult") is not None)
+                            if (m.get("needMovements") or never_swept) else True)
             # Type-based decision: flee ships (lancha/reparador) are driven off by a blockade;
             # any other warship actually fights → too dangerous. combat ships beyond the
             # tolerated cap (max_enemy_ships, default 0) → skip + alert.
@@ -1607,7 +1618,7 @@ def process_farm_targets(session, in_active_hours=True):
             # on a success=False garrison {} + null movements). Re-scout instead; after a few
             # straight failures skip the round rather than loop forever.
             needs_full_sweep = (int(t.get("is_fleet_target", 0)) == 1
-                                or bool(m.get("needMovements")))
+                                or bool(m.get("needMovements")) or never_swept)
             if needs_full_sweep and not (garrison_known and movements_ok):
                 tries = int(t.get("scout_fail_count", 0)) + 1
                 why = ("guarnição rejeitada" if not garrison_known else "movimentos não corridos")
@@ -1629,6 +1640,11 @@ def process_farm_targets(session, in_active_hours=True):
             # A clean scout clears the failure streak.
             if int(t.get("scout_fail_count", 0)):
                 farm_update(tid, {"scout_fail_count": 0})
+            # Seal the verified full sweep: only a completed garrison AND a completed movements
+            # leg count. This is the ONLY writer of swept_at, and a direct raid requires it.
+            if garrison_known and isinstance(m.get("movementsResult"), dict):
+                t["swept_at"] = now
+                farm_update(tid, {"swept_at": now})
 
             # P11.9: the report is in hand and the target is ready to raid — but the attack slot
             # may be taken by a parallel raid (or this cycle's one launch is spent). Hold it with

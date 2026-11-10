@@ -210,6 +210,22 @@ def _run_migrations(conn):
             except Exception:
                 pass
         conn.execute("INSERT INTO schema_version (version) VALUES (15)")
+    if current < 16:
+        # v16 = swept_at: when the target last passed a CONFIRMED full live sweep (garrison
+        # success + completed movements leg) through the farm's SPYING gate. "First contact"
+        # used to be last_spy_at == 0, but last_spy_at is stamped at DISPATCH — a first scout
+        # that failed left it non-zero and the target dropped straight into the direct-raid
+        # path without ever being swept (Esparta bounce, 10/11). swept_at is only ever written
+        # by a verified sweep, so a direct raid now requires one. Backfill: a target whose
+        # total_loot > 0 already passed the SPYING gate at least once (that path is the only
+        # one that adds to total_loot) — keep it raidable; everything else re-sweeps once.
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN swept_at INTEGER DEFAULT 0")
+            conn.execute("UPDATE farm_targets SET swept_at = last_spy_at "
+                         "WHERE total_loot > 0 AND last_spy_at > 0")
+        except Exception:
+            pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (16)")
     conn.commit()
 
 
@@ -479,7 +495,7 @@ _FARM_UPDATE_COLS = {
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
-    "mode", "low_raids", "scout_fail_count", "force_fresh_spy",
+    "mode", "low_raids", "scout_fail_count", "force_fresh_spy", "swept_at",
 }
 
 

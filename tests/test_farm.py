@@ -162,7 +162,7 @@ def test_drained_target_is_disabled(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 50000})
     now = int(time.time())
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - 60})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now - 60})
     report = [{"state": "DONE", "targetCityId": "100", "targetCityName": "Alvo",
                "result": {"resources": {"wood": 10000}}, "garrisonResult": {"troops": {}},
                "executedAt": now}]
@@ -227,7 +227,7 @@ def test_spying_with_good_loot_enqueues_attack(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{
         "state": "DONE", "targetCityId": "100",
         "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
@@ -254,7 +254,7 @@ def test_fleet_target_respy_requests_movements(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Martelo", "islandX": 48, "islandY": 44,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 1})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -275,7 +275,7 @@ def test_movements_eta_feeds_enemy_return_at(monkeypatch, tmp_path):
     eta = now + 10000           # enemy fleet back in ~2.7h — troops land well before
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Martelo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1, "last_troop_journey": 600,
                                    "enemy_return_at": 0})
     missions = [{
@@ -325,7 +325,7 @@ def test_clean_garrison_but_returning_fleet_marks_fleet_target(monkeypatch, tmp_
     eta = now + 10000           # fleet back in ~2.7h — troops land & return well before
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia X", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 0, "last_troop_journey": 600,
                                    "enemy_return_at": 0})
     missions = [{
@@ -351,7 +351,7 @@ def test_fleet_target_failed_garrison_not_attacked(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1})
     missions = [{
         "state": "DONE", "targetCityId": "100", "needMovements": True,
         "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
@@ -377,7 +377,7 @@ def test_fleet_target_movements_not_run_not_attacked(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1})
     missions = [{
         "state": "DONE", "targetCityId": "100", "needMovements": True,
         "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
@@ -423,7 +423,7 @@ def test_full_clean_sweep_fleet_target_still_attacks(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 1,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1,
                                    "enemy_return_at": 0})
     missions = [{
         "state": "DONE", "targetCityId": "100", "needMovements": True,
@@ -445,7 +445,7 @@ def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{"state": "DONE", "targetCityId": "100",
                  "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
                  "garrisonResult": {"troops": {}}}]
@@ -464,7 +464,7 @@ def test_farm_army_loadout_caps_to_available(monkeypatch, tmp_path):
 def test_spying_low_loot_reschedules(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 100000})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{"state": "DONE", "targetCityId": "100",
                  "result": {"resources": {"wood": 5000}, "reportedAt": 2000},
                  "garrisonResult": {"troops": {}}}]
@@ -483,7 +483,7 @@ def test_spying_stuck_head_released(monkeypatch, tmp_path):
     now = int(time.time())
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
     # dispatched well past the stuck grace, and no missions at all for the target
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - fm._SPY_STUCK_GRACE - 60})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now - fm._SPY_STUCK_GRACE - 60})
     added = _common_patches(monkeypatch, tmp_path, missions=[])
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
@@ -500,7 +500,7 @@ def test_spying_live_mission_not_released(monkeypatch, tmp_path):
     now = int(time.time())
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
     disp = now - fm._SPY_STUCK_GRACE - 60
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": disp})
     missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": disp}]
     _common_patches(monkeypatch, tmp_path, missions=missions)
 
@@ -514,7 +514,7 @@ def test_next_farm_eta_schedules_spying_backstop(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     now = int(time.time())
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now})
     eta = fm.next_farm_eta()
     assert eta is not None
     assert eta == now + fm._SPY_STUCK_GRACE     # grace deadline while still within grace
@@ -528,7 +528,7 @@ def test_spying_live_mission_not_aborted_before_backstop(monkeypatch, tmp_path):
     now = int(time.time())
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
     disp = now - 7 * 3600                                   # 7h: past old 6h, under 13h backstop
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": disp})
     missions = [{"state": "EXECUTING_WAREHOUSE", "targetCityId": "100", "dispatchedAt": disp}]
     _common_patches(monkeypatch, tmp_path, missions=missions)
 
@@ -543,7 +543,7 @@ def test_spying_live_mission_released_by_backstop(monkeypatch, tmp_path):
     now = int(time.time())
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "minLoot": 50000})
     disp = now - 14 * 3600                                  # 14h: past the 13h backstop
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": disp})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": disp})
     missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": disp}]
     _common_patches(monkeypatch, tmp_path, missions=missions)
 
@@ -598,7 +598,7 @@ def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{"state": "DONE", "targetCityId": "100",
                  "result": {"resources": {"wood": 80000}, "reportedAt": 2000},
                  "garrisonResult": {"troops": {}}}]
@@ -620,7 +620,7 @@ def test_fleet_target_respies_not_direct(monkeypatch, tmp_path):
                          "islandId": "7", "minLoot": 30000})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "next_action": "attack",
                                    "last_loot": 70000, "last_enemy_ships": 0, "raids_since_spy": 1,
-                                   "last_spy_at": int(time.time()), "is_fleet_target": 1})
+                                   "last_spy_at": int(time.time()), "swept_at": 1, "is_fleet_target": 1})
     added = _common_patches(monkeypatch, tmp_path)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
@@ -654,7 +654,7 @@ def test_safe_target_attacks_directly(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -678,7 +678,7 @@ def test_safe_target_ignores_raid_count_cadence(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 9, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 9, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -700,7 +700,7 @@ def test_stale_scout_rescouts_before_direct_raid(monkeypatch, tmp_path):
                          "islandId": "7", "minLoot": 30000})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
                                    "last_enemy_ships": 0, "raids_since_spy": 1,
-                                   "last_spy_at": now - 30 * 3600,   # 30h old > 24h default
+                                   "last_spy_at": now - 30 * 3600, "swept_at": 1,   # 30h old > 24h default
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -722,7 +722,7 @@ def test_freshness_guard_disabled_attacks_directly(monkeypatch, tmp_path):
                          "islandId": "7", "minLoot": 30000})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
                                    "last_enemy_ships": 0, "raids_since_spy": 1,
-                                   "last_spy_at": now - 300 * 3600,  # ancient, but guard is off
+                                   "last_spy_at": now - 300 * 3600, "swept_at": 1,  # ancient, but guard is off
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -751,7 +751,7 @@ def test_uncertain_inactivity_forces_full_scout(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: None)   # can't tell
@@ -771,7 +771,7 @@ def test_drained_by_real_return_respies_not_direct(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268638,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
                          "toCity": "Baphomet", "resources": [3000, 2101, 0, 0, 0], "returnKey": "k1"})
@@ -792,7 +792,7 @@ def test_healthy_real_return_still_direct_attacks(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268638,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
                          "toCity": "Baphomet", "resources": [100000, 0, 0, 0, 0], "returnKey": "k1"})
@@ -813,7 +813,7 @@ def test_no_free_troops_reschedules_not_doomed_attack(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 200000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -836,7 +836,7 @@ def test_early_respy_full_garrison_for_fleet_target(monkeypatch, tmp_path):
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     now = int(time.time())
     db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 60,
-                                   "respy_launched_at": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()),
+                                   "respy_launched_at": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "last_enemy_ships": 0, "is_fleet_target": 1})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
@@ -855,7 +855,7 @@ def test_direct_raid_blocked_when_owner_active(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
@@ -877,7 +877,7 @@ def test_direct_raid_unconfirmed_escalates_to_scout(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: None)
@@ -911,7 +911,7 @@ def test_report_attack_blocked_when_owner_active(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{
         "state": "DONE", "targetCityId": "100",
         "result": {"resources": {"wood": 50000, "marble": 40000}, "reportedAt": 2000},
@@ -933,7 +933,7 @@ def test_reactivated_target_is_disabled(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 3, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: False)
@@ -1079,7 +1079,7 @@ def test_no_ships_schedules_for_real_return(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Δ The Rock Δ",
                          "targetPlayer": "Cap Almighty", "islandX": 40, "islandY": 50, "islandId": "7"})
     now = int(time.time())
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": now - 60})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now - 60})
     report = [{"state": "DONE", "targetCityId": "100", "targetCityName": "Δ The Rock Δ",
                "result": {"resources": {"wood": 80000}}, "garrisonResult": {"troops": {}},
                "executedAt": now}]
@@ -1187,7 +1187,7 @@ def test_direct_raid_deferred_when_ships_below_floor(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now, "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_free_ships", lambda s: 4)            # fleet still out
@@ -1210,7 +1210,7 @@ def test_wine_reserve_counts_against_the_ship_floor(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now, "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(tm, "wine_ship_reserve", lambda: 5, raising=False)
@@ -1252,7 +1252,7 @@ def test_weak_combat_fleet_engaged_with_blockade(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Vinhedo B", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 50000, "maxEnemyShips": 3})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     missions = [{"state": "DONE", "targetCityId": "100",
                  "result": {"resources": {"wood": 288962}, "reportedAt": 2000},
                  "garrisonResult": {"troops": {"Cozinheiro": 10, "Médico": 10, "Trirreme": 2}}}]
@@ -1282,7 +1282,7 @@ def test_vacation_target_skipped_not_attacked(monkeypatch, tmp_path):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Férias", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 70000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: "vacation")
@@ -1345,7 +1345,7 @@ def test_drained_by_estimate_respies_even_if_last_return_healthy(monkeypatch, tm
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Pais da Grama", "islandX": 40,
                          "islandY": 50, "islandId": "7", "minLoot": 50000, "respyEvery": 5})
     db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 268000,
-                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now - 60,
+                                   "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": now - 60, "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     # four healthy returns since the scout summing to 260k → est = 8k (< 50k); newest is 60k (healthy)
     for i, amt in enumerate([70000, 70000, 60000, 60000]):
@@ -1367,7 +1367,7 @@ def test_fleet_target_rejected_garrison_rescouts_not_attacks(monkeypatch, tmp_pa
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1})
     missions = [{
         "state": "DONE", "targetCityId": "100",
@@ -1390,7 +1390,7 @@ def test_fleet_target_skips_round_after_max_scout_fails(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0, "intervalHours": 8})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1,
                                    "scout_fail_count": fm._MAX_SCOUT_FAILS - 1})
     missions = [{
@@ -1415,7 +1415,7 @@ def test_fleet_target_clean_garrison_clears_scout_fails(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1, "scout_fail_count": 2})
     missions = [{
         "state": "DONE", "targetCityId": "100",
@@ -1437,7 +1437,7 @@ def test_failed_scout_counts_toward_cap_and_retries_soon(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "intervalHours": 8})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1})
     missions = [{"state": "FAILED", "targetCityId": "100", "dispatchedAt": 1000,
                  "error": "executeMission rejeitado"}]
@@ -1460,7 +1460,7 @@ def test_failed_scout_at_cap_backs_off_and_forces_fresh(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "intervalHours": 8})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000,
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 1,
                                    "scout_fail_count": fm._MAX_SCOUT_FAILS - 1})
     missions = [{"state": "FAILED", "targetCityId": "100", "dispatchedAt": 1000,
@@ -1503,7 +1503,7 @@ def _add_safe_due(cid, name, loot=70000, journey=2000):
     db_manager.farm_add({"targetCityId": cid, "targetCityName": name, "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
     db_manager.farm_update(cid, {"state": "IDLE", "next_run_at": 0, "last_loot": loot,
-                                 "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()),
+                                 "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                  "is_fleet_target": 0, "last_troop_journey": journey})
 
 
@@ -1515,7 +1515,7 @@ def test_spying_target_does_not_block_ready_raid(monkeypatch, tmp_path):
     # A: spying, report not in yet (fresh dispatch → not stuck, no DONE/FAILED mission)
     db_manager.farm_add({"targetCityId": "1", "targetCityName": "AEspiar", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000})
-    db_manager.farm_update("1", {"state": "SPYING", "spy_dispatched_at": now, "last_loot": 900000})
+    db_manager.farm_update("1", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now, "last_loot": 900000})
     # B: safe, ready to raid now
     _add_safe_due("2", "BPronto")
     added = _common_patches(monkeypatch, tmp_path)
@@ -1860,7 +1860,7 @@ def _cities_setup(tmp_path, cities):
 def _spying_target_with_clean_report(loot=90000):
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
-    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000})
     return [{"state": "DONE", "targetCityId": "100",
              "result": {"resources": {"wood": loot}, "reportedAt": 2000},
              "garrisonResult": {"success": True, "troops": {}}}]
@@ -2021,3 +2021,101 @@ def test_loot_cap_ignores_old_returns_and_honours_manual(tmp_path, monkeypatch):
     assert fm.per_raid_loot_cap(now) is None
     monkeypatch.setattr(fm, "_load_farm_settings", lambda: {"lootCapPerRaid": 300000})
     assert fm.per_raid_loot_cap(now) == 300000
+
+
+# ── Esparta bounce (10/11): a FAILED first scout must not unlock the direct raid ──────────
+
+def test_failed_first_scout_does_not_unlock_direct_raid(monkeypatch, tmp_path):
+    """Esparta 10/11: the first scout was dispatched (last_spy_at stamped at dispatch), its
+    warehouse leg was rejected 3x → FAILED, and the target went back to IDLE with last_spy_at
+    non-zero. "First contact" was last_spy_at == 0, so the next pass took the DIRECT-RAID path
+    on the seed's loot — unescorted troops bounced off the local fleet. First contact now means
+    never swept (swept_at == 0): the next move must be a full scout with the movements leg."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Esparta", "islandX": 46, "islandY": 37,
+                         "islandId": "7", "minLoot": 50000})
+    # State right after the failed first scout: back in IDLE, seed loot, last_spy_at stamped.
+    db_manager.farm_update("100", {"state": "IDLE", "next_run_at": 0, "last_loot": 134263,
+                                   "last_spy_at": now - 1800, "spy_dispatched_at": now - 1800,
+                                   "scout_fail_count": 1, "next_action": "spy",
+                                   "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["spy_dispatch"]          # a scout, never an attack
+    item = added[0][1]
+    assert item["needGarrison"] is True and item["needMovements"] is True
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_unswept_target_is_not_a_raid_for_the_slot_scheduler():
+    """The P11.9 scheduler mirrors the body: an unswept target's next move is a scout."""
+    t = {"last_spy_at": 12345, "swept_at": 0, "is_fleet_target": 0,
+         "raids_since_spy": 0, "respy_every": 3}
+    assert fm._idle_needs_attack_slot(t, int(time.time())) is False
+
+
+def test_unswept_report_without_movements_is_not_raided(monkeypatch, tmp_path):
+    """Belt and braces: even a report that did NOT request movements (e.g. evaluated from an
+    older/manual mission) cannot seal an unswept target — no movements reading, no raid."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Esparta", "islandX": 46, "islandY": 37,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100",
+        "result": {"resources": {"wood": 90000, "marble": 50000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {"s210": 40}},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["swept_at"] == 0
+
+
+def test_complete_sweep_seals_swept_at(monkeypatch, tmp_path):
+    """A completed garrison + completed movements leg is the one thing that seals swept_at."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "spy_dispatched_at": 1000, "is_fleet_target": 0})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,
+        "result": {"resources": {"wood": 90000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {}},
+        "movementsResult": {"enemyReturnAt": None},
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert [q for q, _ in added] == ["attack"]
+    assert db_manager.farm_get("100")["swept_at"] > 0
+
+
+def test_v16_backfill_keeps_gated_targets_raidable(tmp_path):
+    """Migration: a target that already passed the SPYING gate (total_loot > 0) keeps a
+    swept_at; one that was only ever raided blind (total_loot == 0) must re-sweep."""
+    import sqlite3
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "1", "targetCityName": "Gated"})
+    db_manager.farm_add({"targetCityId": "2", "targetCityName": "Blind"})
+    db_manager.farm_update("1", {"last_spy_at": 500, "total_loot": 90000, "swept_at": 0})
+    db_manager.farm_update("2", {"last_spy_at": 600, "total_loot": 0, "total_raids": 1, "swept_at": 0})
+    # Roll the DB back to v15 (no swept_at column) and re-run the real migration.
+    conn = sqlite3.connect(db_manager.DB_PATH)
+    conn.execute("ALTER TABLE farm_targets DROP COLUMN swept_at")
+    conn.execute("DELETE FROM schema_version WHERE version >= 16")
+    conn.commit(); conn.close()
+    db_manager._DB_INIT_DONE = False
+    db_manager.init_db()
+    assert db_manager.farm_get("1")["swept_at"] == 500
+    assert db_manager.farm_get("2")["swept_at"] == 0
