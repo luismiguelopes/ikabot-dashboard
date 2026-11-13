@@ -267,16 +267,21 @@ function ConstrucaoTab() {
   )
 }
 
+type ChannelResult = boolean | null
+const INPUT_CLS = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono'
+
 function TelegramCard() {
   const t = useT()
   const [token, setToken] = useState('')
   const [chatId, setChatId] = useState('')
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'testing' | 'ok' | 'fail'>('idle')
+  const [webhook, setWebhook] = useState('')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'invalid' | 'testing' | 'tested'>('idle')
+  const [channels, setChannels] = useState<{ telegram: ChannelResult; discord: ChannelResult } | null>(null)
 
   useEffect(() => {
     fetch('/api/telegram-settings')
       .then(r => r.json())
-      .then(d => { setToken(d.botToken || ''); setChatId(d.chatId || '') })
+      .then(d => { setToken(d.botToken || ''); setChatId(d.chatId || ''); setWebhook(d.discordWebhook || '') })
       .catch(() => {})
   }, [])
 
@@ -285,43 +290,58 @@ function TelegramCard() {
     fetch('/api/telegram-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ botToken: token, chatId }),
+      body: JSON.stringify({ botToken: token, chatId, discordWebhook: webhook }),
     })
-      .then(() => { setStatus('saved'); setTimeout(() => setStatus('idle'), 3000) })
+      .then(r => { setStatus(r.ok ? 'saved' : 'invalid'); setTimeout(() => setStatus('idle'), 4000) })
       .catch(() => setStatus('idle'))
   }
 
   const handleTest = () => {
     setStatus('testing')
+    setChannels(null)
     fetch('/api/telegram-settings/test', { method: 'POST' })
       .then(r => r.json())
-      .then(d => { setStatus(d.ok ? 'ok' : 'fail'); setTimeout(() => setStatus('idle'), 4000) })
-      .catch(() => { setStatus('fail'); setTimeout(() => setStatus('idle'), 4000) })
+      .then(d => { setChannels(d.channels || { telegram: false, discord: false }); setStatus('tested') })
+      .catch(() => { setChannels({ telegram: false, discord: false }); setStatus('tested') })
+  }
+
+  const badge = (label: string, v: ChannelResult) => {
+    if (v === null) return <span className="text-sm text-slate-400">{label}: {t('settings_notify_not_configured')}</span>
+    return v
+      ? <span className="text-sm text-emerald-600 font-medium">✓ {label}</span>
+      : <span className="text-sm text-red-600 font-medium">✗ {label}</span>
   }
 
   return (
     <Card>
       <div className="px-5 py-4">
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
-          <i className="fa-brands fa-telegram text-sky-500" /> {t('settings_telegram_title')}
+          <i className="fa-solid fa-bell text-indigo-500" /> {t('settings_notify_title')}
         </p>
         <div className="space-y-3">
+          <p className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
+            <i className="fa-brands fa-telegram text-sky-500" /> Telegram
+          </p>
           <div>
             <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_token')}</label>
-            <input
-              type="text" value={token} onChange={e => setToken(e.target.value)}
-              placeholder="123456:ABC-DEF…"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
-            />
+            <input type="text" value={token} onChange={e => setToken(e.target.value)}
+              placeholder="123456:ABC-DEF…" className={INPUT_CLS} />
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_chatid')}</label>
-            <input
-              type="text" value={chatId} onChange={e => setChatId(e.target.value)}
-              placeholder="-100123456789"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
-            />
+            <input type="text" value={chatId} onChange={e => setChatId(e.target.value)}
+              placeholder="-100123456789" className={INPUT_CLS} />
           </div>
+          <p className="text-xs text-slate-400">{t('settings_telegram_help')}</p>
+          <p className="pt-2 text-xs font-medium text-slate-600 flex items-center gap-1.5">
+            <i className="fa-brands fa-discord text-indigo-500" /> Discord
+          </p>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">{t('settings_discord_webhook')}</label>
+            <input type="text" value={webhook} onChange={e => setWebhook(e.target.value)}
+              placeholder="https://discord.com/api/webhooks/…" className={INPUT_CLS} />
+          </div>
+          <p className="text-xs text-slate-400">{t('settings_discord_help')}</p>
         </div>
         <div className="mt-4 flex items-center gap-2 flex-wrap">
           <button
@@ -334,17 +354,22 @@ function TelegramCard() {
           </button>
           <button
             onClick={handleTest}
-            disabled={!token || !chatId || status === 'testing'}
+            disabled={(!(token && chatId) && !webhook) || status === 'testing'}
             className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {status === 'testing' && <i className="fa-solid fa-spinner animate-spin text-xs" />}
             {t('settings_telegram_test_btn')}
           </button>
-          {status === 'saved' && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
-          {status === 'ok'    && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_test_ok')}</span>}
-          {status === 'fail'  && <span className="text-sm text-red-600 font-medium">✗ {t('settings_telegram_test_fail')}</span>}
+          {status === 'saved'   && <span className="text-sm text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+          {status === 'invalid' && <span className="text-sm text-red-600 font-medium">✗ {t('settings_discord_invalid')}</span>}
+          {status === 'tested' && channels && (
+            <span className="flex items-center gap-3">
+              {badge('Telegram', channels.telegram)}
+              {badge('Discord', channels.discord)}
+            </span>
+          )}
         </div>
-        <p className="mt-3 text-xs text-slate-400">{t('settings_telegram_help')}</p>
+        <p className="mt-3 text-xs text-slate-400">{t('settings_notify_save_first')}</p>
       </div>
     </Card>
   )

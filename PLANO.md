@@ -848,6 +848,14 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
       - **Conclusão: NÃO reconstruir do zero.** Reaproveitar a config de Discord do stock
         (mesma `webhookUrl`, uma única fonte de verdade) e acrescentar o canal Discord ao nosso
         notifier; o que se constrói é só a camada de qualidade (formato, cobertura, filtros, resumos).
+      - **Fase 1 ✅ 2026-11-13** — Discord ligado ao nosso notifier: `_send(text, level)` faz fan-out
+        Telegram + Discord (canais isolados; devolve `{canal: True|False|None}`); embeds com título,
+        descrição em markdown, cor por nível (info/success/warning/error/critical) e timestamp; cada
+        `notify_*` marca a sua gravidade. Webhook: `telegram_settings.json` (`discordWebhook`) →
+        env `DISCORD_WEBHOOK_URL` → `global.json` do stock (só o bot o lê). UI: card "Notificações
+        (Telegram + Discord)" com campo do webhook (validado no Flask) e teste por canal. Validado
+        live (embed recebido no Discord). **+11 testes → 440.** Falta: pontos 2, 4, 5, 6 (cobertura,
+        filtros por canal, anti-spam/resumos, toggles na UI).
       - **Objectivo**:
         1. **Estender o `telegram_notifier.py`** (não um módulo novo): `_send` → fan-out Telegram +
            Discord. Webhook lido de `global.json` do stock (`shared.discord.webhookUrl`), com override

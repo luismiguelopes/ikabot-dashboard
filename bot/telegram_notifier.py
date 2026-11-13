@@ -1,42 +1,139 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import html
 import json
 import os
+import re
+import time
 from urllib.request import urlopen, Request
 
 _SETTINGS_PATH = "/tmp/ikalogs/telegram_settings.json"
+# Stock ikabot keeps its own Discord/Telegram config here (menu 21). We read its Discord webhook
+# as a fallback so one webhook serves both the stock modules (sendToBot) and our alerts.
+_STOCK_GLOBAL_PATH = os.path.expanduser("~/.ikabot/global.json")
+
+# Discord's edge rejects urllib's default User-Agent; any explicit one is accepted.
+_USER_AGENT = "ikabot-notifier/1.0"
+_HTTP_TIMEOUT = 8
+
+# Embed colour per severity level.
+LEVEL_COLORS = {
+    "info":     0x3B82F6,   # blue
+    "success":  0x10B981,   # green
+    "warning":  0xF59E0B,   # amber
+    "error":    0xEF4444,   # red
+    "critical": 0x991B1B,   # dark red
+}
 
 # Per-run dedup: avoid re-notifying for the same condition until it clears
 _wine_critical_notified: set = set()
 _offline_notified: bool = False
 
 
-def _get_credentials():
-    """Read bot token and chat ID from settings file, falling back to env vars."""
+def _read_settings() -> dict:
     try:
         with open(_SETTINGS_PATH) as f:
             d = json.load(f)
-        token = d.get("botToken", "").strip()
-        chat_id = d.get("chatId", "").strip()
-        if token and chat_id:
-            return token, chat_id
+        return d if isinstance(d, dict) else {}
     except Exception:
-        pass
+        return {}
+
+
+def _get_credentials():
+    """Read bot token and chat ID from settings file, falling back to env vars."""
+    d = _read_settings()
+    token = str(d.get("botToken", "")).strip()
+    chat_id = str(d.get("chatId", "")).strip()
+    if token and chat_id:
+        return token, chat_id
     return os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
 
 
-def _send(text: str) -> None:
-    token, chat_id = _get_credentials()
-    if not token or not chat_id:
-        return
+def _get_discord_webhook() -> str:
+    """Our settings → DISCORD_WEBHOOK_URL env → the stock ikabot config (global.json)."""
+    url = str(_read_settings().get("discordWebhook", "")).strip()
+    if url:
+        return url
+    url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+    if url:
+        return url
     try:
-        url  = f"https://api.telegram.org/bot{token}/sendMessage"
-        body = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
-        req  = Request(url, data=body, headers={"Content-Type": "application/json"})
-        urlopen(req, timeout=10)
+        with open(_STOCK_GLOBAL_PATH) as f:
+            g = json.load(f)
+        for root in (g, g.get("shared", {})):
+            url = str((root.get("discord") or {}).get("webhookUrl", "")).strip()
+            if url:
+                return url
     except Exception:
         pass
+    return ""
+
+
+def _strip_tags(text: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+def html_to_discord(text: str) -> str:
+    """Telegram-HTML (the format every notify_* writes) → Discord markdown."""
+    text = re.sub(r"</?b>", "**", text)
+    text = re.sub(r"</?i>", "*", text)
+    text = re.sub(r"</?code>", "`", text)
+    return _strip_tags(text)
+
+
+def build_discord_payload(text: str, level: str = "info") -> dict:
+    """One embed per alert: first line → title, the rest → description, colour by level."""
+    lines = text.split("\n")
+    title = _strip_tags(lines[0]).strip()[:256]
+    description = html_to_discord("\n".join(lines[1:])).strip()[:4096]
+    embed = {
+        "title": title or "ikabot",
+        "color": LEVEL_COLORS.get(level, LEVEL_COLORS["info"]),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "footer": {"text": "ikabot"},
+    }
+    if description:
+        embed["description"] = description
+    return {"username": "ikabot", "embeds": [embed]}
+
+
+def _post_json(url: str, payload: dict) -> None:
+    body = json.dumps(payload).encode()
+    req = Request(url, data=body, headers={"Content-Type": "application/json",
+                                           "User-Agent": _USER_AGENT})
+    urlopen(req, timeout=_HTTP_TIMEOUT)
+
+
+def _send_telegram(text: str):
+    """True = sent, False = failed, None = not configured."""
+    token, chat_id = _get_credentials()
+    if not token or not chat_id:
+        return None
+    try:
+        _post_json(f"https://api.telegram.org/bot{token}/sendMessage",
+                   {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+        return True
+    except Exception:
+        return False
+
+
+def _send_discord(text: str, level: str = "info"):
+    """True = sent, False = failed, None = not configured."""
+    url = _get_discord_webhook()
+    if not url:
+        return None
+    try:
+        _post_json(url, build_discord_payload(text, level))
+        return True
+    except Exception:
+        return False
+
+
+def _send(text: str, level: str = "info") -> dict:
+    """Fan out to every configured channel; one channel failing never affects the other or
+    the caller. Returns {channel: True|False|None} (None = not configured)."""
+    return {"telegram": _send_telegram(text), "discord": _send_discord(text, level)}
 
 
 def notify_started(cycle: int) -> None:
@@ -44,11 +141,11 @@ def notify_started(cycle: int) -> None:
 
 
 def notify_construction_done(city: str, building: str, level: int) -> None:
-    _send(f"🏗️ <b>Construção concluída</b>\n{city} — {building} nível {level}")
+    _send(f"🏗️ <b>Construção concluída</b>\n{city} — {building} nível {level}", level="success")
 
 
 def notify_transport_error(city: str, resource: str, origin: str) -> None:
-    _send(f"⚠️ <b>Erro de transporte</b>\n{city} ← {resource} de {origin}")
+    _send(f"⚠️ <b>Erro de transporte</b>\n{city} ← {resource} de {origin}", level="warning")
 
 
 def notify_wine_critical(city: str, hours_left: float) -> None:
@@ -56,7 +153,7 @@ def notify_wine_critical(city: str, hours_left: float) -> None:
     if city in _wine_critical_notified:
         return
     _wine_critical_notified.add(city)
-    _send(f"🍷 <b>Vinho crítico</b>\n{city} — {hours_left:.1f}h restantes")
+    _send(f"🍷 <b>Vinho crítico</b>\n{city} — {hours_left:.1f}h restantes", level="warning")
 
 
 def clear_wine_critical(city: str) -> None:
@@ -70,7 +167,7 @@ def notify_attack_dispatched(origin: str, target_city: str, player: str, mission
 
 def notify_attack_failed(target_city: str, player: str, attempts: int) -> None:
     _send(f"❌ <b>Ataque falhou</b>\n{target_city} ({player}) — "
-          f"removido da fila após {attempts} tentativas")
+          f"removido da fila após {attempts} tentativas", level="error")
 
 
 def notify_attack_incoming(origin: str, target_city: str, eta_mins: int,
@@ -82,12 +179,12 @@ def notify_attack_incoming(origin: str, target_city: str, eta_mins: int,
         parts.append(f"{fleets} navios")
     detail = " · ".join(parts) if parts else "movimento hostil"
     _send(f"🚨 <b>Ataque a chegar!</b>\n{origin} → {target_city}\n"
-          f"chega em ~{eta_mins} min · {detail}")
+          f"chega em ~{eta_mins} min · {detail}", level="critical")
 
 
 def notify_farm_blocked(target_city: str, player: str, combat_ships: int) -> None:
     _send(f"⚠️ <b>Farm bloqueado</b>\n{target_city} ({player}) tem {combat_ships} navios de "
-          f"combate (não fogem ao bloqueio) — alvo saltado, verifica manualmente")
+          f"combate (não fogem ao bloqueio) — alvo saltado, verifica manualmente", level="warning")
 
 
 def notify_farm_drained(target_city: str, player: str, loot: int) -> None:
@@ -97,7 +194,7 @@ def notify_farm_drained(target_city: str, player: str, loot: int) -> None:
 
 def notify_farm_active(target_city: str, player: str) -> None:
     _send(f"🟢 <b>Alvo já não inactivo</b>\n{target_city} ({player}) deixou de estar inactivo "
-          f"— desactivado do farm (já não é seguro atacar às cegas).")
+          f"— desactivado do farm (já não é seguro atacar às cegas).", level="warning")
 
 
 _LOOT_ICONS = ("🪵", "🍷", "🪨", "💎", "🌋")   # wood, wine, marble, crystal, sulfur
@@ -132,22 +229,23 @@ def format_returned_loot(from_city: str, from_player: str, to_city: str, resourc
 
 def notify_returned_loot(from_city: str, from_player: str, to_city: str, resources,
                          coords=None, arrival_ts: int = 0) -> None:
-    _send(format_returned_loot(from_city, from_player, to_city, resources, coords, arrival_ts))
+    _send(format_returned_loot(from_city, from_player, to_city, resources, coords, arrival_ts),
+          level="success")
 
 
 def notify_subsystem_down(subsystem: str, consecutive: int, error: str) -> None:
     _send(f"🟠 <b>Subsistema em falha</b>\n<code>{subsystem}</code> falhou {consecutive}× "
           f"seguidas — o bot está vivo mas este módulo não está a fazer nada.\n"
-          f"Último erro: {error}")
+          f"Último erro: {error}", level="error")
 
 
 def notify_subsystem_recovered(subsystem: str) -> None:
-    _send(f"🟢 <b>Subsistema recuperado</b>\n<code>{subsystem}</code> voltou a funcionar.")
+    _send(f"🟢 <b>Subsistema recuperado</b>\n<code>{subsystem}</code> voltou a funcionar.", level="success")
 
 
 def notify_bot_fatal() -> None:
     _send("💥 <b>Bot terminou (fatal)</b> — a sessão do jogo desistiu (re-login/rede esgotados). "
-          "O container deve reiniciar sozinho (healthcheck + autoheal); confirma se persiste.")
+          "O container deve reiniciar sozinho (healthcheck + autoheal); confirma se persiste.", level="critical")
 
 
 def notify_bot_offline(minutes: int) -> None:
@@ -155,7 +253,7 @@ def notify_bot_offline(minutes: int) -> None:
     if _offline_notified:
         return
     _offline_notified = True
-    _send(f"🔴 <b>Bot offline</b> — sem actividade há {minutes} minutos")
+    _send(f"🔴 <b>Bot offline</b> — sem actividade há {minutes} minutos", level="critical")
 
 
 def clear_bot_offline() -> None:

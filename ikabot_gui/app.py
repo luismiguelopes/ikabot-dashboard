@@ -4,6 +4,7 @@ from datetime import timedelta
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -826,21 +827,26 @@ def api_building_queue_reorder():
     return jsonify({"ok": True, "queue": city_queue})
 
 
+_DISCORD_WEBHOOK_RE = re.compile(r"^https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+$")
+
+
 @app.route("/api/telegram-settings", methods=["GET"])
 def api_telegram_settings_get():
-    data = {"botToken": "", "chatId": ""}
+    data = {"botToken": "", "chatId": "", "discordWebhook": ""}
     if os.path.exists(TELEGRAM_SETTINGS_PATH):
         try:
             with open(TELEGRAM_SETTINGS_PATH) as f:
                 saved = json.load(f)
-            data["botToken"] = saved.get("botToken", "")
-            data["chatId"] = saved.get("chatId", "")
+            for k in data:
+                data[k] = saved.get(k, "")
         except Exception:
             pass
     if not data["botToken"]:
         data["botToken"] = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not data["chatId"]:
         data["chatId"] = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not data["discordWebhook"]:
+        data["discordWebhook"] = os.getenv("DISCORD_WEBHOOK_URL", "")
     return jsonify(data)
 
 
@@ -848,9 +854,12 @@ def api_telegram_settings_get():
 def api_telegram_settings_save():
     body = request.get_json(force=True) or {}
     data = {
-        "botToken": str(body.get("botToken", "")).strip(),
-        "chatId":   str(body.get("chatId", "")).strip(),
+        "botToken":       str(body.get("botToken", "")).strip(),
+        "chatId":         str(body.get("chatId", "")).strip(),
+        "discordWebhook": str(body.get("discordWebhook", "")).strip(),
     }
+    if data["discordWebhook"] and not _DISCORD_WEBHOOK_RE.match(data["discordWebhook"]):
+        return jsonify({"ok": False, "error": "invalid_discord_webhook"}), 400
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(TELEGRAM_SETTINGS_PATH, "w") as f:
         json.dump(data, f)
@@ -859,12 +868,17 @@ def api_telegram_settings_save():
 
 @app.route("/api/telegram-settings/test", methods=["POST"])
 def api_telegram_settings_test():
+    """Send a test alert to every configured channel and report each one separately
+    (True = sent, False = failed, None = not configured)."""
     try:
         import telegram_notifier as _tg
-        _tg._send("🤖 Teste de notificação Telegram — ikabot dashboard")
-        return jsonify({"ok": True})
+        results = _tg._send("🤖 <b>Teste de notificação</b>\nikabot dashboard — este canal está a funcionar.",
+                            level="success")
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    configured = [v for v in results.values() if v is not None]
+    ok = bool(configured) and all(configured)
+    return jsonify({"ok": ok, "channels": results})
 
 
 @app.route("/api/espionage/spy-counts")

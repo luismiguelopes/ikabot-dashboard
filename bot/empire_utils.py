@@ -569,7 +569,7 @@ _CONFIG_SCHEMAS = {
     "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
                                 "processingEnabled": bool},
     "world_scan_settings.json": {"enabled": bool, "radius": int},
-    "telegram_settings.json": {"botToken": str, "chatId": str},
+    "telegram_settings.json": {"botToken": str, "chatId": str, "discordWebhook": str},
 }
 
 

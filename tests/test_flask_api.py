@@ -401,3 +401,43 @@ def test_loot_stats_endpoint_per_player_and_per_city(monkeypatch, tmp_path):
     assert len(per_player) == 1 and per_player[0]["total"] == 250000
     per_city = {r["from_city"]: r["total"] for r in c.get("/api/loot-stats?by=city").get_json()}
     assert per_city == {"Castle-V": 200000, "Castle-VIII": 50000}
+
+
+# ── /api/telegram-settings (F15: Discord webhook) ───────────────────────────
+
+def _tg_client(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "TELEGRAM_SETTINGS_PATH", str(tmp_path / "telegram_settings.json"))
+    for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK_URL"):
+        monkeypatch.delenv(k, raising=False)
+    return c
+
+
+def test_notify_settings_roundtrip_with_discord(monkeypatch, tmp_path):
+    c = _tg_client(monkeypatch, tmp_path)
+    hook = "https://discord.com/api/webhooks/123456/abc-DEF_9"
+    r = c.post("/api/telegram-settings", json={"botToken": "T", "chatId": "1",
+                                               "discordWebhook": f" {hook} "})
+    assert r.get_json()["ok"] is True
+    assert c.get("/api/telegram-settings").get_json() == {
+        "botToken": "T", "chatId": "1", "discordWebhook": hook}
+
+
+def test_notify_settings_rejects_non_discord_webhook(monkeypatch, tmp_path):
+    c = _tg_client(monkeypatch, tmp_path)
+    r = c.post("/api/telegram-settings", json={"discordWebhook": "https://evil.example/hook"})
+    assert r.status_code == 400
+    assert not (tmp_path / "telegram_settings.json").exists()
+
+
+def test_notify_test_reports_each_channel(monkeypatch, tmp_path):
+    c = _tg_client(monkeypatch, tmp_path)
+    tg = sys.modules["telegram_notifier"]   # whichever stub another test module registered
+    monkeypatch.setattr(tg, "_send",
+                        lambda text, level="info": {"telegram": None, "discord": True},
+                        raising=False)
+    d = c.post("/api/telegram-settings/test").get_json()
+    assert d == {"ok": True, "channels": {"telegram": None, "discord": True}}
+    monkeypatch.setattr(tg, "_send",
+                        lambda text, level="info": {"telegram": False, "discord": True})
+    assert c.post("/api/telegram-settings/test").get_json()["ok"] is False
