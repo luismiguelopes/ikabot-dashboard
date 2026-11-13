@@ -1266,7 +1266,19 @@ def process_farm_targets(session, in_active_hours=True):
         """Enough usable trade ships (live free count minus the wine reserve) to make a raid
         worth sending. The direct-raid path had no ship check at all, so raids were enqueued with
         4 ships free and then silently dropped by the attack manager."""
-        return _free_ships_once() >= _PARALLEL_SHIP_FLOOR
+        ready = _free_ships_once() >= _PARALLEL_SHIP_FLOOR
+        try:
+            import telegram_notifier as _tg
+            reserve = _wine_reserve_once()
+            raw = _free_ships_once() + reserve
+            if ready:
+                _tg.clear_farm_waiting_reserve()
+            elif reserve > 0 and raw >= _PARALLEL_SHIP_FLOOR:
+                # Only the wine reserve stands between the farm and a raid — say so, once.
+                _tg.notify_farm_waiting_reserve(raw, reserve, _PARALLEL_SHIP_FLOOR)
+        except Exception:
+            pass
+        return ready
 
     def _defer_for_ships(t, **extra):
         """Hold a raid until the previous one's ships are back, keeping its intel."""
@@ -1643,8 +1655,16 @@ def process_farm_targets(session, in_active_hours=True):
             # Seal the verified full sweep: only a completed garrison AND a completed movements
             # leg count. This is the ONLY writer of swept_at, and a direct raid requires it.
             if garrison_known and isinstance(m.get("movementsResult"), dict):
+                first_sweep = _never_swept(t)
                 t["swept_at"] = now
                 farm_update(tid, {"swept_at": now})
+                if first_sweep:
+                    try:
+                        from telegram_notifier import notify_target_swept
+                        notify_target_swept(name, t.get("target_player", ""),
+                                            bool(int(t.get("is_fleet_target", 0) or 0)))
+                    except Exception:
+                        pass
 
             # P11.9: the report is in hand and the target is ready to raid — but the attack slot
             # may be taken by a parallel raid (or this cycle's one launch is spent). Hold it with

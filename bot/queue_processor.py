@@ -300,6 +300,12 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 json.dump({"lastAlive": int(time.time())}, f)
         except Exception:
             pass
+        # Notification digest (hourly/daily summary) — no game request, just Telegram/Discord.
+        try:
+            from telegram_notifier import maybe_send_digest
+            maybe_send_digest()
+        except Exception:
+            pass
         if os.path.exists(FORCE_EMPIRE_FLAG):
             break
         if os.path.exists(FORCE_QUEUE_FLAG):

@@ -165,6 +165,15 @@ def _dispatch_scheduled_transport(session, item):
                 ships, "cargueiros" if use_freighters else "navios")
     ok = _dispatch_transport(session, origin_id, dest_id, island_id,
                              ships, send_list, use_freighters=use_freighters)
+    if ok:
+        try:
+            from telegram_notifier import notify_transport_sent, _pt_int
+            summary = ", ".join(f"{_pt_int(v)} {k}" for k, v in zip(_RESOURCES_ENG, send_list) if v > 0)
+            notify_transport_sent(item.get("originCityName", origin_id),
+                                  item.get("destCityName", dest_id),
+                                  f"{summary} ({ships} {'cargueiros' if use_freighters else 'navios'})")
+        except Exception:
+            pass
     return ok, None if ok else "servidor recusou o transporte (type=11)"
 
 
@@ -531,6 +540,11 @@ def process_consolidation(session, in_active_hours=True):
     _save_consolidate_state(state)
     if sent_summary:
         logger.info("[consolidate] ronda concluída → %s: %s", dest_name, sent_summary)
+        try:
+            from telegram_notifier import notify_consolidation_done
+            notify_consolidation_done(dest_name, str(sent_summary))
+        except Exception:
+            pass
 
 
 # ── Wine balancer (F9) ────────────────────────────────────────────────────────
@@ -683,6 +697,7 @@ def process_wine_balancer(session, in_active_hours=True):
             return
 
     first = True
+    shipments = []
     for dest_name, runs_out, deficit in needy:
         if ships_available <= 0:
             break
@@ -716,8 +731,15 @@ def process_wine_balancer(session, in_active_hours=True):
                 remaining -= amount
                 logger.info("[wine] %s → %s: %d vinho (%d navios, runway %dh)",
                             src_name, dest_name, int(amount), ships_to_use, runs_out // 3600)
+                shipments.append((src_name, dest_name, int(amount), ships_to_use))
             else:
                 logger.warning("[wine] envio de %s → %s recusado", src_name, dest_name)
+    if shipments:
+        try:
+            from telegram_notifier import notify_wine_balanced
+            notify_wine_balanced(shipments)
+        except Exception:
+            pass
 
 
 # ── Wine market buyer (F10) ───────────────────────────────────────────────────
@@ -886,6 +908,7 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
     budget = min(gold - gold_floor, int(settings["maxSpendPerCycle"]))
     if budget <= 0:
         logger.info("[wine-buy] ouro (%d) no/abaixo do piso (%d) — a saltar", gold, gold_floor)
+        _notify_buy_blocked("ouro no piso", f"{gold} ouro, piso {gold_floor}")
         _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
                                 "gold": gold, "note": "ouro no piso", "buys": []})
         return
@@ -912,6 +935,7 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
             pass
     if not dry and ships <= 0:
         logger.info("[wine-buy] sem navios livres (reservados p/ farm) — a saltar")
+        _notify_buy_blocked("sem navios livres", "reservados para o farm")
         _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": 0, "spent": 0,
                                 "gold": gold, "note": "sem navios livres", "buys": []})
         return
@@ -983,3 +1007,18 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
                             "critical": critical, "buys": buys[:20], "topCities": detail[:8]})
     logger.info("[wine-buy] %s: %d vinho por %d ouro (défice %d, preço médio %s)",
                 "dry-run" if dry else "comprado", bought, spent, deficit, avg)
+    try:
+        import telegram_notifier as _tg
+        _tg.clear_wine_buy_blocked()       # got past both brakes → re-arm their alerts
+        if bought > 0:
+            _tg.notify_wine_bought(bought, spent, avg, buys, dry)
+    except Exception:
+        pass
+
+
+def _notify_buy_blocked(reason, detail):
+    try:
+        from telegram_notifier import notify_wine_buy_blocked
+        notify_wine_buy_blocked(reason, detail)
+    except Exception:
+        pass

@@ -181,9 +181,33 @@ def _prune_missions(missions):
     return kept
 
 
+def _mission_key(m):
+    return (str(m.get("originCityId")), str(m.get("targetCityId")), m.get("dispatchedAt"))
+
+
+def _notify_new_failures(before, after):
+    """Alert on every mission that turned FAILED in this save (diffed against the file on disk,
+    so all ~10 FAILED transitions are covered without touching each one)."""
+    was_failed = {_mission_key(m) for m in before if m.get("state") == "FAILED"}
+    for m in after:
+        if m.get("state") != "FAILED" or _mission_key(m) in was_failed:
+            continue
+        try:
+            from telegram_notifier import notify_spy_failed
+            notify_spy_failed(m.get("targetCityName", "?"), m.get("targetPlayerName", "?"),
+                              str(m.get("error") or "sem detalhe")[:200],
+                              _spy_pool_gone(m.get("error")))
+        except Exception:
+            pass
+
+
 def _save_missions(data):
     os.makedirs(LOGS_DIR, exist_ok=True)
     data["missions"] = _prune_missions(data.get("missions", []))
+    try:
+        _notify_new_failures(_load_missions().get("missions", []), data["missions"])
+    except Exception:
+        pass
     with open(SPY_MISSIONS_PATH, "w") as f:
         json.dump(data, f, indent=2)
 

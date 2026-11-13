@@ -268,6 +268,8 @@ function ConstrucaoTab() {
 }
 
 type ChannelResult = boolean | null
+const NOTIFY_LEVELS = ['activity', 'info', 'success', 'warning', 'error', 'critical'] as const
+const NOTIFY_CATEGORIES = ['combat', 'farm', 'spy', 'wine', 'transport', 'build', 'system', 'digest'] as const
 const INPUT_CLS = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono'
 
 function TelegramCard() {
@@ -275,13 +277,24 @@ function TelegramCard() {
   const [token, setToken] = useState('')
   const [chatId, setChatId] = useState('')
   const [webhook, setWebhook] = useState('')
+  const [tgMin, setTgMin] = useState('info')
+  const [dcMin, setDcMin] = useState('activity')
+  const [tgMuted, setTgMuted] = useState<string[]>([])
+  const [dcMuted, setDcMuted] = useState<string[]>([])
+  const [digest, setDigest] = useState('daily')
+  const [digestHour, setDigestHour] = useState(21)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'invalid' | 'testing' | 'tested'>('idle')
   const [channels, setChannels] = useState<{ telegram: ChannelResult; discord: ChannelResult } | null>(null)
 
   useEffect(() => {
     fetch('/api/telegram-settings')
       .then(r => r.json())
-      .then(d => { setToken(d.botToken || ''); setChatId(d.chatId || ''); setWebhook(d.discordWebhook || '') })
+      .then(d => {
+        setToken(d.botToken || ''); setChatId(d.chatId || ''); setWebhook(d.discordWebhook || '')
+        setTgMin(d.telegramMinLevel || 'info'); setDcMin(d.discordMinLevel || 'activity')
+        setTgMuted(d.telegramMuted || []); setDcMuted(d.discordMuted || [])
+        setDigest(d.digest || 'daily'); setDigestHour(d.digestHour ?? 21)
+      })
       .catch(() => {})
   }, [])
 
@@ -290,7 +303,9 @@ function TelegramCard() {
     fetch('/api/telegram-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ botToken: token, chatId, discordWebhook: webhook }),
+      body: JSON.stringify({ botToken: token, chatId, discordWebhook: webhook,
+                             telegramMinLevel: tgMin, discordMinLevel: dcMin,
+                             telegramMuted: tgMuted, discordMuted: dcMuted, digest, digestHour }),
     })
       .then(r => { setStatus(r.ok ? 'saved' : 'invalid'); setTimeout(() => setStatus('idle'), 4000) })
       .catch(() => setStatus('idle'))
@@ -304,6 +319,36 @@ function TelegramCard() {
       .then(d => { setChannels(d.channels || { telegram: false, discord: false }); setStatus('tested') })
       .catch(() => { setChannels({ telegram: false, discord: false }); setStatus('tested') })
   }
+
+  const levelSelect = (value: string, onChange: (v: string) => void) => (
+    <div>
+      <label className="block text-xs text-slate-500 mb-1">{t('settings_notify_min_level')}</label>
+      <select value={value} onChange={e => onChange(e.target.value)}
+        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        {NOTIFY_LEVELS.map(l => <option key={l} value={l}>{t(`settings_notify_level_${l}`)}</option>)}
+      </select>
+    </div>
+  )
+
+  const mutePicker = (muted: string[], setMuted: (v: string[]) => void) => (
+    <div>
+      <label className="block text-xs text-slate-500 mb-1">{t('settings_notify_categories')}</label>
+      <div className="flex flex-wrap gap-1.5">
+        {NOTIFY_CATEGORIES.map(c => {
+          const on = !muted.includes(c)
+          return (
+            <button key={c} type="button"
+              onClick={() => setMuted(on ? [...muted, c] : muted.filter(x => x !== c))}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${on
+                ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                : 'bg-white border-slate-200 text-slate-400 line-through'}`}>
+              {t(`settings_notify_cat_${c}`)}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 
   const badge = (label: string, v: ChannelResult) => {
     if (v === null) return <span className="text-sm text-slate-400">{label}: {t('settings_notify_not_configured')}</span>
@@ -332,6 +377,8 @@ function TelegramCard() {
             <input type="text" value={chatId} onChange={e => setChatId(e.target.value)}
               placeholder="-100123456789" className={INPUT_CLS} />
           </div>
+          {levelSelect(tgMin, setTgMin)}
+          {mutePicker(tgMuted, setTgMuted)}
           <p className="text-xs text-slate-400">{t('settings_telegram_help')}</p>
           <p className="pt-2 text-xs font-medium text-slate-600 flex items-center gap-1.5">
             <i className="fa-brands fa-discord text-indigo-500" /> Discord
@@ -341,7 +388,33 @@ function TelegramCard() {
             <input type="text" value={webhook} onChange={e => setWebhook(e.target.value)}
               placeholder="https://discord.com/api/webhooks/…" className={INPUT_CLS} />
           </div>
+          {levelSelect(dcMin, setDcMin)}
+          {mutePicker(dcMuted, setDcMuted)}
           <p className="text-xs text-slate-400">{t('settings_discord_help')}</p>
+          <p className="pt-2 text-xs font-medium text-slate-600 flex items-center gap-1.5">
+            <i className="fa-solid fa-chart-column text-indigo-500" /> {t('settings_digest_title')}
+          </p>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-xs text-slate-500 mb-1">{t('settings_digest_mode')}</label>
+              <select value={digest} onChange={e => setDigest(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                <option value="off">{t('settings_digest_off')}</option>
+                <option value="hourly">{t('settings_digest_hourly')}</option>
+                <option value="daily">{t('settings_digest_daily')}</option>
+              </select>
+            </div>
+            {digest === 'daily' && (
+              <div className="w-28">
+                <label className="block text-xs text-slate-500 mb-1">{t('settings_digest_hour')}</label>
+                <select value={digestHour} onChange={e => setDigestHour(Number(e.target.value))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">{t('settings_digest_help')}</p>
         </div>
         <div className="mt-4 flex items-center gap-2 flex-wrap">
           <button

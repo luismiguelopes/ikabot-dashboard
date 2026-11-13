@@ -420,7 +420,13 @@ def test_notify_settings_roundtrip_with_discord(monkeypatch, tmp_path):
                                                "discordWebhook": f" {hook} "})
     assert r.get_json()["ok"] is True
     assert c.get("/api/telegram-settings").get_json() == {
-        "botToken": "T", "chatId": "1", "discordWebhook": hook}
+        "botToken": "T", "chatId": "1", "discordWebhook": hook,
+        "telegramMinLevel": "info", "discordMinLevel": "activity",
+        "telegramMuted": [], "discordMuted": [], "digest": "daily", "digestHour": 21}
+    c.post("/api/telegram-settings", json={"discordWebhook": hook, "telegramMinLevel": "warning",
+                                           "discordMinLevel": "bogus"})
+    d = c.get("/api/telegram-settings").get_json()
+    assert (d["telegramMinLevel"], d["discordMinLevel"]) == ("warning", "activity")
 
 
 def test_notify_settings_rejects_non_discord_webhook(monkeypatch, tmp_path):
@@ -434,10 +440,23 @@ def test_notify_test_reports_each_channel(monkeypatch, tmp_path):
     c = _tg_client(monkeypatch, tmp_path)
     tg = sys.modules["telegram_notifier"]   # whichever stub another test module registered
     monkeypatch.setattr(tg, "_send",
-                        lambda text, level="info": {"telegram": None, "discord": True},
+                        lambda text, level="info", **kw: {"telegram": None, "discord": True},
                         raising=False)
     d = c.post("/api/telegram-settings/test").get_json()
     assert d == {"ok": True, "channels": {"telegram": None, "discord": True}}
     monkeypatch.setattr(tg, "_send",
-                        lambda text, level="info": {"telegram": False, "discord": True})
+                        lambda text, level="info", **kw: {"telegram": False, "discord": True})
     assert c.post("/api/telegram-settings/test").get_json()["ok"] is False
+
+
+def test_notify_settings_sanitises_mutes_and_digest(monkeypatch, tmp_path):
+    c = _tg_client(monkeypatch, tmp_path)
+    c.post("/api/telegram-settings", json={"telegramMuted": ["spy", "bogus", "farm"],
+                                           "discordMuted": "spy", "digest": "weekly",
+                                           "digestHour": 99})
+    d = c.get("/api/telegram-settings").get_json()
+    assert d["telegramMuted"] == ["farm", "spy"] and d["discordMuted"] == []
+    assert d["digest"] == "daily" and d["digestHour"] == 23
+    c.post("/api/telegram-settings", json={"digest": "off", "digestHour": 0})
+    d = c.get("/api/telegram-settings").get_json()
+    assert (d["digest"], d["digestHour"]) == ("off", 0)

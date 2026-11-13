@@ -161,6 +161,11 @@ def _finalize_scan(cp):
     _write_scan_status("idle", "done", cp["totalIslands"], cp["totalIslands"],
         lm("scan_status_done", n=n))
     logger.info(lm("scan_done", n=n))
+    try:
+        from telegram_notifier import notify_world_scan_done
+        notify_world_scan_done(n)
+    except Exception:
+        pass
 
 
 # ── Phase 1: shallow scan ─────────────────────────────────────────────────────

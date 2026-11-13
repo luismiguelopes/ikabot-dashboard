@@ -832,7 +832,7 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
       - **Validação live obrigatória** (gasta recursos): primeiro em dry-run/preview, depois 1 recruta
         supervisionado, como todas as acções que mexem no jogo.
 
-- [ ] **F15 — Notificações melhores em tudo: Telegram + Discord** (pedido do utilizador 2026-11-13:
+- [x] **F15 — Notificações melhores em tudo: Telegram + Discord** ✅ 2026-11-13 (pedido do utilizador 2026-11-13:
       *"logs telegram e logs discord melhores em tudo"*). **Prioridade média; esforço médio.**
       - **Hoje** (verificado 2026-11-13): há **dois sistemas paralelos**:
         - **Nosso** `telegram_notifier.py` — só Telegram, HTML, 15 eventos (arranque, construção,
@@ -856,6 +856,30 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
         (Telegram + Discord)" com campo do webhook (validado no Flask) e teste por canal. Validado
         live (embed recebido no Discord). **+11 testes → 440.** Falta: pontos 2, 4, 5, 6 (cobertura,
         filtros por canal, anti-spam/resumos, toggles na UI).
+      - **Fase 2 ✅ 2026-11-13** — cobertura + filtros por canal. Novo nível `activity` (o mais baixo,
+        eventos rotineiros) e piso por canal (`telegramMinLevel` default `info` → o Telegram mantém o
+        volume de antes; `discordMinLevel` default `activity` → o Discord recebe tudo), com select no
+        card. `notify_once/clear_once` generaliza o dedup por condição. Eventos novos: espiões que
+        passam a FAILED (diff central no `_save_missions`; capturados/desaparecidos = `warning`, resto
+        `activity`), 1.º varrimento verificado de um alvo do farm (`info`), comprador de vinho
+        (compra `success`, simulação `activity`, travões ouro-no-piso/sem-navios `warning` 1× até
+        destravar), balanceador (1 mensagem por passagem), transporte agendado enviado, consolidação
+        e world scan concluídos (`activity`). Nomes do jogo escapados (`_esc`) nos eventos novos. O
+        teste da UI ignora os pisos (`force`). **+8 testes → 447.** Falta: resumo periódico (5),
+        filtros por categoria, escapar os nomes nos alertas antigos, reserva de navios a travar o farm.
+      - **Fase 3 ✅ 2026-11-13 — F15 fechado.** (a) **Categorias** em todos os 23 alertas (`combat`,
+        `farm`, `spy`, `wine`, `transport`, `build`, `system`, `digest`); cada canal silencia as que
+        quiser (`telegramMuted`/`discordMuted`, chips no card); **crítico nunca é silenciado**.
+        (b) **Resumo periódico** `maybe_send_digest()` no `smart_sleep` (sem pedidos ao jogo):
+        `digest` off/hourly/daily (default **daily às 21h**, `digestHour`); contadores em
+        `notify_digest.json` (sobrevivem a restarts) — raids/falhados, saque por recurso, alvos
+        varridos/drenados, espiões perdidos/missões falhadas, vinho comprado/ouro, construções,
+        transportes, ataques recebidos, falhas de subsistema. 1.ª chamada só arma (sem resumo logo
+        após deploy); horário salta horas sem actividade, diário envia sempre. (c) **Nomes do jogo
+        escapados** (`_esc`) em todos os alertas antigos (um `<`/`&` no nome fazia o Telegram
+        rejeitar a mensagem). (d) **Farm à espera da reserva de vinho** — alerta 1× por episódio
+        quando há navios para uma raid mas a reserva de vinho os tira abaixo do piso; re-arma
+        quando a raid volta a ter navios. Flask valida categorias/modo/hora. **+7 testes → 454.**
       - **Objectivo**:
         1. **Estender o `telegram_notifier.py`** (não um módulo novo): `_send` → fan-out Telegram +
            Discord. Webhook lido de `global.json` do stock (`shared.discord.webhookUrl`), com override
