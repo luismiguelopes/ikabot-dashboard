@@ -831,3 +831,43 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
         espiões = menos falhas de "insuficientes" e mais presença estacionada contra contra-espionagem).
       - **Validação live obrigatória** (gasta recursos): primeiro em dry-run/preview, depois 1 recruta
         supervisionado, como todas as acções que mexem no jogo.
+
+- [ ] **F15 — Notificações melhores em tudo: Telegram + Discord** (pedido do utilizador 2026-11-13:
+      *"logs telegram e logs discord melhores em tudo"*). **Prioridade média; esforço médio.**
+      - **Hoje** (verificado 2026-11-13): há **dois sistemas paralelos**:
+        - **Nosso** `telegram_notifier.py` — só Telegram, HTML, 15 eventos (arranque, construção,
+          transporte, vinho crítico, ataques, farm, saque, subsistemas, fatal, offline). Credenciais em
+          `telegram_settings.json`/env. É o que está activo em produção.
+        - **Stock do ikabot** `helpers/botComm.py` — **já suporta Discord e Telegram**: `sendToBot()`
+          envia para os dois (`sendToDiscord` = POST `{"content": msg}` ao webhook). Config em
+          `~/.ikabot/global.json` (`shared.discord.webhookUrl`, `shared.telegram.botToken/chatId`),
+          definida pelo menu do bot (21 → Discord/Telegram, com teste). Usado pelos módulos stock
+          (`decorators` erros, `autoBarbarians`). **Hoje ambos vazios** em `global.json`.
+        - Limites do stock: texto simples (sem embeds/cores), síncrono sem timeout, prefixa
+          pid/servidor/jogador em todas as mensagens, sem níveis/filtros/dedup/resumos.
+      - **Conclusão: NÃO reconstruir do zero.** Reaproveitar a config de Discord do stock
+        (mesma `webhookUrl`, uma única fonte de verdade) e acrescentar o canal Discord ao nosso
+        notifier; o que se constrói é só a camada de qualidade (formato, cobertura, filtros, resumos).
+      - **Objectivo**:
+        1. **Estender o `telegram_notifier.py`** (não um módulo novo): `_send` → fan-out Telegram +
+           Discord. Webhook lido de `global.json` do stock (`shared.discord.webhookUrl`), com override
+           opcional no nosso settings. Os `notify_*` actuais ficam iguais. Discord = POST ao Discord,
+           **não** ao jogo → sem sleep anti-detecção, mas timeout curto e sem bloquear o loop.
+           Configurar o webhook **uma vez** serve as duas coisas: os módulos stock passam a mandar para
+           o Discord via `sendToBot` e os nossos eventos também.
+        2. **Cobertura em tudo** — eventos em falta: espiões (despacho/regresso/capturados/falhas,
+           varrimento completo de alvo novo), comprador de vinho (compras, travões a disparar,
+           dry-run), balanceador de vinho, transportes concluídos, reserva de navios a travar o farm,
+           world scan concluído, sessão/login renovado, F14 (espiões recrutados) quando existir.
+        3. **Formato rico**: Telegram em HTML (negrito, cidades/jogadores, números `_pt_int`);
+           Discord em *embeds* (cor por nível: info/sucesso/aviso/erro, campos, timestamp).
+        4. **Níveis e filtros**: por canal e por categoria (farm, vinho, espiões, construção,
+           sistema, combate); p.ex. Discord recebe tudo, Telegram só aviso+erro e alertas de combate.
+        5. **Anti-spam**: dedup/cooldown por chave (generalizar o dedup actual), agregação em
+           **resumo periódico** (p.ex. horário/diário: saque total, raids, vinho comprado, espiões
+           perdidos, construções) em vez de uma mensagem por raid.
+        6. **Settings + UI**: toggles por categoria/nível e horário do resumo no nosso settings +
+           card no `SettingsPage` (webhook Discord + "enviar teste"). O webhook é escrito no
+           `global.json` do stock (ou só lido de lá, se configurado pelo menu 21) — sem duplicar.
+      - **Testes**: formatação por canal (golden), roteamento por nível/categoria, dedup/cooldown,
+        falha de um canal não afecta o outro nem o loop do bot.
