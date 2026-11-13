@@ -25,8 +25,43 @@ def test_safehouse_counts():
     counts = em._parse_safehouse_page(_SAFEHOUSE_HTML, "Cidade")
     assert counts["deployed"] == 10
     assert counts["inDefense"] == 15
-    assert counts["inTraining"] == 0
+    assert counts["freeSlots"] == 0
     assert counts["trainable"] == 40
+    assert counts["inTraining"] == 15          # 40 − 0 free − 15 defense − 10 out
+    assert counts["orderMax"] == 0             # no train slider in this markup
+
+
+# Real structure of the safehouse tab (trimmed from a live dump, 2026-11-13).
+_SAFEHOUSE_LIVE = """
+<form id="buildForm" action="index.php" method="POST">
+<input type="hidden" name="action" value="Espionage"/>
+<input type="hidden" name="function" value="buildSpy"/>
+<script type="text/javascript">
+create_slider({
+    dir: 'ltr',
+    id: "slider_spy",
+    maxValue: 18,
+    overcharge: 0,
+});
+</script>
+<input id="textfield_spy" class="textfield" type="text" value="0" name="textfield_spy"/>
+</form>
+<div class="spy_stats_content">
+<b>Podes treinar 40</b>
+<ul class="disc-list">
+<li>18 esperam por treino</li>
+<li>9 estão a trabalhar na defesa</li>
+<li>13 estão em uso</li>
+</ul></div>
+"""
+
+
+def test_safehouse_live_markup_free_slots_are_not_training():
+    """'esperam por treino' = empty slots: free + defense + out == capacity, nothing training."""
+    c = em._parse_safehouse_page(_SAFEHOUSE_LIVE, "Cidade")
+    assert (c["trainable"], c["freeSlots"], c["inDefense"], c["deployed"]) == (40, 18, 9, 13)
+    assert c["inTraining"] == 0
+    assert c["orderMax"] == 18
 
 
 def test_safehouse_empty_html():

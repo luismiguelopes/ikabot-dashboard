@@ -199,7 +199,7 @@ def _pt_int(n: int) -> str:
 # Every alert-worthy event also bumps a counter; maybe_send_digest() (called from the bot's
 # ≤60s sleep loop) sends one summary hourly or daily and resets them. Counters live in a JSON
 # file next to the settings so a restart doesn't lose the day.
-_DIGEST_FIELDS = ("raids", "raidsFailed", "lootTotal", "wineBought", "wineGold", "spiesLost",
+_DIGEST_FIELDS = ("spiesTrained", "raids", "raidsFailed", "lootTotal", "wineBought", "wineGold", "spiesLost",
                   "spyFailed", "swept", "drained", "builds", "transports", "incoming",
                   "subsystemDown")
 DEFAULT_DIGEST = {"digest": "daily", "digestHour": 21}
@@ -274,6 +274,8 @@ def format_digest(d: dict, now: float) -> str:
                      + (f" ({' · '.join(parts)})" if parts else ""))
     if c.get("swept") or c.get("drained"):
         lines.append(f"🛰️ Alvos novos varridos: {c.get('swept', 0)} · drenados: {c.get('drained', 0)}")
+    if c.get("spiesTrained"):
+        lines.append(f"🎓 Espiões treinados: {c['spiesTrained']}")
     if c.get("spiesLost") or c.get("spyFailed"):
         lines.append(f"🕵️ Espiões perdidos: {c.get('spiesLost', 0)} · missões falhadas: "
                      f"{c.get('spyFailed', 0)}")
@@ -532,3 +534,20 @@ def notify_consolidation_done(dest: str, summary: str) -> None:
 def notify_world_scan_done(players: int) -> None:
     _send(f"🗺️ <b>World scan concluído</b>\n{_pt_int(players)} jogadores actualizados",
           level="activity", category="system")
+
+
+def notify_spies_trained(orders, failed, dry_run: bool) -> None:
+    """One message per spy-builder pass (F14)."""
+    n = sum(int(o["amount"]) for o in orders)
+    if n and not dry_run:
+        _record(spiesTrained=n)
+    gold = sum(int(o["gold"]) for o in orders)
+    crystal = sum(int(o["crystal"]) for o in orders)
+    title = ("🎓 <b>Treino de espiões (simulação)</b>" if dry_run
+             else "🎓 <b>Espiões em treino</b>")
+    lines = [title, f"{n} espiões em {len(orders)} cidade(s) · {_pt_int(gold)} ouro · "
+                    f"{_pt_int(crystal)} cristal"]
+    lines += [f"• {_esc(o['name'])}: {o['amount']}" for o in orders[:13]]
+    lines += [f"✗ {_esc(o['name'])}: {_esc(o.get('reason', ''))}" for o in (failed or [])[:5]]
+    level = "warning" if failed else ("activity" if dry_run else "success")
+    _send("\n".join(lines), level=level, category="spy")

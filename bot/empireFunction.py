@@ -198,6 +198,9 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     from espionage_manager import fetch_spy_counts, process_spy_cycle
                     fetch_spy_counts(session)
                     process_spy_cycle(session)
+                with health_guard("spy_build"):
+                    from spy_builder import process_spy_builder
+                    process_spy_builder(session, in_active_hours=in_scan_hours)
                 with health_guard("attack"):
                     from attack_manager import process_attack_queue
                     process_attack_queue(session, in_active_hours=in_scan_hours)

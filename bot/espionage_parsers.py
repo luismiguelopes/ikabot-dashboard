@@ -16,7 +16,18 @@ def _parse_safehouse_page(html, city_name):
     """
     Parse spy counts from the full safehouse page HTML (non-AJAX).
     Strips HTML tags first so regex works on clean text regardless of markup.
-    Returns a dict with keys: available, inDefense, inTraining, deployed, trainable.
+    Returns a dict with keys: available, inDefense, inTraining, deployed, trainable,
+    freeSlots, orderMax.
+
+    Semantics (confirmed against live dumps 2026-11-13 — free + defense + deployed == building
+    capacity in every city with nothing in training):
+      trainable  "Podes treinar N"        → building capacity (= safehouse level)
+      freeSlots  "N esperam por treino"   → EMPTY slots (citizens waiting to BE trained) — this
+                                            was mislabelled inTraining until F14
+      inDefense  "N estão a trabalhar na defesa" → spies at home
+      deployed   "N estão em uso"         → spies out on missions
+      inTraining derived: capacity − free − defense − deployed (spies currently training)
+      orderMax   the train slider's maxValue → most spies one buildSpy order may ask for now
     """
     import re
 
@@ -26,10 +37,16 @@ def _parse_safehouse_page(html, city_name):
         "inTraining": None,
         "deployed":   None,
         "trainable":  None,
+        "freeSlots":  None,
+        "orderMax":   None,
     }
 
     if not html:
         return counts
+
+    # Train slider (raw HTML, before tag stripping): create_slider({ id: "slider_spy", maxValue: 30
+    m = re.search(r'id:\s*"slider_spy"\s*,\s*maxValue:\s*(\d+)', html)
+    counts["orderMax"] = int(m.group(1)) if m else 0
 
     # Strip tags and decode HTML entities for reliable matching
     text = re.sub(r'<[^>]+>', ' ', html)
@@ -46,10 +63,10 @@ def _parse_safehouse_page(html, city_name):
     if m:
         counts["inDefense"] = int(m.group(1))
 
-    # "1 esperam por treino" → agents in training queue
+    # "30 esperam por treino" → EMPTY slots (citizens waiting to be trained), not spies training
     m = re.search(r'(\d+)\s+esperam?\s+por\s+treino', text, re.IGNORECASE)
     if m:
-        counts["inTraining"] = int(m.group(1))
+        counts["freeSlots"] = int(m.group(1))
 
     # "Podes treinar 40" → remaining capacity
     m = re.search(r'[Pp]odes\s+treinar\s+(\d+)', text, re.IGNORECASE)
@@ -60,6 +77,11 @@ def _parse_safehouse_page(html, city_name):
     m = re.search(r'(\d+)\s+(?:espi[oõ]es?\s+)?dispon[ií]veis?', text, re.IGNORECASE)
     if m:
         counts["available"] = int(m.group(1))
+
+    # Spies in training aren't listed — they're the capacity the other three don't account for.
+    known = (counts["trainable"], counts["freeSlots"], counts["inDefense"], counts["deployed"])
+    if all(v is not None for v in known):
+        counts["inTraining"] = max(0, known[0] - known[1] - known[2] - known[3])
 
     # derive available from known values when not shown directly:
     # available = total_trained - inDefense - deployed - inTraining

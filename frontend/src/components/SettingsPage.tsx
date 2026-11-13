@@ -272,6 +272,120 @@ const NOTIFY_LEVELS = ['activity', 'info', 'success', 'warning', 'error', 'criti
 const NOTIFY_CATEGORIES = ['combat', 'farm', 'spy', 'wine', 'transport', 'build', 'system', 'digest'] as const
 const INPUT_CLS = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono'
 
+interface SpyBuildSettings {
+  enabled: boolean; dryRun: boolean; targetPerCity: number; goldFloor: number
+  crystalFloor: number; maxPerPass: number; intervalMinutes: number; maxCountsAgeMinutes: number
+}
+interface SpyBuildOrder { name: string; amount: number; gold: number; crystal: number; reason?: string }
+interface SpyBuildStatus {
+  at?: number; dryRun?: boolean; preview?: boolean; freeSlots?: number; ordered?: number
+  spentGold?: number; spentCrystal?: number; orders?: SpyBuildOrder[]; failed?: SpyBuildOrder[]
+  notes?: Record<string, string>
+}
+
+function SpyBuildCard() {
+  const t = useT()
+  const [s, setS] = useState<SpyBuildSettings | null>(null)
+  const [st, setSt] = useState<SpyBuildStatus>({})
+  const [saved, setSaved] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+
+  const loadStatus = () =>
+    fetch('/api/espionage/spy-build/status').then(r => r.json()).then(setSt).catch(() => {})
+
+  useEffect(() => {
+    fetch('/api/espionage/spy-build').then(r => r.json()).then(setS).catch(() => {})
+    loadStatus()
+  }, [])
+
+  if (!s) return null
+
+  const save = (next: SpyBuildSettings) => {
+    setS(next)
+    fetch('/api/espionage/spy-build', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
+    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 2500) }).catch(() => {})
+  }
+
+  const preview = async () => {
+    setPreviewing(true)
+    const before = st.at || 0
+    await fetch('/api/espionage/spy-build/preview', { method: 'POST' }).catch(() => {})
+    for (let i = 0; i < 20; i++) {            // the bot picks the flag up within ≤60s
+      await new Promise(r => setTimeout(r, 4000))
+      const d: SpyBuildStatus = await fetch('/api/espionage/spy-build/status').then(r => r.json()).catch(() => ({}))
+      if ((d.at || 0) > before) { setSt(d); break }
+    }
+    setPreviewing(false)
+  }
+
+  const fmt = (n?: number) => (n ?? 0).toLocaleString('pt-PT')
+  const Toggle = ({ on, onClick }: { on: boolean; onClick: () => void }) => (
+    <button onClick={onClick} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? 'bg-indigo-600' : 'bg-slate-200'}`}>
+      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+    </button>
+  )
+  const num = (key: keyof SpyBuildSettings, label: string, min = 0) => (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm text-slate-600">{label}</span>
+      <input type="number" min={min} value={s[key] as number}
+        onChange={e => setS({ ...s, [key]: Math.max(min, Number(e.target.value)) })}
+        onBlur={() => save(s)}
+        className="w-28 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+    </div>
+  )
+
+  return (
+    <Card>
+      <div className="px-5 py-4">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4 flex items-center gap-1.5">
+          <i className="fa-solid fa-user-secret text-slate-600" /> {t('spybuild_title')}
+          {saved && <span className="ml-auto normal-case text-emerald-600 font-medium">✓ {t('settings_telegram_saved')}</span>}
+        </p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-600">{t('spybuild_enabled')}</span>
+            <Toggle on={s.enabled} onClick={() => save({ ...s, enabled: !s.enabled })} />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-600">{t('spybuild_dry')}</span>
+            <Toggle on={s.dryRun} onClick={() => save({ ...s, dryRun: !s.dryRun })} />
+          </div>
+          {!s.dryRun && <p className="text-xs text-amber-600">{t('spybuild_live_warning')}</p>}
+          {num('targetPerCity', t('spybuild_target'))}
+          {num('goldFloor', t('spybuild_gold_floor'))}
+          {num('crystalFloor', t('spybuild_crystal_floor'))}
+          {num('maxPerPass', t('spybuild_max_per_pass'), 1)}
+          {num('intervalMinutes', t('spybuild_interval'), 15)}
+          <p className="text-xs text-slate-400">{t('spybuild_help')}</p>
+        </div>
+        <div className="mt-4 flex items-center gap-2">
+          <button onClick={preview} disabled={previewing}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-800 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors">
+            {previewing && <i className="fa-solid fa-spinner animate-spin text-xs" />}
+            {t('spybuild_preview')}
+          </button>
+        </div>
+        {st.at ? (
+          <div className="mt-4 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600 space-y-1">
+            <p className="font-medium">
+              {new Date(st.at * 1000).toLocaleString('pt-PT')} · {st.dryRun ? t('spybuild_status_dry') : t('spybuild_status_live')}
+            </p>
+            <p>{t('spybuild_status_line')
+              .replace('{n}', fmt(st.ordered)).replace('{free}', fmt(st.freeSlots))
+              .replace('{gold}', fmt(st.spentGold)).replace('{crystal}', fmt(st.spentCrystal))}</p>
+            {(st.orders || []).length > 0 && (
+              <p>{(st.orders || []).map(o => `${o.name} ${o.amount}`).join(' · ')}</p>
+            )}
+            {(st.failed || []).map(o => <p key={o.name} className="text-red-600">✗ {o.name}: {o.reason}</p>)}
+            {Object.entries(st.notes || {}).map(([c, n]) => <p key={c} className="text-slate-400">{c}: {n}</p>)}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  )
+}
+
 function TelegramCard() {
   const t = useT()
   const [token, setToken] = useState('')
@@ -579,6 +693,7 @@ function NotificacoesTab({ notifEnabled, onToggleNotif }: {
       </Card>
 
       <TelegramCard />
+      <SpyBuildCard />
       <CombatAlertsCard />
     </div>
   )

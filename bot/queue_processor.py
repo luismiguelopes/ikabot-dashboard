@@ -385,6 +385,21 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
                 logger.error("wine-buy preview falhou", exc_info=True)
             continue
 
+        # Spy-training preview (F14) — plans from cached files only, no game request
+        _spy_flag = os.path.join(LOGS_DIR, ".force_spy_build")
+        if os.path.exists(_spy_flag):
+            try:
+                os.remove(_spy_flag)
+            except Exception:
+                pass
+            try:
+                from spy_builder import process_spy_builder
+                process_spy_builder(session, force_preview=True)
+                logger.info("[força] preview do treino de espiões gerado (pedido pela UI)")
+            except Exception:
+                logger.error("spy-build preview falhou", exc_info=True)
+            continue
+
         # Import existing safehouse reports triggered by Flask UI
         if session and os.path.exists(FORCE_IMPORT_REPORTS_FLAG):
             try:

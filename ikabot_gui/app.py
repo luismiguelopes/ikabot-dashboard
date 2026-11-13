@@ -1820,6 +1820,67 @@ def api_wine_buy_preview():
     return jsonify({"ok": True, "message": "Preview de compra agendado (≤60s)."})
 
 
+# ── Autonomous spy training (F14) ─────────────────────────────────────────────
+SPY_BUILD_SETTINGS_PATH = os.path.join(LOGS_DIR, "spy_build_settings.json")
+SPY_BUILD_STATUS_PATH   = os.path.join(LOGS_DIR, "spy_build_status.json")
+_DEFAULT_SPY_BUILD_SETTINGS = {"enabled": True, "dryRun": True, "targetPerCity": 0,
+                               "goldFloor": 200000, "crystalFloor": 0, "maxPerPass": 60,
+                               "intervalMinutes": 60, "maxCountsAgeMinutes": 30}
+
+
+@app.route("/api/espionage/spy-build")
+def api_spy_build_get():
+    s = dict(_DEFAULT_SPY_BUILD_SETTINGS)
+    try:
+        with open(SPY_BUILD_SETTINGS_PATH) as f:
+            saved = json.load(f)
+        s.update({k: saved[k] for k in s if k in saved})
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return jsonify(s)
+
+
+@app.route("/api/espionage/spy-build", methods=["POST"])
+def api_spy_build_post():
+    data = request.get_json(silent=True) or {}
+
+    def _int(key, lo, hi):
+        try:
+            return max(lo, min(hi, int(data.get(key, _DEFAULT_SPY_BUILD_SETTINGS[key]))))
+        except (TypeError, ValueError):
+            return _DEFAULT_SPY_BUILD_SETTINGS[key]
+    s = {
+        "enabled":             bool(data.get("enabled", True)),
+        "dryRun":              bool(data.get("dryRun", True)),
+        "targetPerCity":       _int("targetPerCity", 0, 1000),
+        "goldFloor":           _int("goldFloor", 0, 10**10),
+        "crystalFloor":        _int("crystalFloor", 0, 10**8),
+        "maxPerPass":          _int("maxPerPass", 1, 1000),
+        "intervalMinutes":     _int("intervalMinutes", 15, 24 * 60),
+        "maxCountsAgeMinutes": _int("maxCountsAgeMinutes", 5, 240),
+    }
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    with open(SPY_BUILD_SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+    return jsonify({"status": "ok", "settings": s})
+
+
+@app.route("/api/espionage/spy-build/status")
+def api_spy_build_status():
+    try:
+        with open(SPY_BUILD_STATUS_PATH) as f:
+            return jsonify(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return jsonify({})
+
+
+@app.route("/api/espionage/spy-build/preview", methods=["POST"])
+def api_spy_build_preview():
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    open(os.path.join(LOGS_DIR, ".force_spy_build"), "w").close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/military/refresh", methods=["POST"])
 def api_military_refresh():
     os.makedirs(LOGS_DIR, exist_ok=True)

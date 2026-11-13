@@ -460,3 +460,23 @@ def test_notify_settings_sanitises_mutes_and_digest(monkeypatch, tmp_path):
     c.post("/api/telegram-settings", json={"digest": "off", "digestHour": 0})
     d = c.get("/api/telegram-settings").get_json()
     assert (d["digest"], d["digestHour"]) == ("off", 0)
+
+
+# ── /api/espionage/spy-build (F14) ──────────────────────────────────────────
+
+def test_spy_build_settings_defaults_roundtrip_and_clamps(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "SPY_BUILD_SETTINGS_PATH", str(tmp_path / "sb.json"))
+    d = c.get("/api/espionage/spy-build").get_json()
+    assert d["enabled"] is True and d["dryRun"] is True and d["targetPerCity"] == 0
+    c.post("/api/espionage/spy-build", json={"dryRun": False, "targetPerCity": 25,
+                                             "intervalMinutes": 1, "goldFloor": "x"})
+    d = c.get("/api/espionage/spy-build").get_json()
+    assert d["dryRun"] is False and d["targetPerCity"] == 25
+    assert d["intervalMinutes"] == 15 and d["goldFloor"] == 200000
+
+
+def test_spy_build_preview_drops_flag(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/espionage/spy-build/preview").get_json()["ok"] is True
+    assert (tmp_path / ".force_spy_build").exists()

@@ -809,7 +809,7 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
 
 ### Por fazer
 
-- [ ] **F14 — Construção autónoma de espiões** (pedido do utilizador 2026-11-04: *"o bot construir
+- [x] **F14 — Construção autónoma de espiões** ✅ 2026-11-13 (pedido do utilizador 2026-11-04: *"o bot construir
       os espiões sozinho isso era excelente"*). **Alta prioridade / valor; esforço médio-alto.**
       - **Hoje**: o bot **só despacha/recolhe** espiões — **não os constrói** (confirmado no código:
         não há função de recrutamento; `spy_counts.py`/`empire_collector.py` só *lêem* a casa de
@@ -831,6 +831,21 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
         espiões = menos falhas de "insuficientes" e mais presença estacionada contra contra-espionagem).
       - **Validação live obrigatória** (gasta recursos): primeiro em dry-run/preview, depois 1 recruta
         supervisionado, como todas as acções que mexem no jogo.
+      - **Feito ✅ 2026-11-13** — `bot/spy_builder.py`. Endpoint descoberto **offline** dos dumps
+        `debug_safehouse_*.html` (zero pedidos): `action=Espionage function=buildSpy cityId position
+        textfield_spy=N` (+ changeCurrentCity antes, templateView=safehouse). Custo 150 ouro + 40
+        cristal/espião, ~116s de treino. **Bug de leitura corrigido**: *"N esperam por treino"* são
+        **vagas livres**, não espiões em treino (o parser chamava-lhe `inTraining`; agora `freeSlots`,
+        `inTraining` = capacidade − livres − defesa − missão, `orderMax` = maxValue do slider) — os
+        "~179 em treino" eram vagas. Decisões do utilizador: **encher até à capacidade**
+        (`targetPerCity=0`); **piso de cristal 0** (o buffer de 5.000/cidade da consolidação existe
+        para isto; só o reservado pela fila de construção é intocável); piso de ouro 200k, 60/passagem,
+        1 passagem/h, só nas horas activas, contagens ≤30min, pausas 10-25s entre cidades. Corre logo
+        após `fetch_spy_counts` (`health_guard("spy_build")`). UI: card nas Definições + preview
+        (`.force_spy_build`, só ficheiros locais). Alertas F15 categoria `spy` + "Espiões treinados" no
+        resumo. **Validado live**: 1 espião em Noctivagus 11:45 (type=10), releitura 12:15 → livres
+        38→37, defesa 2→3. Ligado a sério (dryRun off, 60/passagem): ~364 vagas em ~6-7h.
+        **+16 testes → 470.**
 
 - [x] **F15 — Notificações melhores em tudo: Telegram + Discord** ✅ 2026-11-13 (pedido do utilizador 2026-11-13:
       *"logs telegram e logs discord melhores em tudo"*). **Prioridade média; esforço médio.**

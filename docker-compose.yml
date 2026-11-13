@@ -43,6 +43,7 @@ services:
       - ./bot/espionage_manager.py:/ikabot/ikabot/function/espionage_manager.py
       - ./bot/espionage_parsers.py:/ikabot/ikabot/function/espionage_parsers.py
       - ./bot/spy_counts.py:/ikabot/ikabot/function/spy_counts.py
+      - ./bot/spy_builder.py:/ikabot/ikabot/function/spy_builder.py
       - ./bot/attack_manager.py:/ikabot/ikabot/function/attack_manager.py
       - ./bot/transport_manager.py:/ikabot/ikabot/function/transport_manager.py
       - ./bot/farm_manager.py:/ikabot/ikabot/function/farm_manager.py
