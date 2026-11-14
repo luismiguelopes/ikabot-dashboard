@@ -14,6 +14,9 @@ falhar (bug de formato de id), foi **corrigido (`7b95486`) e confirmado live** �
 type=10 (`ataque despachado → Própria (Vampiria)` às 09:53). Auto-attack foi **descontinuado**
 (P6.2) — ignorar itens antigos que o referem.
 
+> **Actualização 2026-11-14:** a auditoria linha a linha (**secção P13**, no fim) reabriu trabalho
+> de código — a nota "nada pendente" acima já não vale. Começar por P13-A.
+
 ---
 
 ## P0 — Crítico ✅ CONCLUÍDO 2026-06-11
@@ -918,3 +921,548 @@ Alvo de frota = `is_fleet_target=1` (porto com frota que foge-e-volta). Estado f
            `global.json` do stock (ou só lido de lá, se configurado pelo menu 21) — sem duplicar.
       - **Testes**: formatação por canal (golden), roteamento por nível/categoria, dedup/cooldown,
         falha de um canal não afecta o outro nem o loop do bot.
+
+---
+
+## P13 — Auditoria integral, linha a linha (2026-11-14)
+
+**Âmbito.** Lidos na íntegra: os 18 módulos de `bot/` (15,3k linhas), `ikabot_gui/app.py` (2,3k),
+`docker-compose.yml`, e os pontos da sessão stock de que dependemos (`web/session.py`,
+`buyResources.buy`, `getShipCapacity`). Frontend e testes: ver secções F e G. Cruzado com dados
+reais **só de leitura** (`ikabot.db`, `spy_missions.json`, `bot.log`). 477 testes a passar.
+
+**Veredicto.** A base é boa: throttle central, migrações, filas em SQLite, decisões fail-closed
+no gate do farm, supervisor/healthcheck, testes rápidos. **Mas a frase "trabalho de código: nada
+pendente" deixou de ser verdade.** Os ricochetes e os alvos "queimados" que fomos remendando caso
+a caso (Tróia 3 ×2, Esparta, Castle, Lançassolar) têm causas estruturais comuns que os remendos
+não tocaram: (1) a intel não está presa à execução que a produziu, (2) o farm deduz factos a
+partir da **ausência** de dados, (3) estado partilhado em ficheiros JSON reescritos por dois
+processos, (4) erros engolidos sem rasto. Performance (CPU/memória) não é problema em lado nenhum;
+o que há a ganhar é em **pedidos ao jogo** e em fiabilidade.
+
+Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado também nos dados reais ·
+**[V]** plausível, a verificar antes de mexer.
+
+### Feito nesta sessão
+- [x] **P13.0 Casar alvos por ID, não por substring do nome** — `movements.json`, `loot_log` e
+      `attack_log` guardam o `cityId` (migração v17); o farm casa por ID em `_recent_return_loot`,
+      `_returned_since_scout`, `_real_return_eta`, `_raid_in_flight`, `_attack_was_sent`, com
+      recurso a nome exacto + jogador nas linhas antigas. Antes: "Castle-V" ⊂ "Castle-VII/VIII/VIV"
+      e match só pelo jogador (Tróia 3/5) → um alvo adoptava o saque/regresso de outro. +7 testes.
+      Sem pré-filtro por nome em SQL (escondia uma cidade renomeada e deixava as irmãs comer o
+      limite) — teste contra a BD real. **478 testes.**
+      Deploy feito 2026-11-14 09:03 e **confirmado ao vivo às 09:06**: o JSON do jogo traz
+      `cityId` na origem e no destino (raid a Esparta: `targetCityId` 22377 = id do alvo no farm);
+      migração v17 aplicada.
+
+### A — Intel errada / tropas desperdiçadas *(fazer primeiro)*
+
+- [x] **P13.1 Relatórios de espionagem não estão ligados à missão que os produziu** **[D]** — a
+      causa mais provável dos "porto limpo" falsos. ✅ 2026-11-14 (id-base): cada perna guarda,
+      **antes** do `executeMission`, o maior id de relatório conhecido (`reportBaselineId`,
+      `garrisonBaselineId`, `movementsBaselineId`; a aba é relida se o último olhar tiver >10 min)
+      e o colector ignora tudo o que for ≤ esse id — nos movimentos só os blocos novos são lidos
+      (antes a aba inteira). Sem id-base (aba ilegível) mantém o comportamento antigo em vez de
+      parar a missão. **Fechado com a captura real (2026-11-14):** o parser lê do cabeçalho o
+      resultado explícito (`failed` — ícone "Missão falhada!" / corpo `noReport`), o assunto, a
+      data do jogo (`dateText`) e os agentes perdidos/enviados; um relatório novo e falhado da
+      cidade **termina a perna na hora** (armazém → FAILED; guarnição → DONE com
+      `success:false` e sem `troops`; movimentos → DONE sem `movementsResult`, porto não
+      confirmado) em vez de esperar 2h. O erro só diz "possivelmente capturado" quando o jogo
+      diz que se perderam todos os agentes. Um relatório que ainda não apareceu é reconsultado
+      com recuo (30s → 10 min) — antes era a cada ~20s: **186 pedidos numa hora** por duas
+      missões presas, visto no primeiro dia do contador. Ainda por fazer: converter `dateText`
+      (relógio do servidor, +1h) em epoch e passar o `reportedAt` a usar essa hora.
+  - `espionage_parsers._parse_reports_from_html` grava `reportedAt = int(time.time())`: é a hora
+    da **leitura**, não a do relatório. Todos os relatórios na aba parecem acabados de chegar.
+  - `collect_mission_results` / `collect_garrison_results` percorrem os 20 mais recentes e ficam
+    com o primeiro da cidade que tenha tabela de recursos / de tropas. Um relatório novo **falhado**
+    (sem tabela) é saltado e o anterior, bem-sucedido, é adoptado como se fosse desta execução.
+  - Consequência: todas as guardas de frescura do farm (`_latest_done_report`, `full_sweep_at`,
+    `earlyReportMaxAgeMins`, `spyFreshnessHours`) são cegas a isto.
+  - Evidência: no `spy_missions.json` actual os relatórios 353713 (armazém) e 353745 (guarnição)
+    estão atribuídos a **duas** missões diferentes de Tróia 3.
+  - Correcção: os ids dos relatórios são monótonos → guardar o maior id visto **antes** do
+    `executeMission` e só aceitar ids superiores; guardar a data real do relatório se der para ler.
+- [ ] **P13.2 Ondas bloqueio + tropas não estão acopladas** **[C]** — para um alvo de frota o farm
+      enfileira dois itens independentes (frota `dispatchAfter=now`, tropas à hora calculada). Se o
+      despacho da frota falha, é repetido 5-15 min depois (ou removido à 3.ª), mas as tropas
+      mantêm a hora original → chegam **antes** do bloqueio, ou sem bloqueio nenhum. Correcção: id
+      de vaga; as tropas só saem depois do sucesso da frota, com a hora recalculada; frota
+      removida → cancelar as tropas e avisar o farm.
+- [ ] **P13.3 "Ricochete naval" deduzido da ausência de dados** **[C]** — três caminhos para um
+      falso positivo, todos acabam em `is_fleet_target=1`:
+  - `_collect_movements` devolve `[]` em erro e os chamadores **gravam** esse `[]` em
+    `movements.json` → o farm lê "nenhum raid em voo" → "tropas já em casa" → sem saque → ricochete.
+    Devolver `None` e manter o ficheiro anterior.
+  - Um raid **adiado** na fila de ataques (sem navios) não gera movimento → ao fim de 5 min o farm
+    conclui "nunca saiu" e **re-enfileira** com o item adiado ainda na fila (duplicado). O farm
+    tem de consultar a fila de ataques antes de concluir.
+  - O saque só entra no `loot_log` se um snapshot apanhar a frota a regressar; o farm só acorda em
+    `attack_return_at`. Acrescentar um wake pouco depois da chegada ao alvo e **registar também os
+    regressos vazios** (movimento de regresso sem recursos) — passa a haver prova positiva de
+    ricochete em vez de inferência.
+- [ ] **P13.4 `is_fleet_target` nunca volta a 0** **[D]** — 18 dos 31 alvos estão marcados; 9 têm
+      registo de frota (navios no último scout ou bloqueio enviado), 9 não têm nenhum (Ninho de
+      Águia, Vinhedo1, Indiota, Tróia 5, Castle-VIII/VII/V/M/C — os cinco Castle são o cenário
+      exacto do P13.0). Cada alvo marcado paga um varrimento triplo antes de cada raid.
+      Correcção: despromover após N varrimentos completos limpos seguidos; rever os 9 à mão.
+- [x] **P13.5 Importar relatórios durante um SPYING é aceite como o scout do farm** **[C]** ✅
+      2026-11-14 (`_latest_done_report` ignora `importedFromReport`) —
+      `_latest_done_report` não exclui missões `importedFromReport`; como o `reportedAt` importado
+      é "agora" (P13.1), um clique em "importar relatórios" enquanto o espião viaja faz o farm
+      avaliar um relatório antigo. Num alvo de frota já varrido passa o gate (guarnição importada
+      conta como `success`, e sem `needMovements` a perna de movimentos é dispensada). Um
+      importado só-guarnição tem `resources: {}` → saque 0 → alvo **desactivado como drenado**.
+      Correcção: ignorar importados (exigir `originCityId`) em `_latest_done_report`.
+- [x] **P13.6 Falha de rede = espião "capturado"** **[C]** ✅ 2026-11-14 (`None` → nova tentativa
+      em 1-3 min, até 5×; ao desistir o erro não é marcador de espiões perdidos) — `execute_waiting_missions` faz
+      `if not spy_count`, que trata `None` (fetch falhou) como 0 → FAILED com "não encontrado ao
+      tentar executar", que é um marcador de espiões perdidos (nunca mais reutilizados + alerta de
+      captura). O mesmo em `execute_garrison_missions` / `execute_movements_missions` (acabam em
+      DONE sem a perna). Distinguir `None` (tentar outra vez) de `0`.
+- [ ] **P13.7 Classificação naval por palavras-chave em português é fail-open** **[C]** — um navio
+      cujo nome não esteja em `_NAVAL_UNIT_NAMES` conta como unidade terrestre → "porto limpo". O
+      relatório já separa as linhas "Tropas em" e "Frotas em"; o `_parse_garrison_troops` é que as
+      funde. Guardar a secção e classificar pela estrutura (as palavras-chave ficam só para
+      distinguir navios que fogem).
+- [ ] **P13.8 Raide parte com uma fracção dos navios** **[C]** — `_send_army_plunder` corta os
+      transporters ao disponível e só adia com 0. Uma vaga dimensionada para centenas de navios
+      pode sair com meia dúzia. Exigir uma fracção mínima do pedido nos raids do farm; o piso
+      fixo de 50 em `_raid_ships_ready` passa a relativo à vaga.
+- [ ] **P13.9 Gate "drenado" corre antes de validar o relatório** **[C]** — em SPYING,
+      `loot < min_loot` desactiva e ignora o alvo 60 dias sem olhar para `result.success`; hoje
+      está protegido por fora (só chegam a DONE relatórios com sucesso), mas é a mesma classe do
+      P12.3. Validar primeiro; `resources: None` rebenta com `AttributeError`.
+- [x] **P13.10 Motivo das rejeições de `executeMission` invisível** **[D]** ✅ 2026-11-14 (texto
+      do `provideFeedback` no log e no erro da missão; resposta crua em `captures/`) — loga `resp[:300]`,
+      que nunca chega ao `provideFeedback` (o mesmo problema já corrigido no `sendSpy`). Hoje
+      Tróia 3 teve o armazém rejeitado 3× sem motivo no log. 48 das 93 missões guardadas estão
+      FAILED — sem o texto não dá para saber porquê.
+
+- [ ] **P13.61 Um alvo drenado leva dois strikes de "ignorar"** **[D]** — visto no log de hoje
+      (Vinhedo 3, 08:57-08:58): com o armazém abaixo do limiar, o **pipeline de espionagem**
+      recolhe o espião e faz auto-ignorar (strike 5/4) e, 20s depois, o **farm** drena o mesmo
+      alvo e faz auto-ignorar outra vez (strike 6/4). Cada drenagem conta a dobrar, logo o
+      ignorar permanente chega em metade das vezes; e o pipeline recolhe o espião de um alvo do
+      farm, contrariando o `_is_farm_target` ("os espiões estacionados não são recolhidos"), que
+      só protege o ramo acima do limiar. Nos alvos do farm, deixar a decisão só ao farm.
+
+### B — Perda silenciosa de estado
+
+- [ ] **P13.11 `spy_missions.json` é a peça mais frágil** **[C]** — bot e Flask fazem ambos
+      ler-modificar-gravar sem escrita atómica nem lock; cada função da máquina de estados segura
+      a lista em memória durante minutos de pedidos antes de gravar (edições do Flask nesse
+      intervalo perdem-se); `_load_missions` devolve lista vazia se apanhar o ficheiro a meio e a
+      gravação seguinte **apaga tudo**. O `force-warehouse` do Flask duplica o re-armar do bot mas
+      limpa menos campos. Passar as missões para SQLite (uma linha por missão), como as filas.
+      *(Não é o split do P11.4 — é mudar o armazenamento.)*
+- [ ] **P13.12 Fila de construção gravada em bloco** **[C]** — `save_queue` apaga tudo e reinsere
+      o que estava em memória; o bot carrega no início de uma passagem de minutos e grava no fim,
+      o Flask faz o mesmo em cada clique. Um item adicionado na UI a meio de uma passagem
+      desaparece. Operações por linha (inserir/remover/reordenar por id), como no P0.3.
+- [x] **P13.13 `smart_sleep` engole tudo** **[C]** ✅ 2026-11-14 (`_run_step`/`_is_due`: falha
+      fica no log com traceback e conta em `health.json`; só faz `continue` se correu bem, para
+      um passo que falha sempre não pôr o loop a rodar em seco) — farm, ataques, espiões e transportes correm
+      dentro de `except Exception: pass`: sem log e sem registo de saúde. É aqui que corre quase
+      toda a actividade do farm; uma passagem que rebente é repetida a cada 60s em silêncio total.
+      Usar `health_guard` como no ciclo completo.
+- [ ] **P13.14 Escritas JSON não atómicas** **[C]** — `empire.json`, `resources.json`,
+      `movements.json`, `military.json`, `world_scan.json`, `last_alive.json`… são escritos com
+      `open("w")` enquanto o Flask lê, e o SSE dispara o refetch precisamente na mudança de mtime.
+      Várias rotas lêem sem `try` → 500 esporádico. Um helper `atomic_write_json` (tmp +
+      `os.replace`, já usado no `spy_builder` e no notifier) em todo o lado.
+- [ ] **P13.15 Cidade que falha desaparece do snapshot** **[C]** — em `collect_city_data` uma
+      cidade com erro é saltada e os ficheiros são reescritos sem ela: vinho, consolidação, origem
+      de espiões e `safehousePosition` passam a ver 12 cidades. Manter os dados anteriores dessa
+      cidade marcados como antigos.
+- [ ] **P13.16 World scan em curso substitui o anterior** **[C]** — `_publish_partial` reescreve
+      `world_scan.json` desde a 1.ª ilha: durante o scan a lista do Mundo encolhe,
+      `_scan_says_inactive` devolve desconhecido e `_auto_mark_ignored` sai em silêncio (os alvos
+      drenados não ficam ignorados). Uma ilha cujo pedido falha é descartada sem nova tentativa e
+      os seus inactivos somem até ao scan seguinte. Fundir sobre o scan anterior; repor a ilha na fila.
+- [ ] **P13.17 Código morto que envenena a fila** **[C]** — `force_warehouse_mission` (sem
+      chamadores) enfileira um despacho sem `originCityId`/`islandId`; se alguma vez correr, o
+      `process_dispatch_queue` rebenta antes do `queue_remove` e a fila nunca mais esvazia. Apagar;
+      e remover cada item da fila logo após tratado, não todos no fim.
+- [ ] **P13.18 Migrações engolem qualquer erro** **[C]** — `try: ALTER … except: pass` seguido do
+      registo da versão (v15-v17): um erro que não seja "coluna duplicada" deixa a coluna em falta
+      para sempre. Apanhar só o duplicado.
+
+### C — Logística
+
+- [ ] **P13.19 Reserva de navios do farm sobre-reserva** **[C]** — `farm_ship_reserve` soma os
+      `last_transporters` de **todos** os alvos activos devidos nos próximos 45 min (os atrasados
+      contam), embora só 2 possam atacar. Com fila de alvos à espera a reserva passa a frota e a
+      consolidação, a fila de construção e o vinho não crítico nunca têm navios de comércio.
+      Limitar aos slots livres.
+- [ ] **P13.20 Cidade com vinho a 0 pode ficar invisível** **[V]** — o balanceador exige
+      `0 < runs_out` num ramo e consumo 0 no outro; `runs_out == 0` com consumo ainda reportado
+      não entra em nenhum, e o `empireFunction` **limpa** o alerta de vinho crítico nesse caso.
+      Usar `>= 0`. (Depende de o jogo reportar consumo com stock 0 — confirmar.)
+- [ ] **P13.21 Compra de vinho não é verificada** **[C]** — o `buy()` stock não devolve resultado;
+      o "comprei", o status e o alerta contam a compra mesmo que a oferta tenha desaparecido.
+      Ler o feedback (ou o ouro antes/depois).
+- [ ] **P13.22 Itens removidos sem aviso** **[C]** — transporte manual que falha 3×, item de
+      construção que falha 5× e ataque adiado 12× saem da fila só com uma linha de log. Notificar.
+      A consolidação marca `lastRun` mesmo sem ter enviado nada por falta de navios (espera 6h).
+
+### D — Pedidos ao jogo *(anti-detecção)*
+
+- [x] **P13.23 Não há contagem de pedidos** **[C]** ✅ 2026-11-14 (contagem por hora e por tipo
+      em `request_stats.json`, linha `[pedidos]` no log a cada hora, últimas 24h em
+      `/api/health` → `requests`; **falta mostrar no dashboard** e medir uma semana) — não sabemos quantos pedidos/hora fazemos.
+      E a sessão stock chama `__token()` antes de **cada POST**, que faz um GET da página
+      principal por dentro (fora do nosso throttle, colado ao POST). Pôr um contador por hora e
+      por tipo no log/dashboard antes de optimizar o resto — e medir este par GET+POST **[V]**.
+- [ ] **P13.24 Cada wake por ETA varre a fila de construção** **[C]** — quando o `smart_sleep`
+      acorda por causa do farm ou de um espião, o loop principal faz uma passagem "só fila" que
+      abre a vista de cada cidade com itens (15-30s entre elas), mesmo sem nada de construção
+      devido. Só processar a fila quando o ETA é dela.
+- [ ] **P13.25 Custos de edifícios: 1 pedido por edifício por cidade** **[C]** — ~260 pedidos e
+      40+ min de 3 em 3 dias. O custo base é por tipo+nível; só os redutores são por cidade.
+      Ler cada tipo uma vez (~10× menos pedidos). O `save_building_costs` apaga tudo antes:
+      cidade que falhe fica 3 dias sem custos.
+- [ ] **P13.26 Pedidos repetidos no farm** **[C]** — `getShipCapacity` a cada passagem (só muda
+      com pesquisa); `_pick_origin` chamado duas vezes por raid; falha do `_confirm_inactive` não
+      memoizada; janela de re-espionagem antecipada sem origem mantém `has_due_farm` verdadeiro 5 min.
+- [ ] **P13.27 Regra do `actionRequest` é supérflua** **[V]** — a sessão stock substitui sempre o
+      token nos `params` e no URL; o nosso "actualizar `ikabot_config.actionRequest`" só tem
+      efeito nos GET construídos por string, onde deixa um token possivelmente antigo que a stock
+      já não troca. Simplificar para o placeholder em todo o lado (testar num GET de safehouse).
+
+### E — Estrutura e manutenção
+
+- [ ] **P13.28 `process_farm_targets`: 1010 linhas, 15 closures** **[C]** — a condição "alvo
+      seguro" está escrita 3× no ramo IDLE e espelhada à mão em `_idle_needs_attack_slot` e
+      `has_due_farm`. Extrair `decide(target, ctx) → acção` pura, usada pelo agendador e pelo
+      corpo. Código morto a sair no mesmo passo: os dois ramos idênticos de
+      `_next_round_needs_spy`, `respy_every`, `raids_since_spy`, imports não usados. Fazer **depois**
+      de A, com os testes como rede.
+- [ ] **P13.29 `total_loot` é fictício** **[D]** — soma o armazém espiado, só no caminho SPYING
+      (Tróia 3: 8,3M em 5 raids com tecto ~207k). Derivar do `loot_log` por `cityId`.
+- [ ] **P13.30 Definições duplicadas bot ↔ Flask** **[C]** — ~10 pares GET/POST copiados, com os
+      defaults repetidos no bot. Já divergiram: guardar a consolidação pela UI apaga
+      `skipResources`/`respectDestCap`; `lootCapPerRaid`, `spyFreshnessHours` e
+      `earlyReportMaxAgeMins` não têm UI; `lootCapPerRaid` nem está no schema (dá aviso falso de
+      typo); vinho/consolidação/fila não são validados. Um registo único de definições (schema +
+      defaults + limites) montado nos dois containers.
+- [ ] **P13.31 Restos de legado** **[C]** — `load_all_data` ainda lê `building_queue.json` (de
+      Maio); marcas com fallback para `player_marks.json` (Junho); `history.jsonl`; snapshot do
+      império em ficheiros **e** em `empire_meta`. `/api/farm/update` com `runNow` força IDLE mesmo
+      com tropas fora. Contador "raids" do resumo conta bloqueios e deploys.
+- [ ] **P13.32 Coerência** **[C]** — duas janelas horárias (`QUEUE_ACTIVE_HOURS` decide o sono,
+      `SCAN_ACTIVE_HOURS` decide as acções); logs metade em `lm()` metade em português fixo;
+      `/api/logs` lê 1 MB a cada 5s; gui faz `pip install flask` em cada arranque e corre no
+      servidor de desenvolvimento. *(O split do `app.py` e do `espionage_manager` mantém-se fora,
+      conforme P11.3/P11.4.)*
+
+### F — Frontend
+
+Lido na íntegra por subagentes (achados conferidos por amostragem no código). Shell (`App.tsx`,
+`api.ts`, hooks, `utils.ts`) lido directamente.
+
+**F.1 — Mundo, alvos e combate** (`mundo/*`, `dispatch/*`, `CombatPage`, `types.ts`)
+
+- [ ] **P13.33 A lista de alvos mostra "porto limpo" quando não sabe** **[C]** — dois erros que se
+      somam, ambos em `InactivosTab.tsx`:
+  - `NAVAL_KEYWORDS` (linha 19) é uma lista em **inglês** (`ship`, `galley`, `trireme`, `ram`,
+    `mortar`, `catapult`…); o servidor é português e o bot usa `_NAVAL_UNIT_NAMES`. Quase nenhum
+    navio real casa → coluna Navios com ✓ verde; e a "Catapulta" terrestre conta como navio.
+  - A guarnição conta como conhecida com `garrisonResult && !garrisonResult.error` (linhas
+    314, 333) — nunca olha para `success`. Um scout falhado (`success:false`, `troops:{}`) aparece
+    como "sem tropas / sem navios", prioridade "pronto", e desbloqueia o botão de adicionar ao
+    farm. É o fail-open que o P12.3 fechou no bot e ficou aberto na UI.
+  - Correcção: o backend devolve `enemyShips`/`garrisonOk` por missão (fonte única, resolve com o
+    P13.7); a UI deixa de classificar unidades.
+- [ ] **P13.34 O operador não vê o que o farm está a fazer** **[C]** — só aparece a pill do
+      estado. `next_run_at` está no tipo e não é mostrado; `attack_return_at`, `swept_at`,
+      `scout_fail_count`, `last_enemy_ships`, `enemy_return_at`, `last_spy_at`, `low_raids` vêm no
+      `/api/farm` mas nem estão no tipo. Acrescentar uma linha "próxima acção / motivo"
+      ("à espera · 14:32", "nunca varrido → scout completo", "scout falhou 2×", "frota vista: N
+      navios, regressa às HH:MM"). O número "#1" da fila (linhas 280-294) não usa a chave real do
+      bot (devidos primeiro, `loop` à frente, desempate por criação) — devolver a posição pelo API.
+- [ ] **P13.35 Controlos do farm inacessíveis a meio de um scout** **[C]** — a linha só expande se
+      a última missão for DONE com recursos (linhas 588-598, 661); "correr agora", pausar, remover e
+      os parâmetros vivem lá dentro. Com o espião em viagem ou FAILED não há controlos, e um painel
+      aberto fecha-se sozinho quando o poll de 30s muda o estado. Tornar a linha expansível sempre
+      que o alvo esteja no farm.
+- [ ] **P13.36 Acções destrutivas sem confirmação nem guarda** **[C]**
+  - Remover do farm (linhas 649 e 819): um clique, apaga a linha (`swept_at`, contagens,
+    parâmetros) e obriga a novo primeiro varrimento.
+  - 🚫 Ignorar (linhas 259-267): esconde uma cidade na UI mas o backend marca **jogador+ilha** e
+    soma um strike; num alvo activo a linha não se esconde, logo cliques repetidos levam ao
+    ignorar permanente (4 strikes).
+  - "Correr agora" (linha 810) disponível em qualquer estado; o backend força IDLE com tropas ou
+    espiões fora (ver P13.31).
+  - Cancelar ataque sem confirmação e activo mesmo já "a despachar".
+- [ ] **P13.37 Gravações que dizem "ok" sem verificar** **[C]** — `FarmSettings.tsx` (45-61),
+      "adicionar ao farm" em `DispatchPanel.tsx` (309-325), os toggles de `MundoPage.tsx` (67-103)
+      e o "des-ignorar" não olham para `res.ok`. Pior: qualquer gravação em `FarmSettings` (toggle
+      da reserva, sair do campo dos espiões, gravar frota) envia o **rascunho** do exército, e o
+      backend substitui `army` em todos os POST → números a meio ficam gravados. Usar `apiAction`
+      em todo o lado; o backend só mexe em `army` se a chave vier.
+- [ ] **P13.38 Estados de erro que não saem** **[C]** — `MundoPage.fetchScan` (105-116) e o
+      `App.tsx` nunca limpam `error` após um sucesso: uma falha passageira (restart do Flask,
+      ficheiro a meio — P13.14) deixa o ecrã de erro até recarregar a página. A barra de progresso
+      do scan só aparece se a página for aberta a meio (linhas 130-137: closure sempre `running`).
+- [ ] **P13.39 Dados enganadores** **[C]**
+  - `reportedAt` mostrado como data do relatório e usado para escolher "o mais recente"; o selo
+    "verificado há N min" herda o mesmo erro (P13.1).
+  - `last_loot` (armazém espiado) tratado como rendimento real no filtro e na pontuação; o saque
+    real já está carregado (`lootByCity`) mas é casado por nome `jogador|cidade`.
+  - "re-espiar a cada" grava `respyEvery`, que o bot já não usa; "a cada Nh" mostra
+    `interval_hours`, que é só o recuo após falha.
+  - `is_fleet_target` apresentado como facto, sem evidência e sem forma de o limpar (P13.4).
+  - A dica de capacidade no despacho manual ignora o tecto por vaga (~207k) e pede milhares de navios.
+  - `SpyModal` chama "em campo" aos espiões em defesa.
+- [ ] **P13.40 Frescura incoerente** **[C]** — `MundoPage`/`InactivosTab` fazem poll a 30/60s
+      (3 pedidos por tick, mesmo com o separador escondido) ao lado de um SSE que só o `App.tsx`
+      escuta; `DispatchPanel`, `HistoryPanel` e as contagens de espiões **nunca** actualizam (um
+      ataque pendente fica "a despachar" para sempre). Um hook partilhado para o evento `update`,
+      refetch ao receber, poll lento só como recurso.
+- [ ] **P13.41 Em falta na UI** **[C]** — `minLoot` e modo (farm/loop) não se editam por alvo;
+      alvos com frota só se adicionam pela pesquisa do Combate (sem modo); sem pesquisa/filtro na
+      tabela de alvos; sem scan, os alvos do farm ficam invisíveis; agendar "às HH:MM" com a hora
+      vazia envia **já**; o modal de ataque não mostra a hora de saída (o backend soma 5-20 min) e
+      deixa enviar com 0 navios.
+- [ ] **P13.42 Estrutura** **[C]** — `InactivosTab.tsx` (923 linhas) e `DispatchPanel.tsx` (724)
+      misturam carregamento, enriquecimento, linhas, painéis e modais; `FarmTarget`, `LootStat` e
+      `MilitaryData` estão definidos duas vezes com campos diferentes; `/api/military` é pedido em
+      três sítios. Um `types/farm.ts`, hooks de dados partilhados e separar linha / painel de
+      relatório / controlos do farm. Strings fora do `useT` e datas sem locale em vários ficheiros.
+
+### G — Testes
+
+Suite lida na íntegra por subagente: 478 testes, 7s, 28 ficheiros (**509** após os passos 1-3
+de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
+
+- **Onde é forte**: `farm_manager` (≈90 testes passam pelo `process_farm_targets` com SQLite
+  real), máquina de estados de espiões, payloads de ataque, vinho/consolidação, notifier,
+  `db_manager`, throttle/health/pausa.
+- **Onde não há nada**: `smart_sleep` e a fila de construção, `empireFunction`, `bot_launcher`,
+  `costs_collector`, `healthcheck`, `_collect_movements` (detecção de saque e de ataques a
+  chegar), o deep scan. No Flask, ~17 de 86 rotas.
+- **O padrão que deixou passar os bugs de A**: as costuras são substituídas um nível acima de
+  onde os erros vivem — o farm é testado com `queue_add`, `_free_ships`, `_load_missions` e
+  `refresh_movements` falsos, e a fila de ataques é testada à parte. **Nenhum teste corre farm →
+  fila de ataques → despacho.** P13.2, P13.3 e P13.8 vivem exactamente nessa junção.
+- **Testes que hoje fixam o comportamento errado** (mudam com a correcção):
+  `test_multiple_due_targets_sum` (P13.19), `test_weak_combat_fleet_engaged_with_blockade`
+  (P13.2), `test_attacking_unblocks_when_troops_home_despite_estimate` e
+  `test_raid_that_never_left_is_not_a_bounce` (P13.3),
+  `test_garrison_troops_parsed_with_thousands_and_dashes` + `test_naval_units.py` (P13.7).
+- **Sem cobertura nenhuma**: P13.1, P13.5, P13.8, P13.11-P13.16, P13.20, P13.30. Parcial: P13.6
+  (só testam `spy_count=0`, nunca `None`), P13.9.
+
+- [~] **P13.43 Capturas reais como fixtures** — *aba de relatórios feita 2026-11-14*
+      (`tests/fixtures/spy_reports_tab.html`, nomes trocados, + `test_spy_reports_real.py`, 12
+      testes: parser e os três colectores contra a página real). **Faltam** as outras quando
+      houver exemplos: relatório de guarnição e de movimentos, `military_advisor.json` com um
+      raid em voo, formulários de pilhagem/bloqueio, rejeições. Estado anterior: o bot guarda a última
+      resposta real de cada tipo em `/tmp/ikalogs/captures/` (`spy_reports_tab.html`,
+      `military_advisor.json`, `plunder_form.json`, `blockade_form.json`,
+      `spy_execute_rejected.json`, `attack_rejected.json`). **Falta** copiá-las para
+      `tests/fixtures/` (sem nomes de terceiros) e escrever os testes de parser sobre elas. não existe um único HTML/JSON real do jogo em
+      `tests/` (tudo escrito à mão). Guardar, anonimizados: página de relatórios da espionagem
+      (com um falhado), `militaryAdvisor`, formulário de pilhagem e de bloqueio, um `provideFeedback`
+      de erro. É o que protege contra mudanças de markup e é pré-requisito do P13.1/P13.7.
+- [ ] **P13.44 Os cinco testes que mais valem** — (1) farm → fila de ataques → despacho numa
+      `shared_queue` real: item adiado não duplica nem gera ricochete, frota falhada segura as
+      tropas, poucos navios adia; (2) falha no pedido de movimentos não toca em `movements.json`
+      nem marca alvo de frota; (3) adopção de relatório com id-base + `spy_count None` vs `0` nas
+      três pernas; (4) escritores concorrentes: fila de construção e `spy_missions.json` truncado;
+      (5) uma iteração do `smart_sleep` em que um passo rebenta → fica em log e em `health.json`.
+- [ ] **P13.45 Higiene da suite** — criar `conftest.py` (o `_setup_db` está copiado em 7
+      ficheiros); estado global atribuído directamente em vez de `monkeypatch` (`DB_PATH`,
+      `PAUSE_PATH`, `is_paused` substituído para sempre em `test_watchlist`, lambdas escritas nos
+      módulos stock em `test_queue`) → a suite depende da ordem; stub partilhado do
+      `telegram_notifier` engole chamadas a `notify_*` inexistentes; ~60 testes agarrados a
+      helpers privados do farm vão partir com o P13.28 (manter os que passam pelo
+      `process_farm_targets`).
+
+**F.2 — Definições, transportes e construção** (`SettingsPage`, `TransportTab`, `Construction*`,
+`BuildingsPage`, `WinePanorama`, `AuthGate`)
+
+- [ ] **P13.46 Bugs directos** **[C]**
+  - `Construction.tsx:104` — `nowSecs = now / 1000`, mas o `useLiveClock` já devolve segundos:
+    todas as previsões "pronto às…" do orçamento saem com data de **Janeiro de 1970**.
+  - `SettingsPage.tsx:754` — `ignoreExpiryDays` e `ignorePermanentAfter` são editáveis e mostram
+    "guardado", mas o POST (`app.py:1040`) só persiste três outras chaves: **nunca são gravados**
+    (e o valor por omissão na UI é 30 dias contra 60 no servidor).
+  - `WinePanorama.tsx:28` — exige `runsOut > 0`: uma cidade **já sem vinho** fica verde, com "—",
+    e ordenada em último (mesmo erro do P13.20, agora no ecrã que existe para a mostrar).
+  - `TransportTab.tsx:293` — ao mudar a origem para a cidade que era o destino, o select mostra
+    outra cidade mas o estado mantém a antiga → o envio falha com "origem e destino iguais".
+  - Janela horária da fila com início ≥ fim (ex.: 22→6): o servidor ignora e responde `ok`.
+  - Agendar "às HH:MM" sem hora envia **já** (igual ao despacho de ataques, P13.41).
+- [ ] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** — remover e
+      reordenar enviam um índice; a lista só é lida ao abrir o separador. Se o bot tirar o item
+      da cabeça entretanto, o clique remove ou move **outro edifício**. Enviar a identidade do
+      item e recusar com 409 se não bater (resolve-se com o P13.12). O "+" rápido em
+      `BuildingsPage` só aparece em hover (inalcançável em ecrã táctil) e enfileira sem aviso;
+      aplicar um modelo faz um POST por linha e não actualiza a fila.
+- [ ] **P13.48 Acções que gastam recursos sem confirmação** **[C]** — desligar o `dryRun` do
+      treino de espiões faz POST imediato (150 ouro + 40 cristal por espião, até `maxPerPass` por
+      passagem). No comprador de vinho o toggle fica **cinzento quando está a gastar ouro** e
+      âmbar quando é seguro — o contrário de um sinal de perigo — e não há aviso de "ao vivo".
+      Confirmar a passagem para ao vivo e mostrar um aviso vermelho enquanto estiver ligado.
+      Cada gravação do comprador dispara um preview que **substitui** o status da última compra real.
+- [ ] **P13.49 "Guardado" sem verificar a resposta** **[C]** — nenhum destes ficheiros usa o
+      `apiAction`; quase todas as gravações mostram sucesso com 400/401/500 (`TransportTab`
+      142-161, `SettingsPage` 190, 307, 580, 755, 885). O feedback da consolidação aparece
+      sempre a verde, mesmo quando é um erro. Um erro qualquer ao gravar notificações é mostrado
+      como "webhook do Discord inválido". Os cartões descartam o valor que o servidor limitou.
+- [ ] **P13.50 Sessão expirada não é tratada em lado nenhum** **[C]** — o `AuthGate` verifica uma
+      vez ao abrir e, se esse pedido falhar, **deixa entrar** (`.catch(() => setPhase('ok'))`; a
+      API continua protegida, o resultado é uma app cheia de pedidos a falhar). Um 401 a meio:
+      o `App` mostra o ecrã de erro permanente com o texto `auth_required`; `TransportTab` guarda
+      o objecto de erro como lista de cidades e rebenta — não há `ErrorBoundary`, a página fica
+      em branco. Um wrapper único de fetch que, ao 401, devolve ao ecrã de login.
+- [ ] **P13.51 Segredos visíveis** **[C]** — token do Telegram e webhook do Discord em campos de
+      texto simples, preenchidos a partir das variáveis de ambiente; gravar copia-os para o
+      `telegram_settings.json`. Campo tipo password e valor mascarado vindo do servidor.
+- [ ] **P13.52 Campos numéricos limitados a cada tecla** **[C]** — com mínimo 50, escrever "95"
+      dá 9 → 50 → "505" → 99. Guardar em cada `blur` mesmo sem alteração (5 POST ao percorrer um
+      cartão com Tab). Limitar e gravar só ao sair do campo e só se mudou.
+- [ ] **P13.53 Estrutura** **[C]** — `SettingsPage.tsx` (977 linhas, 11 componentes) e
+      `TransportTab.tsx` (887 linhas, 22 `useState`); o mesmo toggle escrito 9× e o campo numérico
+      ~20×; todos os cartões são "ler JSON → editar → POST do objecto inteiro". Um `<Toggle>`
+      (com `role="switch"`/`aria-label`, que hoje faltam), um `<NumberField>` e um
+      `useSettings(url)`; par natural do P13.30. O relógio de 1s no topo do `TransportTab` e da
+      fila de construção re-renderiza a árvore inteira a cada segundo — passar para componentes
+      folha. O `TransportTab` volta a pedir o `/api/data` completo que o `App` já tem.
+
+**F.3 — Início, cidades, histórico, logs, calculadoras, shell** (`HomePage`, `CitiesPage`,
+`MovementsPage`, `AlertsPage`, `HistoryPage`, `LogsPage`, `calculadoras/*`, `ui/*`, `i18n.tsx`)
+
+- [ ] **P13.54 As calculadoras dão respostas erradas com confiança** **[C]**
+  - `utils.ts:90-99` (`calcUpgradeTime`) trata os recursos como intermutáveis: falta de mármore é
+    anulada por excedente de madeira → "Tens tudo!" com linhas a vermelho por baixo. Usar a soma
+    das faltas por recurso para o custo e o máximo de `falta/produção` para o tempo.
+  - `ColonyROICalc.tsx:32,68` multiplica o ganho de uma serração pelo número de cidades **do
+    império** (13), quando só beneficia as da ilha → opção A inflacionada até 13×; a opção B
+    ignora o custo de fundar a colónia e credita a produção desde a hora 0.
+  - O "preço do ouro por unidade" anula-se nas fórmulas de retorno (não faz nada) e trata todos
+    os recursos ao mesmo preço; "disponível" é a soma do império embora a obra precise dos
+    recursos numa cidade; nomes de edifícios fixos em português (sem dados → "já está no nível").
+- [ ] **P13.55 Página inicial: o ponto quente de performance** **[C]**
+  - O SSE vigia `last_alive.json`, que o bot reescreve a cada ≤15-60s → o evento `update` dispara
+    continuamente, e a cada um o `HomePage` (linhas 251-256) volta a pedir a fila **e a tabela
+    completa de custos** (todas as cidades × edifícios × níveis), que muda de 3 em 3 dias.
+    Tirar o `last_alive.json` do SSE (ou evento próprio) e pedir os custos uma vez.
+  - `useLiveClock()` ao nível da página re-renderiza tudo a cada segundo; a matriz de recursos
+    recalcula porque `cityNames` é um array novo em cada render.
+  - `Section` (`MovementsPage.tsx:39`) e `Tile` (`HomePage.tsx:212`) são componentes declarados
+    dentro do render → o React **desmonta e remonta** esses blocos a cada segundo.
+  - Inventário de polls: `/api/cycles` e `/api/activity` a 15s; farm + fila de ataques +
+    `loot-log?limit=300` + movimentos a 30s; `/api/health` a 60s; logs a 5s (1 MB lido e ~1000
+    linhas substituídas de cada vez). `/api/movements` é pedido por dois componentes. Nenhum
+    pára com o separador escondido. O SSE não cobre as filas em SQLite nem o `bot.log`.
+  - Sem `React.lazy`: o chart.js (207 KB) carrega no arranque para uma página que só o Histórico usa.
+- [ ] **P13.56 A app fica em branco com uma resposta inesperada** **[C]** — `HomePage`,
+      `MovementsPage` e `HistoryPage` guardam o JSON directamente no estado; um 401 ou um corpo
+      de erro chega a `.filter`/`.map`/`.length` e rebenta, sem `ErrorBoundary` (mesmo problema
+      do P13.50). `MovementsPage` fica preso no erro (o botão Actualizar nem é desenhado) e a
+      lista só carrega ao abrir — os movimentos chegam a "Chegou" e ficam lá. No Histórico, mudar
+      de cidade depressa deixa a resposta antiga sobrepor-se à nova (pode rebentar em
+      `h.gold.total`) e o gráfico nunca é destruído ao sair da página. Uma falha passageira no
+      `/api/logs` apaga o log do ecrã.
+- [ ] **P13.57 O Início mostra inventário antes de saúde** **[C]** — não há bloco "bot vivo /
+      último sinal / em pausa / último erro": isso está só no rodapé da barra lateral, que no
+      telemóvel fica dentro do menu fechado. O cartão de combate dá só contagens; "próximo
+      ataque" vem apenas da fila manual (mostra "—" com o farm a trabalhar). Cartões que falham
+      desaparecem (`return null`), logo "API em baixo" e "nada a acontecer" são iguais.
+      Uma faixa de estado no topo + próxima acção do farm (liga ao P13.34).
+- [ ] **P13.58 Alertas incoerentes entre páginas** **[C]** — "Vinho em risco" lista todas as
+      cidades com autonomia finita (num império sem produção de vinho, as 13, sempre);
+      `CitiesPage.tsx:90` usa limites fixos de 4h/12h enquanto o resto usa os configuráveis
+      (2h/8h); a página Alertas e o contador da barra lateral têm a lógica duplicada e diferem
+      por um; ataques a chegar, bot offline, subsistemas em falha e erros de transporte não
+      entram em "Alertas". Um único `computeAlerts()`.
+- [ ] **P13.59 Pequenos, mas visíveis** **[C]** — obra com ETA desconhecido aparece como
+      "concluída" (`HomePage.tsx:278`); os logs puxam a vista para o fim de 5 em 5s enquanto se
+      lê; "Actualização em 0:00" para sempre quando o ciclo atrasa; `fmtDuration` não passa a
+      dias ("300h 0m"); o `Modal` volta a focar o primeiro campo sempre que a página faz poll;
+      "Pausar bot" é um toque sem confirmação mesmo acima das Definições; cores das linhas do
+      histórico trocadas face ao resto (vinho verde, cristal vermelho); eixo do tempo comprime as
+      noites offline e não há selector de intervalo.
+- [ ] **P13.60 Base do frontend** **[C]** — sem ESLint (logo sem `react-hooks/exhaustive-deps`),
+      e o comando de deploy documentado (`npx vite build`) **salta o `tsc`**: erros de tipos não
+      travam um deploy → usar `npm run build`. `i18n.tsx`: 712 chaves, paridade pt/en perfeita,
+      ~12% sem uso, `useT` aceita qualquer string (um typo aparece como identificador cru).
+      Font Awesome e Inter vêm de CDN público (sem rede externa a UI fica sem ícones).
+      `HomePage.tsx` (571 linhas, 5 componentes) e as três calculadoras têm blocos copiados.
+
+### H — Ordem recomendada
+
+O critério é: primeiro o que faz o bot decidir mal com tropas, depois o que perde estado em
+silêncio, depois pedidos ao jogo, e só então estrutura e conforto. Cada passo deixa testes.
+
+1. ✅ **Deploy do P13.0** e confirmar o `cityId` nos movimentos. *(2026-11-14)*
+2. ✅ **Ver para decidir**: P13.10 (motivo das rejeições), P13.13 (`smart_sleep` deixa de engolir
+   erros), P13.23 (contador de pedidos). *(2026-11-14)*
+3. ✅ **P13.43** capturas reais → **P13.1** (relatórios presos à execução) + **P13.5** + **P13.6**.
+   *(2026-11-14)*
+4. **P13.3** (movimentos `None`, fila de ataques consultada, regressos vazios registados) →
+   **P13.4** (despromoção + revisão dos 9 alvos sem evidência) → **P13.2** (ondas acopladas) →
+   **P13.8** → **P13.7** com **P13.33** (uma só fonte para "há navios").
+5. **Estado**: P13.14 (helper atómico, 1 dia) → P13.11 (missões em SQLite) → P13.12 com P13.47.
+6. **Correcções rápidas de UI com impacto**: P13.46, P13.36, P13.37/P13.49 (`apiAction` em tudo),
+   P13.38, P13.50/P13.56 (wrapper de fetch + `ErrorBoundary`), P13.48.
+7. **Logística**: P13.19, P13.20, P13.21, P13.22.
+8. **Pedidos**: P13.24, P13.25, P13.26, P13.55.
+9. **Estrutura** (só agora): P13.28, P13.30 com P13.53, P13.42, P13.29, P13.31, P13.45.
+10. **Conforto**: P13.34/P13.35/P13.57 (visibilidade do farm), P13.54 (calculadoras), o resto.
+
+Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira de 3-5 sessões.
+
+### I — Próximos passos (estado em 2026-11-14, depois dos passos 1-3)
+
+**O que os primeiros dados reais já mostraram** (contador de pedidos + captura da aba):
+- A aba de relatórios mostra **só 10 por página** (`offset=0`). Um scout completo gera 4-5
+  relatórios (chegada, armazém, guarnição, movimentos, regresso); com dois alvos em paralelo o
+  relatório de uma perna pode sair da 1.ª página antes de ser recolhido. → **P13.62** ler a
+  página seguinte quando o id-base ainda não foi alcançado.
+- Tróia 3 teve o armazém **falhado 3× no mesmo dia com 0 agentes perdidos** — o farm insiste
+  num alvo onde a missão falha sempre. → **P13.63** contar falhas "limpas" por alvo e recuar
+  (ou subir o nº de agentes) em vez de repetir.
+- O relatório de regresso traz os agentes perdidos (Corinto: 1/4). → **P13.64** usar
+  `lostAgents` para corrigir `numAgents` da missão e alimentar o alerta "espiões perdidos" com
+  números reais.
+- `view:safehouse` foi 80% dos pedidos da hora. Depois do recuo, medir uma semana e ver o que
+  sobra (o `fetch_spy_counts` abre as 14 casas em cada ciclo). → entra no bloco D.
+- **Segurança (fora do código):** o `git remote` do repositório tem um token do GitHub embutido
+  no URL. Trocar para `gh auth`/credential helper e revogar esse token.
+
+**Sequência proposta** (os números são os itens P13 acima):
+
+1. **Acabar com os ricochetes** — passo 4 de H, por esta ordem:
+   P13.3 (movimentos `None` em erro; consultar a fila de ataques antes de dizer "nunca saiu";
+   registar regressos vazios) → P13.4 (despromover `is_fleet_target` + rever os 9 alvos sem
+   evidência) → P13.2 (ondas bloqueio/tropas acopladas) → P13.8 (fracção mínima de navios) →
+   P13.7 + P13.33 (uma só fonte para "há navios", no bot e na UI) → P13.61 (dois strikes).
+   Teste que falta e que protege tudo isto: farm → fila de ataques → despacho (P13.44-1).
+2. **Parar de perder estado** — P13.14 (escritas atómicas em todo o lado; o helper já existe) →
+   P13.11 (missões em SQLite) → P13.12 + P13.47 (fila de construção por linha e por identidade).
+3. **Erros de UI que enganam ou gastam** *(achados dos subagentes, baratos)*:
+   - P13.46: datas de 1970 no orçamento; campos de ignorar que não gravam; cidade sem vinho a
+     verde; origem = destino nos transportes; "às HH:MM" vazio envia já.
+   - P13.48: confirmação ao passar o treino de espiões / compra de vinho para "ao vivo".
+   - P13.36: confirmação em remover do farm, ignorar, "correr agora", cancelar.
+   - P13.37 + P13.49: `apiAction` em todas as gravações (hoje dizem "guardado" com erro).
+   - P13.50 + P13.56 + P13.38: wrapper de fetch com 401 → login, `ErrorBoundary`, limpar erros.
+4. **Ver o farm** — P13.34 (próxima acção / motivo por alvo), P13.35 (controlos sempre
+   acessíveis), P13.57 (faixa de estado no Início), P13.39 (rótulos enganadores), e mostrar o
+   contador de pedidos no dashboard.
+5. **Logística** — P13.19 (reserva do farm), P13.20 (vinho a 0), P13.21 (compra verificada),
+   P13.22 (avisos de itens removidos).
+6. **Pedidos ao jogo** — com uma semana de contagem: P13.24, P13.25, P13.26, P13.55, P13.62.
+7. **Estrutura** — P13.28 (`decide()` do farm), P13.30 + P13.53 (registo único de definições +
+   `useSettings`), P13.42 (partir `InactivosTab`/`DispatchPanel`), P13.45 (`conftest.py`,
+   estado global nos testes), P13.60 (ESLint, `npm run build` no deploy), P13.29, P13.31.
+8. **Calculadoras e acabamentos** — P13.54, P13.58, P13.59.
+
+- [ ] **P13.62** Paginação da aba de relatórios (10 por página).
+- [ ] **P13.63** Recuo por alvo quando a missão falha sem perder agentes.
+- [ ] **P13.64** Usar `lostAgents`/`sentAgents` dos relatórios.
