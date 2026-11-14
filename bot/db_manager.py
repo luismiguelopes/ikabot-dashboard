@@ -239,6 +239,17 @@ def _run_migrations(conn):
             except Exception:
                 pass
         conn.execute("INSERT INTO schema_version (version) VALUES (17)")
+    if current < 18:
+        # v18 = spy missions move out of spy_missions.json into one row per mission (P13.11).
+        # `seq` keeps the append order the code relies on ("newest record last").
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS spy_missions (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                payload TEXT NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO schema_version (version) VALUES (18)")
     conn.commit()
 
 
@@ -358,6 +369,7 @@ def init_db():
     _migrate_building_costs()
     _migrate_queue()
     _migrate_shared_queues()
+    _migrate_spy_missions()
 
 
 # ── Shared queues (attack, spy dispatch, spy recall) ──────────────────────────
@@ -429,6 +441,134 @@ def queue_remove(queue, item_ids):
             return cur.rowcount
     finally:
         conn.close()
+
+
+# ── Spy missions (P13.11) ─────────────────────────────────────────────────────
+# The mission store used to be spy_missions.json, rewritten whole by BOTH containers with a
+# plain open("w"): the bot holds the list in memory for minutes while it works through HTTP
+# calls and then saves it, the dashboard edits it on a click. Whoever saved last erased the
+# other's change, and a read that caught the file mid-write returned an empty list which the
+# next save then made permanent. Now: one row per mission, and the same merge-on-save as the
+# building queue — missions_load() attaches a snapshot ("_base") and missions_save() writes
+# only what the caller changed, FIELD BY FIELD, onto the row as it is in the database now.
+# So the bot advancing a mission and the dashboard re-arming another (or touching a different
+# field of the same one) no longer overwrite each other.
+
+def _mission_dump(m):
+    return json.dumps(m, sort_keys=True, ensure_ascii=False)
+
+
+def missions_load():
+    """→ {"missions": [...], "_base": {id: payload_json}} — oldest record first."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT id, payload FROM spy_missions ORDER BY seq").fetchall()
+    finally:
+        conn.close()
+    missions, base = [], {}
+    for r in rows:
+        try:
+            m = json.loads(r["payload"])
+        except Exception:
+            continue
+        m["id"] = r["id"]
+        missions.append(m)
+        base[r["id"]] = _mission_dump(m)
+    return {"missions": missions, "_base": base}
+
+
+def missions_save(data):
+    """Persist the caller's changes to the missions it loaded (see the note above). A dict
+    with no "_base" is a full replace (migration, tests). Missions without an "id" are new
+    and get one. Rows removed from the list are deleted; rows the caller never saw stay."""
+    import uuid
+    init_db()
+    missions = data.get("missions") or []
+    base = data.get("_base")
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            seen = set()
+            for m in missions:
+                if not m.get("id"):
+                    m["id"] = uuid.uuid4().hex[:12]
+                mid = m["id"]
+                seen.add(mid)
+                mine = _mission_dump(m)
+                if base is None or mid not in base:
+                    conn.execute(
+                        "INSERT INTO spy_missions (id, payload) VALUES (?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload", (mid, mine))
+                elif mine != base[mid]:
+                    row = conn.execute("SELECT payload FROM spy_missions WHERE id = ?",
+                                       (mid,)).fetchone()
+                    if row is None:
+                        continue              # deleted meanwhile — don't resurrect it
+                    if row["payload"] == base[mid]:
+                        merged = mine         # nobody else touched it → take ours whole
+                    else:
+                        was, cur = json.loads(base[mid]), json.loads(row["payload"])
+                        for k, v in m.items():
+                            if k not in was or was[k] != v:
+                                cur[k] = v    # only the fields WE changed
+                        for k in was:
+                            if k not in m:
+                                cur.pop(k, None)
+                        merged = _mission_dump(cur)
+                    conn.execute("UPDATE spy_missions SET payload = ? WHERE id = ?", (merged, mid))
+            if base is None:
+                ids = [r[0] for r in conn.execute("SELECT id FROM spy_missions")]
+                gone = [i for i in ids if i not in seen]
+            else:
+                gone = [i for i in base if i not in seen]
+            for i in range(0, len(gone), 400):
+                chunk = gone[i:i + 400]
+                conn.execute("DELETE FROM spy_missions WHERE id IN (%s)" % ",".join("?" * len(chunk)),
+                             chunk)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+    data["_base"] = {m["id"]: _mission_dump(m) for m in missions}
+
+
+def _migrate_spy_missions():
+    """One-time import of spy_missions.json. Runs inside a write transaction so the two
+    containers starting together can't both import it; the file is renamed afterwards."""
+    import uuid
+    path = os.path.join(_LOGS_DIR, "spy_missions.json")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path) as f:
+            missions = json.load(f).get("missions", [])
+    except Exception:
+        return                     # unreadable right now — leave it for the next start
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT COUNT(*) FROM spy_missions").fetchone()[0] == 0:
+            for m in missions:
+                if not isinstance(m, dict):
+                    continue
+                mid = m.get("id") or uuid.uuid4().hex[:12]
+                m["id"] = mid
+                conn.execute("INSERT OR IGNORE INTO spy_missions (id, payload) VALUES (?, ?)",
+                             (mid, _mission_dump(m)))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        return
+    finally:
+        conn.close()
+    try:
+        os.rename(path, path + ".migrated")
+    except Exception:
+        pass
 
 
 # ── Attack log ────────────────────────────────────────────────────────────────
@@ -1274,8 +1414,8 @@ def _read_queue_from_db():
     try:
         state_rows = conn.execute("SELECT key, value FROM queue_state").fetchall()
         item_rows = conn.execute("""
-            SELECT city, building, target_level, added_at, position, failed_attempts
-            FROM queue_items ORDER BY city_order, position
+            SELECT id, city, building, target_level, added_at, position, failed_attempts
+            FROM queue_items ORDER BY city_order, position, id
         """).fetchall()
         ip_rows = conn.execute("SELECT * FROM queue_in_progress").fetchall()
         err_rows = conn.execute("SELECT * FROM queue_transport_errors").fetchall()
@@ -1286,8 +1426,8 @@ def _read_queue_from_db():
     queues = {}
     for row in item_rows:
         city = row["city"]
-        entry = {"building": row["building"], "targetLevel": row["target_level"],
-                 "addedAt": row["added_at"]}
+        entry = {"id": row["id"], "building": row["building"],
+                 "targetLevel": row["target_level"], "addedAt": row["added_at"]}
         if row["failed_attempts"]:
             entry["failedAttempts"] = row["failed_attempts"]
         queues.setdefault(city, []).append(entry)
@@ -1304,24 +1444,168 @@ def _read_queue_from_db():
             "failedAt": row["failed_at"], "origin": row["origin"],
             "resource": row["resource"],
         }
-    return {
+    data = {
         "enabled": enabled,
         "queues": queues,
         "inProgress": in_progress,
         "transportErrors": transport_errors,
     }
+    data["_base"] = _queue_base(data)
+    return data
+
+
+# ── Building queue: merge-on-save (P13.12) ─────────────────────────────────────
+# The queue is edited as a whole blob by two processes: the bot loads it at the start of a
+# pass that takes minutes (one city view after another) and saves at the end; the dashboard
+# loads/edits/saves on every click. Saving used to DELETE every row and reinsert the caller's
+# copy, so whichever saved last silently erased the other's edits — an item added in the UI
+# during a bot pass vanished. load_queue() now attaches a snapshot of what it returned
+# ("_base"); save_queue() writes only what the caller actually CHANGED relative to that
+# snapshot (rows it removed, fields it edited, rows it added, order it rearranged) and leaves
+# everything else — including rows the other process added meanwhile — untouched. A blob
+# with no "_base" (built by hand: tests, the legacy JSON migration) is still a full replace.
+
+def _item_sig(item):
+    return (item.get("building"), int(item.get("targetLevel", 0) or 0),
+            int(item.get("failedAttempts", 0) or 0))
+
+
+def _ip_sig(ip):
+    return (ip.get("building", ""), ip.get("position", 0), ip.get("fromLevel", 0),
+            ip.get("toLevel", 0), ip.get("startedAt", 0), ip.get("eta", 0))
+
+
+def _err_sig(err):
+    return (err.get("failedAt", 0), err.get("origin", ""), err.get("resource", ""))
+
+
+def _queue_base(data):
+    """Snapshot of what the caller holds, for save_queue() to diff against."""
+    items, order = {}, {}
+    for city, lst in (data.get("queues") or {}).items():
+        ids = []
+        for it in lst:
+            if it.get("id") is not None:
+                items[it["id"]] = _item_sig(it)
+                ids.append(it["id"])
+        order[city] = ids
+    return {
+        "enabled": bool(data.get("enabled", True)),
+        "items": items,
+        "order": order,
+        "inProgress": {c: _ip_sig(v) for c, v in (data.get("inProgress") or {}).items()},
+        "transportErrors": {c: _err_sig(v) for c, v in (data.get("transportErrors") or {}).items()},
+    }
+
+
+def _merge_queue_into_db(data, base):
+    queues = data.get("queues") or {}
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            enabled = bool(data.get("enabled", True))
+            if enabled != base["enabled"]:
+                conn.execute("INSERT OR REPLACE INTO queue_state (key, value) VALUES ('enabled', ?)",
+                             ("true" if enabled else "false",))
+
+            kept = set()
+            for city, lst in queues.items():
+                for it in lst:
+                    iid = it.get("id")
+                    if iid is not None and iid in base["items"]:
+                        kept.add(iid)
+                        if _item_sig(it) != base["items"][iid]:
+                            # No-op if the other process deleted the row meanwhile — a
+                            # removed item is not resurrected by a stale edit.
+                            conn.execute(
+                                "UPDATE queue_items SET building = ?, target_level = ?, "
+                                "failed_attempts = ? WHERE id = ?",
+                                (it["building"], int(it.get("targetLevel", 0) or 0),
+                                 int(it.get("failedAttempts", 0) or 0), iid))
+                    elif iid is None:
+                        row = conn.execute("SELECT MAX(position), MAX(city_order) FROM queue_items "
+                                           "WHERE city = ?", (city,)).fetchone()
+                        if row[0] is None:
+                            top = conn.execute("SELECT MAX(city_order) FROM queue_items").fetchone()[0]
+                            pos, city_order = 0, (0 if top is None else top + 1)
+                        else:
+                            pos, city_order = row[0] + 1, row[1] or 0
+                        cur = conn.execute(
+                            "INSERT INTO queue_items (city, building, target_level, added_at, "
+                            "position, city_order, failed_attempts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (city, it["building"], int(it.get("targetLevel", 0) or 0),
+                             int(it.get("addedAt", 0) or 0), pos, city_order,
+                             int(it.get("failedAttempts", 0) or 0)))
+                        it["id"] = cur.lastrowid
+            removed = [i for i in base["items"] if i not in kept]
+            if removed:
+                conn.execute("DELETE FROM queue_items WHERE id IN (%s)" % ",".join("?" * len(removed)),
+                             removed)
+
+            # Order: rewrite a city's positions only if the caller rearranged the items it knew.
+            for city, lst in queues.items():
+                now_known = [it["id"] for it in lst if it.get("id") in kept]
+                was_known = [i for i in base["order"].get(city, []) if i in kept]
+                if now_known == was_known:
+                    continue
+                wanted = [it["id"] for it in lst if it.get("id") is not None]
+                in_db = [r[0] for r in conn.execute(
+                    "SELECT id FROM queue_items WHERE city = ? ORDER BY position, id", (city,))]
+                seq = [i for i in wanted if i in in_db] + [i for i in in_db if i not in wanted]
+                for pos, iid in enumerate(seq):
+                    conn.execute("UPDATE queue_items SET position = ? WHERE id = ?", (pos, iid))
+
+            ip_now = data.get("inProgress") or {}
+            for city, ip in ip_now.items():
+                if base["inProgress"].get(city) != _ip_sig(ip):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO queue_in_progress "
+                        "(city, building, position, from_level, to_level, started_at, eta) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)", (city,) + _ip_sig(ip))
+            for city in base["inProgress"]:
+                if city not in ip_now:
+                    conn.execute("DELETE FROM queue_in_progress WHERE city = ?", (city,))
+
+            err_now = data.get("transportErrors") or {}
+            for city, err in err_now.items():
+                if base["transportErrors"].get(city) != _err_sig(err):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO queue_transport_errors "
+                        "(city, failed_at, origin, resource) VALUES (?, ?, ?, ?)",
+                        (city,) + _err_sig(err))
+            for city in base["transportErrors"]:
+                if city not in err_now:
+                    conn.execute("DELETE FROM queue_transport_errors WHERE city = ?", (city,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
 
 
 def load_queue():
-    """Return queue dict with same structure as building_queue.json."""
+    """Return the queue dict (same shape as the old building_queue.json; items carry their
+    row "id") plus the "_base" snapshot save_queue() needs to merge instead of replace."""
     init_db()
     return _read_queue_from_db()
 
 
 def save_queue(data):
-    """Save queue dict to SQLite and touch a sentinel for SSE change detection."""
+    """Persist the caller's CHANGES to the queue (see the merge note above) and touch a
+    sentinel for SSE change detection."""
     init_db()
-    _write_queue_to_db(data)
+    base = data.get("_base")
+    if isinstance(base, dict):
+        _merge_queue_into_db(data, base)
+    else:
+        _write_queue_to_db(data)
+        fresh = _read_queue_from_db()          # hand the new row ids back to the caller
+        for city, lst in (data.get("queues") or {}).items():
+            for it, row in zip(lst, fresh["queues"].get(city, [])):
+                it["id"] = row["id"]
+    data["_base"] = _queue_base(data)
     try:
         with open(os.path.join(_LOGS_DIR, ".queue_updated"), "w") as f:
             f.write(str(int(time.time())))

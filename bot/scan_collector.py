@@ -15,6 +15,7 @@ from empire_utils import (
     LOGS_DIR, WORLD_SCAN_RADIUS, WORLD_SCAN_UPDATE_INTERVAL,
     SCAN_CHECKPOINT_PATH, lm, logger,
 )
+from empire_utils import atomic_write_json
 
 from ikabot.helpers.getJson import getIsland
 
@@ -97,15 +98,14 @@ def _dist(x1, y1, x2, y2):
 def _write_scan_status(status, phase, progress, total, message):
     path = os.path.join(LOGS_DIR, "world_scan_status.json")
     try:
-        with open(path, "w") as f:
-            json.dump({
-                "status":    status,
-                "phase":     phase,
-                "progress":  progress,
-                "total":     total,
-                "message":   message,
-                "updatedAt": int(time.time()),
-            }, f)
+        atomic_write_json(path, {
+            "status":    status,
+            "phase":     phase,
+            "progress":  progress,
+            "total":     total,
+            "message":   message,
+            "updatedAt": int(time.time()),
+        })
     except Exception:
         pass
 
@@ -115,16 +115,15 @@ def _publish_partial(cp):
     done = cp["totalIslands"] - len(cp["islandsQueue"])
     scan_path = os.path.join(LOGS_DIR, "world_scan.json")
     try:
-        with open(scan_path, "w") as f:
-            json.dump({
-                "lastUpdated":    int(time.time()),
-                "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
-                "ownCities":      cp["ownCities"],
-                "players":        cp["players"],
-                "islands":        cp["islands"],
-                "scanInProgress": True,
-                "scanProgress":   {"done": done, "total": cp["totalIslands"]},
-            }, f, indent=2)
+        atomic_write_json(scan_path, {
+            "lastUpdated":    int(time.time()),
+            "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
+            "ownCities":      cp["ownCities"],
+            "players":        cp["players"],
+            "islands":        cp["islands"],
+            "scanInProgress": True,
+            "scanProgress":   {"done": done, "total": cp["totalIslands"]},
+        }, indent=2)
     except Exception:
         pass
 
@@ -133,16 +132,15 @@ def _finalize_scan(cp):
     """Publish final world_scan.json (no scanInProgress), record timestamp, delete checkpoint."""
     scan_path = os.path.join(LOGS_DIR, "world_scan.json")
     try:
-        with open(scan_path, "w") as f:
-            json.dump({
-                "lastUpdated":    int(time.time()),
-                "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
-                "ownCities":      cp["ownCities"],
-                "players":        cp["players"],
-                "islands":        cp["islands"],
-                "scanInProgress": False,
-                "scanProgress":   {"done": cp["totalIslands"], "total": cp["totalIslands"]},
-            }, f, indent=2)
+        atomic_write_json(scan_path, {
+            "lastUpdated":    int(time.time()),
+            "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
+            "ownCities":      cp["ownCities"],
+            "players":        cp["players"],
+            "islands":        cp["islands"],
+            "scanInProgress": False,
+            "scanProgress":   {"done": cp["totalIslands"], "total": cp["totalIslands"]},
+        }, indent=2)
     except Exception:
         pass
 
@@ -244,8 +242,7 @@ def collect_shallow_scan(session):
             "players":      [],
             "islands":      [],
         }
-        with open(SCAN_CHECKPOINT_PATH, "w") as f:
-            json.dump(cp, f)
+        atomic_write_json(SCAN_CHECKPOINT_PATH, cp)
 
         _write_scan_status("running", "deep_scan", 0, len(islands_to_scan),
             lm("scan_status_deep", n=len(islands_to_scan)))
@@ -352,8 +349,7 @@ def scan_next_island(session):
     # Persist progress
     cp["islandsQueue"] = islands_queue
     try:
-        with open(SCAN_CHECKPOINT_PATH, "w") as f:
-            json.dump(cp, f)
+        atomic_write_json(SCAN_CHECKPOINT_PATH, cp)
     except Exception:
         pass
 
@@ -393,8 +389,7 @@ def save_watchlist_settings(data):
     s = {"enabled": bool(data.get("enabled", False)),
          "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WATCHLIST_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    atomic_write_json(WATCHLIST_SETTINGS_PATH, s, indent=2)
     return s
 
 
@@ -487,8 +482,7 @@ def process_watchlist(session, in_active_hours=True):
 
     def _save_state():
         try:
-            with open(WATCHLIST_STATE_PATH, "w") as f:
-                json.dump({"lastRun": now}, f)
+            atomic_write_json(WATCHLIST_STATE_PATH, {"lastRun": now})
         except Exception:
             pass
 
@@ -537,8 +531,7 @@ def process_watchlist(session, in_active_hours=True):
     scan["islands"] = islands
     scan["lastUpdated"] = now
     try:
-        with open(_WORLD_SCAN_PATH, "w") as f:
-            json.dump(scan, f, indent=2)
+        atomic_write_json(_WORLD_SCAN_PATH, scan, indent=2)
     except Exception:
         logger.warning("[watchlist] falha ao gravar world_scan.json", exc_info=True)
     _save_state()

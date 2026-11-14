@@ -18,6 +18,7 @@ import time
 import unicodedata
 
 from empire_utils import LOGS_DIR, logger, save_capture
+from empire_utils import atomic_write_json
 
 OWN_CITIES_PATH = os.path.join(LOGS_DIR, "own_cities.json")
 
@@ -772,8 +773,7 @@ def record_travel_calibration(kind, estimated_secs, real_secs):
     new  = ratio if n == 0 else prev + 0.2 * (ratio - prev)
     data[kind] = {"ratio": round(new, 3), "samples": n + 1, "updatedAt": int(time.time())}
     try:
-        with open(TRAVEL_CALIBRATION_PATH, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(TRAVEL_CALIBRATION_PATH, data, indent=2)
     except Exception:
         pass
 

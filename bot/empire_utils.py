@@ -419,8 +419,7 @@ def _load_health():
 def _save_health(data):
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(HEALTH_JSON_PATH, "w") as f:
-            json.dump(data, f)
+        atomic_write_json(HEALTH_JSON_PATH, data)
     except Exception:
         pass
 
@@ -616,8 +615,7 @@ class ThrottledSession:
             return
         object.__setattr__(self, "_last_beat", now)
         try:
-            with open(LAST_ALIVE_JSON_PATH, "w") as f:
-                json.dump({"lastAlive": int(now)}, f)
+            atomic_write_json(LAST_ALIVE_JSON_PATH, {"lastAlive": int(now)})
         except Exception:
             pass
 
@@ -711,8 +709,7 @@ def migrate_legacy_configs():
             total = 0
         data["garrisonThresholdTotal"] = total or 50000
     try:
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(path, data, indent=2)
         logger.info("[config] espionage_settings: garrisonThresholds (legado) → "
                     "garrisonThresholdTotal=%d", data["garrisonThresholdTotal"])
     except Exception:
@@ -745,8 +742,7 @@ def validate_configs():
                 logger.warning("[config] %s: %s", fname, w)
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(CONFIG_WARNINGS_PATH, "w") as f:
-            json.dump(warnings, f)
+        atomic_write_json(CONFIG_WARNINGS_PATH, warnings)
     except Exception:
         pass
     return warnings
@@ -797,8 +793,7 @@ def record_startup_downtime():
     cutoff = now - 14 * 86400          # nothing older than any mission lifetime matters
     windows = [w for w in windows if int(w.get("end", 0)) >= cutoff][-200:]
     try:
-        with open(DOWNTIME_WINDOWS_PATH, "w") as f:
-            json.dump(windows, f)
+        atomic_write_json(DOWNTIME_WINDOWS_PATH, windows)
     except OSError:
         pass
     _dt_cache["windows"] = windows

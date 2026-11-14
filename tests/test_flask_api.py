@@ -480,3 +480,67 @@ def test_spy_build_preview_drops_flag(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     assert c.post("/api/espionage/spy-build/preview").get_json()["ok"] is True
     assert (tmp_path / ".force_spy_build").exists()
+
+
+# ── P13.12 / P13.47: queue actions by item id ───────────────────────────────────
+
+def _queue_with(c, *buildings):
+    for b in buildings:
+        c.post("/api/building-queue/add", json={"cityName": "Lisboa", "buildingName": b, "targetLevel": 5})
+    return c.get("/api/building-queue").get_json()["queues"]["Lisboa"]
+
+
+def test_queue_items_expose_ids_and_no_internal_snapshot(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    items = _queue_with(c, "Academia", "Porto")
+    assert all(isinstance(i["id"], int) for i in items)
+    assert "_base" not in c.get("/api/building-queue").get_json()
+
+
+def test_remove_by_id_hits_the_right_item_on_a_stale_list(monkeypatch, tmp_path):
+    """The user sees [Academia, Porto, Museu]; the bot starts Academia and pops it. Clicking
+    remove on "Porto" (index 1 on screen) must remove Porto — by index it removed Museu."""
+    c = _client(monkeypatch, tmp_path)
+    items = _queue_with(c, "Academia", "Porto", "Museu")
+    porto = items[1]
+    q = db_manager.load_queue()                 # the bot pops the head
+    q["queues"]["Lisboa"].pop(0)
+    db_manager.save_queue(q)
+    r = c.post("/api/building-queue/remove", json={"cityName": "Lisboa", "id": porto["id"]})
+    assert r.status_code == 200
+    assert [i["building"] for i in r.get_json()["queue"]] == ["Museu"]
+
+
+def test_action_on_an_item_that_is_gone_is_a_409(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    items = _queue_with(c, "Academia", "Porto")
+    c.post("/api/building-queue/remove", json={"cityName": "Lisboa", "id": items[0]["id"]})
+    again = c.post("/api/building-queue/remove", json={"cityName": "Lisboa", "id": items[0]["id"]})
+    assert again.status_code == 409 and again.get_json()["stale"] is True
+    move = c.post("/api/building-queue/reorder", json={"cityName": "Lisboa", "id": items[0]["id"], "delta": 1})
+    assert move.status_code == 409
+
+
+def test_reorder_by_id_and_delta(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    items = _queue_with(c, "Academia", "Porto", "Museu")
+    r = c.post("/api/building-queue/reorder", json={"cityName": "Lisboa", "id": items[2]["id"], "delta": -1})
+    assert [i["building"] for i in r.get_json()["queue"]] == ["Academia", "Museu", "Porto"]
+    assert [i["building"] for i in c.get("/api/building-queue").get_json()["queues"]["Lisboa"]] \
+        == ["Academia", "Museu", "Porto"]
+
+
+# ── P13.11: dashboard spy actions go through the mission store ──────────────────
+
+def test_force_warehouse_rearms_in_the_store_and_keeps_bot_changes(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    db_manager.missions_save({"missions": [
+        {"targetCityId": "100", "originCityId": "1", "state": "DONE", "dispatchedAt": 10},
+        {"targetCityId": "200", "originCityId": "1", "state": "TRAVELING", "dispatchedAt": 20}]})
+    bot = db_manager.missions_load()            # bot holds the list…
+    assert c.post("/api/espionage/force-warehouse", json={"cityId": "100"}).status_code == 200
+    bot["missions"][1]["state"] = "WAITING_AT_CITY"
+    db_manager.missions_save(bot)               # …and saves its stale copy of mission 100
+    got = {m["targetCityId"]: m for m in c.get("/api/espionage/missions").get_json()["missions"]}
+    assert got["100"]["state"] == "WAITING_AT_CITY"     # the click survived
+    assert got["200"]["state"] == "WAITING_AT_CITY"

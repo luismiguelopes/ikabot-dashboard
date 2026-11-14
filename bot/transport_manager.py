@@ -17,6 +17,7 @@ import random
 import time
 
 from empire_utils import LOGS_DIR, logger
+from empire_utils import atomic_write_json
 
 TRANSPORT_QUEUE            = "transport"
 OWN_CITIES_PATH            = os.path.join(LOGS_DIR, "own_cities.json")
@@ -249,8 +250,7 @@ def _load_consolidate_state():
 def _save_consolidate_state(state):
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(CONSOLIDATE_STATE_PATH, "w") as f:
-            json.dump(state, f, indent=2)
+        atomic_write_json(CONSOLIDATE_STATE_PATH, state, indent=2)
     except Exception:
         pass
 
@@ -570,8 +570,7 @@ def save_wine_settings(data):
     settings["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
     settings["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 5))))
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WINE_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+    atomic_write_json(WINE_SETTINGS_PATH, settings, indent=2)
     return settings
 
 
@@ -787,8 +786,7 @@ def save_wine_buy_settings(data):
     settings["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
     settings["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WINE_BUY_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+    atomic_write_json(WINE_BUY_SETTINGS_PATH, settings, indent=2)
     return settings
 
 
@@ -837,8 +835,7 @@ def _write_wine_buy_status(status):
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
         status["now"] = int(time.time())
-        with open(WINE_BUY_STATUS_PATH, "w") as f:
-            json.dump(status, f, indent=2)
+        atomic_write_json(WINE_BUY_STATUS_PATH, status, indent=2)
     except Exception:
         logger.error("[wine-buy] falha a escrever status", exc_info=True)
 

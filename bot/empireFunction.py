@@ -19,6 +19,7 @@ from empire_utils import (
     health_guard, throttle_session, record_success, record_failure,
     validate_configs, migrate_legacy_configs, record_startup_downtime,
 )
+from empire_utils import atomic_write_json
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_start_scan, collect_shallow_scan
@@ -94,8 +95,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             cycle_count += 1
             try:
                 os.makedirs(LOGS_DIR, exist_ok=True)
-                with open(LAST_ALIVE_JSON_PATH, "w") as f:
-                    json.dump({"lastAlive": int(time.time()), "cycle": cycle_count}, f)
+                atomic_write_json(LAST_ALIVE_JSON_PATH, {"lastAlive": int(time.time()), "cycle": cycle_count})
             except Exception:
                 pass
 

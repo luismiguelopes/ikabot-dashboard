@@ -6,7 +6,8 @@ import { MATERIALS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { ConstructionTemplate } from './ConstructionTemplate'
-import type { ApiData, BuildingQueue, BuildingCostsData, Movement } from '../types'
+import { apiAction } from '../api'
+import type { ApiData, BuildingQueue, BuildingCostsData, Movement, QueueItem } from '../types'
 
 interface BuildingInCity {
   name: string
@@ -101,7 +102,7 @@ function QueueBudget({ queue, costsData, data }: { queue: BuildingQueue | null; 
 
   if (!budget) return null
 
-  const nowSecs = now / 1000
+  const nowSecs = now   // useLiveClock already returns seconds (dividing again gave 1970 dates)
   const activeResources = MATERIALS.map((m, i) => {
     const missing  = Math.max(0, budget.total[i] - budget.available[i])
     const rate     = budget.effRate[i]
@@ -297,19 +298,24 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
     }).then(fetchQueue)
   }
 
-  const handleRemove = (idx: number) => {
-    fetch('/api/building-queue/remove', {
+  // Queue actions name the item by its id, not its position: the list on screen goes stale
+  // when the bot starts a build and pops the head, and a bare index would then remove or
+  // move a different building. A stale id gets a 409 → toast, and the list is refreshed.
+  const handleRemove = (item: QueueItem, idx: number) => {
+    apiAction('/api/building-queue/remove', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cityName: selCity, index: idx }),
+      body: JSON.stringify(item.id != null ? { cityName: selCity, id: item.id } : { cityName: selCity, index: idx }),
     }).then(fetchQueue)
   }
 
-  const handleReorder = (fromIndex: number, toIndex: number) => {
-    fetch('/api/building-queue/reorder', {
+  const handleReorder = (item: QueueItem, fromIndex: number, delta: number) => {
+    apiAction('/api/building-queue/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cityName: selCity, fromIndex, toIndex }),
+      body: JSON.stringify(item.id != null
+        ? { cityName: selCity, id: item.id, delta }
+        : { cityName: selCity, fromIndex, toIndex: fromIndex + delta }),
     }).then(fetchQueue)
   }
 
@@ -572,7 +578,7 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
                     const curLv = parseInt(String(empireData[selCity]?.[item.building] ?? '')) || 0
                     return (
                       <div
-                        key={idx}
+                        key={item.id ?? idx}
                         className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100 hover:bg-slate-100 transition-colors"
                       >
                         <span className="shrink-0 w-5 text-xs text-slate-400 text-right font-mono">{idx + 1}.</span>
@@ -584,17 +590,17 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
                         </div>
                         <div className="flex gap-0.5 shrink-0">
                           <button
-                            onClick={() => handleReorder(idx, idx - 1)}
+                            onClick={() => handleReorder(item, idx, -1)}
                             disabled={idx === 0}
                             className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-20 transition-colors"
                           ><i className="fa-solid fa-chevron-up text-xs" /></button>
                           <button
-                            onClick={() => handleReorder(idx, idx + 1)}
+                            onClick={() => handleReorder(item, idx, 1)}
                             disabled={idx === cityQueue.length - 1}
                             className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-200 disabled:opacity-20 transition-colors"
                           ><i className="fa-solid fa-chevron-down text-xs" /></button>
                           <button
-                            onClick={() => handleRemove(idx)}
+                            onClick={() => handleRemove(item, idx)}
                             className="p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                           ><i className="fa-solid fa-xmark text-xs" /></button>
                         </div>

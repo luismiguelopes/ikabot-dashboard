@@ -600,7 +600,10 @@ def test_reexecute_still_rearms_missing_report(monkeypatch):
 def test_save_prunes_old_terminal_missions(monkeypatch, tmp_path):
     """_save_missions drops terminal missions older than the retention window but keeps
     in-flight ones, recent terminals, and timestamp-less entries regardless of age."""
-    monkeypatch.setattr(em, "SPY_MISSIONS_PATH", str(tmp_path / "m.json"))
+    import db_manager
+    monkeypatch.setattr(db_manager, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(db_manager, "_LOGS_DIR", str(tmp_path))
+    monkeypatch.setattr(db_manager, "_DB_INIT_DONE", False)
     monkeypatch.setattr(em, "_load_espionage_settings", lambda: {"missionRetentionDays": 30})
     now = _now()
     old = now - 40 * 86400

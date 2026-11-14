@@ -280,3 +280,85 @@ def test_backup_db_daily_and_rotation(tmp_path):
     db_manager.backup_db(str(dest_dir))          # today exists → only rotation runs
     left = sorted(f for f in os.listdir(dest_dir) if f.endswith(".db"))
     assert len(left) == 7 and os.path.basename(path) in left
+
+
+# ── P13.12: the building queue is merged on save, not replaced ───────────────────
+
+def _two_item_queue(tmp):
+    _setup_tmp_db(tmp)
+    db_manager.save_queue({"enabled": True, "inProgress": {}, "transportErrors": {},
+                           "queues": {"Lisboa": [{"building": "Academia", "targetLevel": 15, "addedAt": 1},
+                                                 {"building": "Porto", "targetLevel": 9, "addedAt": 2}]}})
+    return db_manager.load_queue()
+
+
+def _names(q, city="Lisboa"):
+    return [i["building"] for i in q["queues"].get(city, [])]
+
+
+def test_item_added_by_the_dashboard_survives_a_stale_bot_save():
+    """The bot loads, spends minutes on HTTP, then saves. An item the dashboard added in
+    between used to be erased by that save."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = _two_item_queue(tmp)                    # bot's copy (start of its pass)
+        gui = db_manager.load_queue()                 # dashboard click
+        gui["queues"]["Lisboa"].append({"building": "Museu", "targetLevel": 4, "addedAt": 3})
+        gui["queues"].setdefault("Faro", []).append({"building": "Taberna", "targetLevel": 7, "addedAt": 4})
+        db_manager.save_queue(gui)
+
+        bot["queues"]["Lisboa"].pop(0)                # bot started Academia → popped the head
+        bot["inProgress"]["Lisboa"] = {"building": "Academia", "position": 3, "fromLevel": 14,
+                                       "toLevel": 15, "startedAt": 10, "eta": 99}
+        db_manager.save_queue(bot)
+
+        final = db_manager.load_queue()
+        assert _names(final) == ["Porto", "Museu"]
+        assert _names(final, "Faro") == ["Taberna"]
+        assert final["inProgress"]["Lisboa"]["eta"] == 99
+
+
+def test_item_removed_by_the_dashboard_is_not_resurrected_by_the_bot():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = _two_item_queue(tmp)
+        gui = db_manager.load_queue()
+        gui["queues"]["Lisboa"].pop(1)                # user removes "Porto"
+        db_manager.save_queue(gui)
+        bot["queues"]["Lisboa"][1]["failedAttempts"] = 2   # bot edits the item it still holds
+        db_manager.save_queue(bot)
+        assert _names(db_manager.load_queue()) == ["Academia"]
+
+
+def test_dashboard_reorder_survives_and_bot_edit_is_kept():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = _two_item_queue(tmp)
+        gui = db_manager.load_queue()
+        gui["queues"]["Lisboa"].reverse()
+        db_manager.save_queue(gui)
+        bot["queues"]["Lisboa"][0]["failedAttempts"] = 3   # Academia
+        db_manager.save_queue(bot)
+        final = db_manager.load_queue()
+        assert _names(final) == ["Porto", "Academia"]
+        assert final["queues"]["Lisboa"][1]["failedAttempts"] == 3
+
+
+def test_enabled_flag_only_written_by_whoever_changed_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        bot = _two_item_queue(tmp)
+        gui = db_manager.load_queue()
+        gui["enabled"] = False
+        db_manager.save_queue(gui)
+        bot["transportErrors"]["Lisboa"] = {"failedAt": 5, "origin": "Faro", "resource": "Wood"}
+        db_manager.save_queue(bot)                    # bot never touched `enabled`
+        final = db_manager.load_queue()
+        assert final["enabled"] is False
+        assert final["transportErrors"]["Lisboa"]["origin"] == "Faro"
+
+
+def test_saving_the_same_blob_twice_is_stable():
+    with tempfile.TemporaryDirectory() as tmp:
+        q = _two_item_queue(tmp)
+        q["queues"]["Lisboa"].append({"building": "Museu", "targetLevel": 4, "addedAt": 3})
+        db_manager.save_queue(q)
+        db_manager.save_queue(q)
+        assert _names(db_manager.load_queue()) == ["Academia", "Porto", "Museu"]
+        assert all(i.get("id") for i in q["queues"]["Lisboa"])

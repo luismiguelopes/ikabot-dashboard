@@ -137,8 +137,7 @@ def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
             "expiresAt": None if permanent else now + max(1, expiry_days) * 86400,
         }
         os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(PLAYER_MARKS_JSON_PATH, "w") as f:
-            json.dump(marks, f, indent=2)
+        atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
         logger.info("[espionage] auto-ignorar %s (%s) — %s [strike %d/%d]",
                     player_name, city_id, note, count, permanent_after)
     except Exception:
@@ -148,11 +147,15 @@ def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
 # ── Persistence helpers ───────────────────────────────────────────────────────
 
 def _load_missions():
+    """{"missions": [...]} from SQLite (db_manager.missions_load), plus the "_base" snapshot
+    that lets _save_missions write only what changed. If the read fails the result is an
+    empty list WITH an empty snapshot, so a later save cannot delete anything."""
     try:
-        with open(SPY_MISSIONS_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"missions": []}
+        from db_manager import missions_load
+        return missions_load()
+    except Exception:
+        logger.error("[espionage] leitura das missões falhou", exc_info=True)
+        return {"missions": [], "_base": {}}
 
 
 def _mission_retention_secs():
@@ -208,8 +211,8 @@ def _save_missions(data):
         _notify_new_failures(_load_missions().get("missions", []), data["missions"])
     except Exception:
         pass
-    with open(SPY_MISSIONS_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    from db_manager import missions_save
+    missions_save(data)
 
 
 SPY_DISPATCH_QUEUE = "spy_dispatch"

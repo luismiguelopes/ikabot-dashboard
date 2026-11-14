@@ -81,6 +81,25 @@ _DEFAULT_ESPIONAGE_SETTINGS = {
 }
 
 
+def _atomic_write_json(path, data, **dump_kwargs):
+    """Write JSON via a temp file + os.replace so the bot never reads a half-written
+    settings file (same helper as the bot's empire_utils.atomic_write_json)."""
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(data, f, **dump_kwargs)
+    os.replace(tmp, path)
+
+
+def _spy_missions():
+    """Spy missions as a list (SQLite since P13.11; never the legacy JSON file)."""
+    if not _db:
+        return []
+    try:
+        return _db.missions_load().get("missions", [])
+    except Exception:
+        return []
+
+
 def get_last_modified_date(filepath):
     if os.path.exists(filepath):
         t = os.path.getmtime(filepath)
@@ -631,8 +650,7 @@ def api_world_scan_mark():
         entry["expiresAt"] = None
     marks[mark_key] = entry
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(PLAYER_MARKS_JSON_PATH, "w") as f:
-        json.dump(marks, f, indent=2)
+    _atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
     return jsonify({"ok": True})
 
 
@@ -663,8 +681,7 @@ def api_world_scan_action():
     entry.setdefault("actions", []).append({"ts": int(time.time()), "text": text})
     entry["updatedAt"] = int(time.time())
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(PLAYER_MARKS_JSON_PATH, "w") as f:
-        json.dump(marks, f, indent=2)
+    _atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
     return jsonify({"ok": True})
 
 
@@ -696,15 +713,39 @@ def _load_queue_settings():
 
 def _save_queue_settings(data):
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(QUEUE_SETTINGS_JSON_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(QUEUE_SETTINGS_JSON_PATH, data, indent=2)
 
 
 @app.route("/api/building-queue")
 def api_building_queue():
     data = _load_building_queue()
+    data.pop("_base", None)          # merge snapshot (db_manager.save_queue) — internal
     data.update(_load_queue_settings())
     return jsonify(data)
+
+
+def _queue_index_of(city_queue, body, index_key="index"):
+    """Position of the item a queue action refers to. Prefer the item's stable `id`: the
+    list on screen can be stale (the bot pops the head when a build starts), so a bare
+    index could hit a different building than the one the user clicked. Returns
+    (index, error_response) — exactly one is None."""
+    if body.get("id") is not None:
+        try:
+            wanted = int(body["id"])
+        except (ValueError, TypeError):
+            return None, (jsonify({"error": "id inválido"}), 400)
+        for i, it in enumerate(city_queue):
+            if it.get("id") == wanted:
+                return i, None
+        return None, (jsonify({"error": "Esse item já não está na fila — lista actualizada",
+                               "stale": True}), 409)
+    try:
+        index = int(body.get(index_key, -1))
+    except (ValueError, TypeError):
+        return None, (jsonify({"error": "index inválido"}), 400)
+    if index < 0 or index >= len(city_queue):
+        return None, (jsonify({"error": "index fora do intervalo"}), 400)
+    return index, None
 
 
 @app.route("/api/building-queue/add", methods=["POST"])
@@ -734,15 +775,12 @@ def api_building_queue_add():
 def api_building_queue_remove():
     body = request.get_json(force=True)
     city_name = str(body.get("cityName", "")).strip()
-    try:
-        index = int(body.get("index", -1))
-    except (ValueError, TypeError):
-        return jsonify({"error": "index inválido"}), 400
 
     data = _load_building_queue()
     city_queue = data.get("queues", {}).get(city_name, [])
-    if index < 0 or index >= len(city_queue):
-        return jsonify({"error": "index fora do intervalo"}), 400
+    index, err = _queue_index_of(city_queue, body)
+    if err:
+        return err
 
     city_queue.pop(index)
     data["queues"][city_name] = city_queue
@@ -808,15 +846,20 @@ def api_building_queue_settings():
 def api_building_queue_reorder():
     body = request.get_json(force=True)
     city_name = str(body.get("cityName", "")).strip()
-    try:
-        from_idx = int(body.get("fromIndex", -1))
-        to_idx   = int(body.get("toIndex",   -1))
-    except (ValueError, TypeError):
-        return jsonify({"error": "fromIndex/toIndex inválidos"}), 400
 
     data = _load_building_queue()
     city_queue = data.get("queues", {}).get(city_name, [])
     n = len(city_queue)
+    from_idx, err = _queue_index_of(city_queue, body, index_key="fromIndex")
+    if err:
+        return err
+    try:
+        if body.get("id") is not None and "delta" in body:
+            to_idx = from_idx + int(body["delta"])      # move relative to where it is NOW
+        else:
+            to_idx = int(body.get("toIndex", -1))
+    except (ValueError, TypeError):
+        return jsonify({"error": "fromIndex/toIndex inválidos"}), 400
     if not (0 <= from_idx < n and 0 <= to_idx < n) or from_idx == to_idx:
         return jsonify({"error": "índices inválidos"}), 400
 
@@ -880,8 +923,7 @@ def api_telegram_settings_save():
     except (TypeError, ValueError):
         data["digestHour"] = 21
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(TELEGRAM_SETTINGS_PATH, "w") as f:
-        json.dump(data, f)
+    _atomic_write_json(TELEGRAM_SETTINGS_PATH, data)
     return jsonify({"ok": True})
 
 
@@ -909,15 +951,10 @@ def api_espionage_spy_counts():
     """
     # Merge in-field counts from missions (always accurate)
     in_field: dict[str, int] = {}
-    try:
-        with open(SPY_MISSIONS_PATH) as f:
-            missions = json.load(f).get("missions", [])
-        for m in missions:
-            if m.get("state") == "TRAVELING":
-                cid = str(m.get("originCityId", ""))
-                in_field[cid] = in_field.get(cid, 0) + m.get("numAgents", 0)
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
+    for m in _spy_missions():
+        if m.get("state") == "TRAVELING":
+            cid = str(m.get("originCityId", ""))
+            in_field[cid] = in_field.get(cid, 0) + m.get("numAgents", 0)
 
     # Primary source: game-fetched counts
     try:
@@ -944,13 +981,7 @@ def api_espionage_spy_counts():
 
 @app.route("/api/espionage/missions")
 def api_espionage_missions():
-    try:
-        with open(SPY_MISSIONS_PATH) as f:
-            return jsonify(json.load(f))
-    except FileNotFoundError:
-        return jsonify({"missions": []})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"missions": _spy_missions()})
 
 
 @app.route("/api/own-cities")
@@ -1012,8 +1043,7 @@ def api_world_scan_settings_post():
                                      f"and {WORLD_SCAN_RADIUS_MAX}"}), 400
         settings["radius"] = radius
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WORLD_SCAN_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+    _atomic_write_json(WORLD_SCAN_SETTINGS_PATH, settings, indent=2)
     return jsonify({"ok": True, **settings})
 
 
@@ -1044,8 +1074,7 @@ def api_espionage_settings_post():
     if "processingEnabled" in body:
         existing["processingEnabled"] = bool(body["processingEnabled"])
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(ESPIONAGE_SETTINGS_PATH, "w") as f:
-        json.dump(existing, f, indent=2)
+    _atomic_write_json(ESPIONAGE_SETTINGS_PATH, existing, indent=2)
     return jsonify({"ok": True})
 
 
@@ -1247,8 +1276,7 @@ def api_consolidate_post():
     if settings["enabled"] and not settings["destCityId"]:
         return jsonify({"error": "Cidade de destino obrigatória"}), 400
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(CONSOLIDATE_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+    _atomic_write_json(CONSOLIDATE_SETTINGS_PATH, settings, indent=2)
     return jsonify({"status": "ok", "settings": settings})
 
 
@@ -1317,8 +1345,7 @@ def api_farm_army_set():
     if "earlyRespyEnabled" in data:
         s["earlyRespyEnabled"] = bool(data.get("earlyRespyEnabled"))
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(FARM_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(FARM_SETTINGS_PATH, s, indent=2)
     return jsonify({"ok": True, **{k: s[k] for k in
                     ("army", "fleet", "spyAgents", "shipReserveEnabled", "reserveHorizonMin",
                      "earlyRespyEnabled") if k in s}})
@@ -1375,24 +1402,20 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
         # garrison (troops) for this target.
         best_wh  = (-1, 0)      # (reportedAt, loot)
         best_gar = (-1, None)   # (reportedAt, troops) — successful reads only
-        try:
-            with open(SPY_MISSIONS_PATH) as f:
-                for m in json.load(f).get("missions", []):
-                    if str(m.get("targetCityId", "")) != str(city_id):
-                        continue
-                    if m.get("state") == "DONE":
-                        res = (m.get("result") or {}).get("resources") or {}
-                        ts  = int((m.get("result") or {}).get("reportedAt", 0)
-                                  or m.get("executedAt", 0) or 0)
-                        if res and ts >= best_wh[0]:
-                            best_wh = (ts, sum(int(v or 0) for v in res.values()))
-                    g = m.get("garrisonResult") or {}
-                    if g.get("success") and ("troops" in g):
-                        ts = int(g.get("reportedAt", 0) or m.get("garrisonExecutedAt", 0) or 0)
-                        if ts >= best_gar[0]:
-                            best_gar = (ts, g.get("troops") or {})
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+        for m in _spy_missions():
+            if str(m.get("targetCityId", "")) != str(city_id):
+                continue
+            if m.get("state") == "DONE":
+                res = (m.get("result") or {}).get("resources") or {}
+                ts  = int((m.get("result") or {}).get("reportedAt", 0)
+                          or m.get("executedAt", 0) or 0)
+                if res and ts >= best_wh[0]:
+                    best_wh = (ts, sum(int(v or 0) for v in res.values()))
+            g = m.get("garrisonResult") or {}
+            if g.get("success") and ("troops" in g):
+                ts = int(g.get("reportedAt", 0) or m.get("garrisonExecutedAt", 0) or 0)
+                if ts >= best_gar[0]:
+                    best_gar = (ts, g.get("troops") or {})
 
         updates = {}
         if not int(t.get("last_loot", 0) or 0) and best_wh[1] > 0:
@@ -1500,8 +1523,7 @@ def _unignore_farm_target(city_id):
                 json_marks[k]["updatedAt"] = int(time.time())
                 json_changed = True
         if json_changed:
-            with open(PLAYER_MARKS_JSON_PATH, "w") as f:
-                json.dump(json_marks, f, indent=2)
+            _atomic_write_json(PLAYER_MARKS_JSON_PATH, json_marks, indent=2)
     except Exception:
         pass
 
@@ -1646,8 +1668,7 @@ def api_alert_thresholds_post():
         except (TypeError, ValueError):
             data[k] = v
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(ALERT_THRESHOLDS_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(ALERT_THRESHOLDS_PATH, data, indent=2)
     return jsonify({"ok": True, **data})
 
 
@@ -1672,8 +1693,7 @@ def api_alert_settings_post():
         "checkMinutes":    max(0, min(120, int(data.get("checkMinutes", 0)))),
     }
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(ALERT_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(ALERT_SETTINGS_PATH, s, indent=2)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -1699,8 +1719,7 @@ def api_watchlist_post():
     s = {"enabled": bool(data.get("enabled", False)),
          "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WATCHLIST_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(WATCHLIST_SETTINGS_PATH, s, indent=2)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -1759,8 +1778,7 @@ def api_wine_post():
     s["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
     s["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 5))))
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WINE_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(WINE_SETTINGS_PATH, s, indent=2)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -1799,8 +1817,7 @@ def api_wine_buy_post():
     s["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
     s["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(WINE_BUY_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(WINE_BUY_SETTINGS_PATH, s, indent=2)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -1860,8 +1877,7 @@ def api_spy_build_post():
         "maxCountsAgeMinutes": _int("maxCountsAgeMinutes", 5, 240),
     }
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(SPY_BUILD_SETTINGS_PATH, "w") as f:
-        json.dump(s, f, indent=2)
+    _atomic_write_json(SPY_BUILD_SETTINGS_PATH, s, indent=2)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -2033,8 +2049,7 @@ def _load_json(path, default):
 
 def _save_json(path, data):
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(path, data, indent=2)
 
 
 _SPY_GONE_MARKERS = ("não encontrado ao tentar executar", "possivelmente capturado",
@@ -2055,7 +2070,9 @@ def api_espionage_force_warehouse():
     if not city_id:
         return jsonify({"error": "cityId required"}), 400
 
-    data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    data     = _db.missions_load()
     missions = data.get("missions", [])
     now      = int(time.time())
     # Act on the NEWEST mission for the city — the one the UI shows. File order is not
@@ -2065,12 +2082,12 @@ def api_espionage_force_warehouse():
         if m.get("state") == "WAITING_AT_CITY":
             missions[i]["executeAfter"] = now - 1
             data["missions"] = missions
-            _save_json(SPY_MISSIONS_PATH, data)
+            _db.missions_save(data)
             return jsonify({"ok": True})
         if m.get("state") == "WAITING_FOR_GARRISON":
             missions[i]["garrisonExecuteAfter"] = now - 1
             data["missions"] = missions
-            _save_json(SPY_MISSIONS_PATH, data)
+            _db.missions_save(data)
             return jsonify({"ok": True})
         if m.get("state") in ("EXECUTING_WAREHOUSE", "EXECUTING_GARRISON"):
             return jsonify({"ok": True, "message": "Missão já em execução"})
@@ -2094,7 +2111,7 @@ def api_espionage_force_warehouse():
             missions[i]["warehouseRetries"] = 0
             missions[i]["error"] = None
             data["missions"] = missions
-            _save_json(SPY_MISSIONS_PATH, data)
+            _db.missions_save(data)
             return jsonify({"ok": True})
 
     return jsonify({"error": "Nenhum espião estacionado nessa cidade"}), 404
@@ -2107,7 +2124,9 @@ def api_espionage_recall_spy():
     if not city_id:
         return jsonify({"error": "cityId required"}), 400
 
-    data     = _load_json(SPY_MISSIONS_PATH, {"missions": []})
+    if not _db:
+        return jsonify({"error": "Base de dados indisponível"}), 503
+    data     = _db.missions_load()
     missions = data.get("missions", [])
     now      = int(time.time())
     changed  = False
@@ -2142,7 +2161,7 @@ def api_espionage_recall_spy():
     if not changed:
         return jsonify({"error": "Nenhum espião activo nessa cidade"}), 404
     data["missions"] = missions
-    _save_json(SPY_MISSIONS_PATH, data)
+    _db.missions_save(data)
     return jsonify({"ok": True})
 
 
@@ -2204,8 +2223,7 @@ def api_pause_set():
     data = request.get_json(silent=True) or {}
     paused = bool(data.get("paused", False))
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(PAUSE_PATH, "w") as f:
-        json.dump({"paused": paused}, f)
+    _atomic_write_json(PAUSE_PATH, {"paused": paused})
     return jsonify({"ok": True, "paused": paused})
 
 

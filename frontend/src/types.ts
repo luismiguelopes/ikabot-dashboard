@@ -79,6 +79,7 @@ export interface InProgressItem {
 }
 
 export interface QueueItem {
+  id?: number          // row id — queue actions use it so a stale list can't hit another item
   building: string
   targetLevel: number
   addedAt: number

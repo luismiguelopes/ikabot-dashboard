@@ -16,6 +16,7 @@ if _here not in sys.path:
 
 from empire_utils import (LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, logger,
                           with_retry, save_capture)
+from empire_utils import atomic_write_json
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -102,8 +103,7 @@ def _alert_incoming_attacks(hostiles, time_now):
                        h["origin"], h["destination"], eta_mins)
     if changed or seen:
         try:
-            with open(_ATTACK_ALERTS_PATH, "w") as f:
-                json.dump(seen, f)
+            atomic_write_json(_ATTACK_ALERTS_PATH, seen)
         except Exception:
             pass
 
@@ -265,8 +265,7 @@ def _collect_movements(session, city_id):
 def _write_scan_status(status, phase, progress, total, message=""):
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        with open(EMPIRE_SCAN_STATUS_PATH, "w") as f:
-            json.dump({"status": status, "phase": phase, "progress": progress, "total": total, "message": message}, f)
+        atomic_write_json(EMPIRE_SCAN_STATUS_PATH, {"status": status, "phase": phase, "progress": progress, "total": total, "message": message})
     except Exception:
         pass
 
@@ -429,8 +428,7 @@ def collect_city_data(session, ids, cities):
         for bn in building_names:
             formatted_empire[city_name][bn] = buildings.get(bn, "")
 
-    with open(os.path.join(LOGS_DIR, "own_cities.json"), "w") as f:
-        json.dump(own_cities_list, f)
+    atomic_write_json(os.path.join(LOGS_DIR, "own_cities.json"), own_cities_list)
 
     return status_summary, formatted_empire, resources_data
 
@@ -518,8 +516,7 @@ def _collect_military_data(session):
 
     if result:
         try:
-            with open(military_path, "w") as f:
-                json.dump({"lastUpdated": int(time.time()), "byCityName": result}, f, indent=2)
+            atomic_write_json(military_path, {"lastUpdated": int(time.time()), "byCityName": result}, indent=2)
         except Exception:
             logger.error("[military] erro ao escrever military.json", exc_info=True)
 
@@ -551,8 +548,7 @@ def refresh_city_military(session, city_id, city_name):
         data = {"byCityName": {}}
     data.setdefault("byCityName", {})[city_name] = entry   # only this city; keep others' cache
     try:
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(path, data, indent=2)
     except Exception:
         pass
     logger.info("[military] %s (ao vivo): %d tropa(s), %d frota(s)",
@@ -582,17 +578,13 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
     except Exception:
         pass
 
-    with open(os.path.join(LOGS_DIR, "statusSummary.json"), "w") as f:
-        json.dump(status_summary, f, indent=4)
+    atomic_write_json(os.path.join(LOGS_DIR, "statusSummary.json"), status_summary, indent=4)
 
-    with open(os.path.join(LOGS_DIR, "empire.json"), "w") as f:
-        json.dump(formatted_empire, f, indent=4)
+    atomic_write_json(os.path.join(LOGS_DIR, "empire.json"), formatted_empire, indent=4)
 
-    with open(os.path.join(LOGS_DIR, "resources.json"), "w") as f:
-        json.dump(resources_data, f, indent=4)
+    atomic_write_json(os.path.join(LOGS_DIR, "resources.json"), resources_data, indent=4)
 
-    with open(os.path.join(LOGS_DIR, "movements.json"), "w") as f:
-        json.dump(movements, f, indent=4)
+    atomic_write_json(os.path.join(LOGS_DIR, "movements.json"), movements, indent=4)
 
     ts = int(time.time())
     try:
@@ -614,5 +606,4 @@ def refresh_movements(session, first_city_id):
     """Re-fetch movements.json after transport dispatch so arrival ETAs are visible."""
     time.sleep(random.randint(5, 10))
     movements = _collect_movements(session, first_city_id)
-    with open(os.path.join(LOGS_DIR, "movements.json"), "w") as f:
-        json.dump(movements, f, indent=4)
+    atomic_write_json(os.path.join(LOGS_DIR, "movements.json"), movements, indent=4)

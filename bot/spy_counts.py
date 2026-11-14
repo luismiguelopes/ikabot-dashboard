@@ -16,6 +16,7 @@ import json
 import os
 
 from empire_utils import LOGS_DIR, logger
+from empire_utils import atomic_write_json
 from espionage_parsers import _parse_safehouse_page
 
 SPY_COUNTS_PATH = os.path.join(LOGS_DIR, "spy_counts.json")
@@ -31,8 +32,7 @@ def _load_spy_counts():
 
 def _save_spy_counts(data):
     os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(SPY_COUNTS_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_json(SPY_COUNTS_PATH, data, indent=2)
 
 
 def _fetch_city_spy_counts(session, city_id, city_name, position):

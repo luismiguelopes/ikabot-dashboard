@@ -21,6 +21,7 @@ from empire_utils import (
     FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
     FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, FORCE_COSTS_FLAG, FORCE_WINE_BUY_FLAG, lm, logger,
 )
+from empire_utils import atomic_write_json
 
 from ikabot.helpers.getJson import getCity
 from ikabot.config import actionRequest
@@ -81,7 +82,12 @@ def _load_queue():
         from db_manager import load_queue
         return load_queue()
     except Exception:
-        return {"queues": {}, "inProgress": {}, "transportErrors": {}, "enabled": True}
+        logger.warning("[build] leitura da fila de construção falhou", exc_info=True)
+        # "_base" present → a later save merges (nothing to change) instead of treating this
+        # empty placeholder as the whole queue and wiping the real one.
+        return {"queues": {}, "inProgress": {}, "transportErrors": {}, "enabled": True,
+                "_base": {"enabled": True, "items": {}, "order": {}, "inProgress": {},
+                          "transportErrors": {}}}
 
 
 def _save_queue(data):
@@ -330,8 +336,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
     logger.info(lm("cycle_sleep", mins=round(sleep_secs / 60)))
     wake_at = int(time.time() + sleep_secs)
     try:
-        with open(os.path.join(LOGS_DIR, "next_cycle.json"), "w") as f:
-            json.dump({"nextCycleAt": wake_at}, f)
+        atomic_write_json(os.path.join(LOGS_DIR, "next_cycle.json"), {"nextCycleAt": wake_at})
     except Exception:
         pass
     end_time = time.time() + sleep_secs
@@ -340,8 +345,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # write in empireFunction can be hours apart at night, so refresh it here (≤60s) so
         # liveness reflects the bot actually running, not the full-cycle cadence.
         try:
-            with open(os.path.join(LOGS_DIR, "last_alive.json"), "w") as f:
-                json.dump({"lastAlive": int(time.time())}, f)
+            atomic_write_json(os.path.join(LOGS_DIR, "last_alive.json"), {"lastAlive": int(time.time())})
         except Exception:
             pass
         # Notification digest (hourly/daily summary) — no game request, just Telegram/Discord.

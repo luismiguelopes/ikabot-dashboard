@@ -26,6 +26,7 @@ import random
 import time
 
 from empire_utils import LOGS_DIR, logger
+from empire_utils import atomic_write_json
 
 SPY_BUILD_SETTINGS_PATH = os.path.join(LOGS_DIR, "spy_build_settings.json")
 SPY_BUILD_STATUS_PATH   = os.path.join(LOGS_DIR, "spy_build_status.json")
@@ -73,10 +74,7 @@ def _load_json(path, default):
 def _write_status(status, now=None):
     try:
         status["at"] = int(time.time() if now is None else now)
-        tmp = SPY_BUILD_STATUS_PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(status, f, indent=2)
-        os.replace(tmp, SPY_BUILD_STATUS_PATH)
+        atomic_write_json(SPY_BUILD_STATUS_PATH, status, indent=2)
     except Exception:
         pass
 
