@@ -106,6 +106,50 @@ def has_building_queue(data=None):
     return False
 
 
+def _run_step(subsystem, fn):
+    """Run one smart_sleep work step. Returns True when it ran cleanly.
+
+    These steps used to sit in `except Exception: pass`: a farm/attack/spy pass that blew up
+    left no log line and no health record, and was retried every ≤60s in complete silence —
+    and this loop is where almost all farm activity runs. Now a failure is logged with its
+    traceback and counted in health.json (same streak/alert as the full-cycle health_guard).
+    The caller only `continue`s on True, so a step that keeps failing falls through to the
+    sleep below instead of spinning the loop hot."""
+    from empire_utils import record_success, record_failure
+    try:
+        fn()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        logger.warning("[%s] passo do smart_sleep falhou", subsystem, exc_info=True)
+        try:
+            record_failure(subsystem, "%s: %s" % (type(exc).__name__, exc))
+        except Exception:
+            pass
+        return False
+    try:
+        record_success(subsystem)
+    except Exception:
+        pass
+    return True
+
+
+def _is_due(subsystem, check):
+    """Evaluate a cheap 'is there work?' predicate; a failure is logged (throttled to one
+    line per subsystem per 10 min) instead of silently meaning 'nothing to do'."""
+    try:
+        return bool(check())
+    except Exception:
+        last = _is_due._logged.get(subsystem, 0)
+        if time.time() - last > 600:
+            _is_due._logged[subsystem] = time.time()
+            logger.warning("[%s] verificação de trabalho pendente falhou", subsystem, exc_info=True)
+        return False
+
+
+_is_due._logged = {}
+
+
 # ── Sleep scheduling ──────────────────────────────────────────────────────────
 
 def _get_next_construction_eta(data=None):
@@ -428,16 +472,13 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # Pending spy dispatch or recalls queued by the Flask UI — process immediately.
         # has_due_recalls: recalls waiting for a spaced retry must not skip the sleep.
         if session:
-            try:
-                from espionage_manager import has_pending_dispatch, process_dispatch_queue, has_due_recalls, _process_recall_queue
-                if has_due_recalls():
-                    _process_recall_queue(session)
+            import espionage_manager as _esp
+            if _is_due("espionage", _esp.has_due_recalls):
+                if _run_step("espionage", lambda: _esp._process_recall_queue(session)):
                     continue
-                if has_pending_dispatch():
-                    process_dispatch_queue(session)
+            elif _is_due("espionage", _esp.has_pending_dispatch):
+                if _run_step("espionage", lambda: _esp.process_dispatch_queue(session)):
                     continue
-            except Exception:
-                pass
 
         # Pending scheduled attacks — dispatch as soon as dispatchAfter is reached.
         # has_due_attacks (not has_pending_attacks): a future-scheduled attack must not
@@ -446,62 +487,47 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # refuses to handle while paused would otherwise spin this loop hot.
         from empire_utils import is_paused
         if session and _in_scan_hours() and not is_paused():
-            try:
-                from attack_manager import has_due_attacks, process_attack_queue
-                if has_due_attacks():
-                    process_attack_queue(session, in_active_hours=True)
-                    continue
-            except Exception:
-                pass
+            import attack_manager as _atk
+            if _is_due("attack", _atk.has_due_attacks) and _run_step(
+                    "attack", lambda: _atk.process_attack_queue(session, in_active_hours=True)):
+                continue
 
         # Target farm (F4) — event-driven: advance any target whose spy/attack/return
         # is due, within ~60s instead of waiting for the next full empire cycle.
         # Runs BEFORE scheduled transports so the income side claims a wake-up first;
         # internal transports below also yield trade ships via the farm reserve.
         if session and _in_scan_hours() and not is_paused():
-            try:
-                from farm_manager import has_due_farm, process_farm_targets
-                if has_due_farm():
-                    process_farm_targets(session, in_active_hours=True)
-                    continue
-            except Exception:
-                pass
+            import farm_manager as _farm
+            if _is_due("farm", _farm.has_due_farm) and _run_step(
+                    "farm", lambda: _farm.process_farm_targets(session, in_active_hours=True)):
+                continue
 
         # Spy pipeline steps that came due while asleep (execute warehouse/garrison/movements,
         # collect a report). The sleep length was fixed on entry from the ETAs known THEN, so
         # spies the farm re-armed mid-sleep would otherwise idle until it ended. Spaced ≥15s
         # apart so a step that cannot progress can never spin this loop hot.
         if session and _in_scan_hours() and not is_paused():
-            try:
-                from espionage_manager import has_due_spy_steps, process_spy_cycle
-                if (has_due_spy_steps()
-                        and time.time() - getattr(smart_sleep, "_last_spy_step", 0) >= 15):
-                    smart_sleep._last_spy_step = time.time()
-                    process_spy_cycle(session)
+            import espionage_manager as _esp2
+            if (_is_due("espionage", _esp2.has_due_spy_steps)
+                    and time.time() - getattr(smart_sleep, "_last_spy_step", 0) >= 15):
+                smart_sleep._last_spy_step = time.time()
+                if _run_step("espionage", lambda: _esp2.process_spy_cycle(session)):
                     continue
-            except Exception:
-                pass
 
         # Pending scheduled resource transports (same due-gating as attacks)
         if session and _in_scan_hours() and not is_paused():
-            try:
-                from transport_manager import has_due_transports, process_transport_queue
-                if has_due_transports():
-                    process_transport_queue(session, in_active_hours=True)
-                    continue
-            except Exception:
-                pass
+            import transport_manager as _tr
+            if _is_due("transport", _tr.has_due_transports) and _run_step(
+                    "transport", lambda: _tr.process_transport_queue(session, in_active_hours=True)):
+                continue
 
         # Opportunistic island scan during idle time — uses the natural sleep
         # variation as an organic source of randomness in batch size
         if session and _in_scan_hours() and (end_time - time.time()) > 50:
-            try:
-                from scan_collector import scan_has_pending, scan_next_island
-                if scan_has_pending():
-                    scan_next_island(session)
-                    continue  # re-check flags immediately after island scan
-            except Exception:
-                pass
+            import scan_collector as _scan
+            if _is_due("scan", _scan.scan_has_pending) and _run_step(
+                    "scan", lambda: _scan.scan_next_island(session)):
+                continue  # re-check flags immediately after island scan
 
         # The loop body (spy/farm/attack processing, HTTP) can run past end_time, making
         # the remaining time negative — clamp so time.sleep never gets a negative value.

@@ -14,7 +14,8 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, logger, with_retry
+from empire_utils import (LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, logger,
+                          with_retry, save_capture)
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
@@ -117,6 +118,7 @@ def _collect_movements(session, city_id):
             )
         )
         resp = with_retry(lambda: session.post(url), attempts=3, delay=30, label="movements")
+        save_capture("military_advisor.json", resp)
         data = json.loads(resp, strict=False)
         movements_raw = data[1][1][2]["viewScriptParams"]["militaryAndFleetMovements"]
         time_now = int(float(data[0][1]["time"]))
@@ -145,6 +147,10 @@ def _collect_movements(session, city_id):
                 "destination": "{} ({})".format(
                     m["target"]["name"], m["target"]["avatarName"]
                 ),
+                # City ids let consumers (the farm) match a movement to a target EXACTLY —
+                # names collide ("Castle-V" ⊂ "Castle-VII") and one player owns many targets.
+                "originCityId": str(m["origin"].get("cityId", "") or ""),
+                "targetCityId": str(m["target"].get("cityId", "") or ""),
                 "direction": "<-" if is_returning else "->",
                 "mission": m["event"].get("missionText", ""),
                 "timeLeft": max(time_left, 0),
@@ -204,6 +210,7 @@ def _collect_movements(session, city_id):
                     loot_returns.append({
                         "ts":         arrival_ts,
                         "fromCity":   m["target"].get("name", ""),
+                        "fromCityId": str(m["target"].get("cityId", "") or ""),
                         "fromPlayer": m["target"].get("avatarName", ""),
                         "toCity":     m["origin"].get("name", ""),
                         "islandId":   str(m["target"].get("islandId", "") or ""),

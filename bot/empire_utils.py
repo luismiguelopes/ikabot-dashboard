@@ -483,6 +483,81 @@ def health_guard(subsystem, swallow=True):
         record_success(subsystem)
 
 
+def atomic_write_json(path, data, **dump_kwargs):
+    """Write JSON via a temp file + os.replace, so a concurrent reader (the Flask dashboard,
+    the healthcheck) never sees a half-written file."""
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(data, f, **dump_kwargs)
+    os.replace(tmp, path)
+
+
+# ── Real-response captures (P13.43) ─────────────────────────────────────────────
+# The parsers were all written against hand-typed HTML. Keep the LAST real response of each
+# kind on the shared volume (overwritten in place, a few hundred KB in total) so parser fixes
+# and test fixtures can be built from what the game actually sends.
+CAPTURES_DIR = os.path.join(LOGS_DIR, "captures")
+
+
+def save_capture(name, text):
+    """Best-effort dump of a raw game response to captures/<name>. Never raises."""
+    try:
+        os.makedirs(CAPTURES_DIR, exist_ok=True)
+        tmp = os.path.join(CAPTURES_DIR, name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text if isinstance(text, str) else json.dumps(text))
+        os.replace(tmp, os.path.join(CAPTURES_DIR, name))
+    except Exception:
+        pass
+
+
+# ── Request accounting (P13.23) ─────────────────────────────────────────────────
+# Anti-detection is about how many requests the game sees, and until now nothing counted
+# them. Every get/post through the throttled session is tallied per hour and per kind
+# (function=/view=/action= of the request) in request_stats.json; the previous hour is
+# logged when the hour turns. Note the stock session fetches a fresh token with one extra
+# GET before EVERY post (Session.__token) — that GET never passes through this wrapper, so
+# it is reported as an estimate ("tokenGets" == posts), not counted in "get".
+REQUEST_STATS_PATH = os.path.join(LOGS_DIR, "request_stats.json")
+_REQUEST_STATS_KEEP_HOURS = 72
+_REQ_KIND_RE = re.compile(r'(?:^|[?&])(function|view|action)=([A-Za-z0-9_]+)')
+
+
+def _request_kind(args, kwargs):
+    """Short label for a game request: 'function:x' > 'view:x' > 'action:x' > 'other'."""
+    found = {}
+    params = kwargs.get("params")
+    if isinstance(params, dict):
+        for k in ("function", "view", "action"):
+            if params.get(k):
+                found[k] = str(params[k])
+    url = args[0] if args and isinstance(args[0], str) else kwargs.get("url")
+    if isinstance(url, str):
+        for k, v in _REQ_KIND_RE.findall(url):
+            found.setdefault(k, v)
+    for k in ("function", "view", "action"):
+        if k in found:
+            return "%s:%s" % (k, found[k])
+    return "other"
+
+
+def load_request_stats():
+    try:
+        with open(REQUEST_STATS_PATH) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) and isinstance(d.get("hours"), dict) else {"hours": {}}
+    except (FileNotFoundError, OSError, ValueError):
+        return {"hours": {}}
+
+
+def _summarise_hour(hour_key, st):
+    kinds = sorted((st.get("kinds") or {}).items(), key=lambda kv: -kv[1])[:5]
+    return ("[pedidos] %sh: %d pedidos ao jogo (GET %d, POST %d, +~%d GET de token) — %s"
+            % (hour_key[-2:], st.get("get", 0) + st.get("post", 0), st.get("get", 0),
+               st.get("post", 0), st.get("post", 0),
+               ", ".join("%s %d" % kv for kv in kinds) or "sem detalhe"))
+
+
 # ── Central anti-detection throttle (P5.3) ──────────────────────────────────────
 # Rule #1: every game request needs a delay. That was enforced by scattered time.sleep()
 # calls — easy to forget on a new code path. ThrottledSession wraps the game session so
@@ -504,6 +579,32 @@ class ThrottledSession:
         object.__setattr__(self, "_jitter", jitter)
         object.__setattr__(self, "_last_request", 0.0)
         object.__setattr__(self, "_last_beat", 0.0)
+        object.__setattr__(self, "_stats", load_request_stats())
+        object.__setattr__(self, "_stats_hour", time.strftime("%Y%m%d%H"))
+        object.__setattr__(self, "_stats_flushed", 0.0)
+
+    def _count(self, method, args, kwargs):
+        """Tally one request (never raises — accounting must not break a game call)."""
+        try:
+            hour = time.strftime("%Y%m%d%H")
+            hours = self._stats["hours"]
+            if hour != self._stats_hour:
+                prev = hours.get(self._stats_hour)
+                if prev:
+                    logger.info(_summarise_hour(self._stats_hour, prev))
+                object.__setattr__(self, "_stats_hour", hour)
+            st = hours.setdefault(hour, {"get": 0, "post": 0, "kinds": {}})
+            st[method] = st.get(method, 0) + 1
+            kind = _request_kind(args, kwargs)
+            st["kinds"][kind] = st["kinds"].get(kind, 0) + 1
+            now = time.time()
+            if now - self._stats_flushed >= 30:
+                object.__setattr__(self, "_stats_flushed", now)
+                for old in sorted(hours)[:-_REQUEST_STATS_KEEP_HOURS]:
+                    del hours[old]
+                atomic_write_json(REQUEST_STATS_PATH, self._stats)
+        except Exception:
+            pass
 
     def _heartbeat(self):
         # Every game request proves the bot is alive, so long WORK phases (building costs,
@@ -530,10 +631,12 @@ class ThrottledSession:
 
     def get(self, *args, **kwargs):
         self._throttle()
+        self._count("get", args, kwargs)
         return self._inner.get(*args, **kwargs)
 
     def post(self, *args, **kwargs):
         self._throttle()
+        self._count("post", args, kwargs)
         return self._inner.post(*args, **kwargs)
 
     def __getattr__(self, name):

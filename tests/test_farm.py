@@ -2119,3 +2119,15 @@ def test_v16_backfill_keeps_gated_targets_raidable(tmp_path):
     db_manager.init_db()
     assert db_manager.farm_get("1")["swept_at"] == 500
     assert db_manager.farm_get("2")["swept_at"] == 0
+
+
+def test_imported_report_is_never_the_farms_scout():
+    """P13.5: an imported report (old page re-read now, reportedAt = import time) must not be
+    evaluated as the fresh scout of a SPYING target."""
+    now = int(fm.time.time())
+    imported = {"state": "DONE", "targetCityId": "100", "importedFromReport": True,
+                "originCityId": None, "result": {"resources": {}, "reportedAt": now}}
+    real = {"state": "DONE", "targetCityId": "100", "originCityId": "1",
+            "result": {"resources": {"wood": 90000}, "reportedAt": now - 30}}
+    assert fm._latest_done_report([imported], "100", now - 600) is None
+    assert fm._latest_done_report([imported, real], "100", now - 600) is real

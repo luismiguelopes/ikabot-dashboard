@@ -2232,8 +2232,21 @@ def api_health():
             config_warnings = json.load(f)
     except Exception:
         pass
+    # Requests the bot sent to the game, per hour (P13.23) — last 24 hours, newest last.
+    requests_by_hour = []
+    try:
+        with open(os.path.join(LOGS_DIR, "request_stats.json")) as f:
+            hours = json.load(f).get("hours", {})
+        for h in sorted(hours)[-24:]:
+            st = hours[h]
+            requests_by_hour.append({"hour": h, "get": st.get("get", 0), "post": st.get("post", 0),
+                                     "tokenGets": st.get("post", 0),
+                                     "kinds": st.get("kinds", {})})
+    except Exception:
+        pass
     return jsonify({"status": "ok", "ts": int(time.time()), "dbOk": db_ok,
-                    "subsystems": subsystems, "configWarnings": config_warnings})
+                    "subsystems": subsystems, "configWarnings": config_warnings,
+                    "requests": requests_by_hour})
 
 
 @app.route("/api/stream")

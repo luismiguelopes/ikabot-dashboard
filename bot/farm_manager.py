@@ -339,6 +339,58 @@ def _skip_vacation_target(t):
                 "next_action": "spy"})
 
 
+# ── Exact target matching ───────────────────────────────────────────────────────
+# Loot returns, dispatches and fleet movements used to be tied to a target by name SUBSTRING
+# (city OR player). That collides: "Castle-V" is inside "Castle-VII"/"Castle-VIII"/"Castle-VIV",
+# and one player owns several targets — so with two raids in flight a target adopted another
+# target's return time / loot, which could even read as a naval bounce. Match by city id when
+# the record carries one; otherwise (older rows) by the exact city name plus the player.
+_LOOT_KEYS = ("wood", "wine", "marble", "crystal", "sulfur")
+
+
+def _norm(s):
+    return str(s or "").strip().casefold()
+
+
+def _split_place(label):
+    """'City (Player)' (movements.json origin/destination) → (city, player)."""
+    label = str(label or "").strip()
+    i = label.rfind(" (")
+    if i > 0 and label.endswith(")"):
+        return label[:i], label[i + 2:-1]
+    return label, ""
+
+
+def _is_target(t, city_id, city, player):
+    """True if a record (its city id / city name / player) refers to farm target `t`."""
+    tid, cid = str(t.get("target_city_id", "") or ""), str(city_id or "")
+    if tid and cid:
+        return tid == cid
+    name = _norm(t.get("target_city_name"))
+    if not name or _norm(city) != name:
+        return False
+    tp, p = _norm(t.get("target_player")), _norm(player)
+    return not tp or not p or tp == p
+
+
+def _target_loot_rows(t, limit):
+    """Loot-log rows that came from this exact target, newest first."""
+    # No name pre-filter in SQL: it would hide a renamed city's rows (same id, new name) and let
+    # same-named siblings ("Castle-VII" for "Castle-V") eat the row limit. Read the recent log
+    # and match here; `limit` caps the rows RETURNED for this target.
+    from db_manager import get_loot_log
+    rows = [r for r in get_loot_log(limit=1000)
+            if _is_target(t, r.get("from_city_id"), r.get("from_city"), r.get("from_player"))]
+    return rows[:limit]
+
+
+def _movement_place_is_target(t, m, field):
+    """field: 'destination' or 'origin' of a movements.json entry."""
+    city, player = _split_place(m.get(field))
+    cid = m.get("targetCityId" if field == "destination" else "originCityId")
+    return _is_target(t, cid, city, player)
+
+
 def _recent_return_loot(t):
     """ACTUAL loot the last raid on this target brought home (from loot_log), or None if no
     return is recorded since the last attack. Unlike last_loot (the stale SCOUTED warehouse
@@ -348,16 +400,11 @@ def _recent_return_loot(t):
     last_atk = int(t.get("last_attack_at", 0) or 0)
     if last_atk <= 0:
         return None
-    name = str(t.get("target_city_name", "") or "")
     try:
-        from db_manager import get_loot_log
-        for row in get_loot_log(limit=8, target=name):
+        for row in _target_loot_rows(t, 30):
             if int(row.get("ts", 0) or 0) < last_atk:
                 continue
-            if name and name.lower() not in str(row.get("from_city", "")).lower():
-                continue
-            return sum(int(row.get(k, 0) or 0)
-                       for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+            return sum(int(row.get(k, 0) or 0) for k in _LOOT_KEYS)
     except Exception:
         return None
     return None
@@ -369,17 +416,12 @@ def _returned_since_scout(t):
     since = int(t.get("last_spy_at", 0) or 0)
     if since <= 0:
         return 0
-    name = str(t.get("target_city_name", "") or "")
     total = 0
     try:
-        from db_manager import get_loot_log
-        for row in get_loot_log(limit=30, target=name):
+        for row in _target_loot_rows(t, 100):
             if int(row.get("ts", 0) or 0) < since:
                 continue
-            if name and name.lower() not in str(row.get("from_city", "")).lower():
-                continue
-            total += sum(int(row.get(k, 0) or 0)
-                         for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+            total += sum(int(row.get(k, 0) or 0) for k in _LOOT_KEYS)
     except Exception:
         return 0
     return total
@@ -549,6 +591,12 @@ def _latest_done_report(missions, target_city_id, since):
     for m in missions:
         if m.get("state") != "DONE":
             continue
+        # Only a mission a real spy ran counts as the farm's scout. An IMPORTED report is an
+        # old page re-read today (its reportedAt is the import time), so one "import reports"
+        # click during a SPYING wait used to be evaluated as the fresh scout — a stale garrison
+        # passed the gate, and a garrison-only import (no resources) read as "drained".
+        if m.get("importedFromReport"):
+            continue
         if str(m.get("targetCityId", "")) != str(target_city_id):
             continue
         res = m.get("result") or {}
@@ -611,14 +659,11 @@ def _real_return_eta(target):
             movements = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-    city = (target.get("target_city_name") or "").lower()
-    player = (target.get("target_player") or "").lower()
     best = None
     for m in movements:
         if not m.get("isOwn") or m.get("direction") != "<-":
             continue
-        dest = (m.get("destination") or "").lower()   # the enemy this raid hit
-        if (city and city in dest) or (player and player in dest):
+        if _movement_place_is_target(target, m, "destination"):   # the enemy this raid hit
             arr = m.get("arrivalTime", 0)
             if arr and (best is None or arr < best):
                 best = arr
@@ -637,15 +682,11 @@ def _raid_in_flight(target):
             movements = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return False
-    city = (target.get("target_city_name") or "").lower()
-    player = (target.get("target_player") or "").lower()
     for m in movements:
         if not m.get("isOwn"):
             continue
-        for fld in ("destination", "origin"):
-            v = (m.get(fld) or "").lower()
-            if (city and city in v) or (player and player in v):
-                return True
+        if any(_movement_place_is_target(target, m, fld) for fld in ("destination", "origin")):
+            return True
     return False
 
 
@@ -661,7 +702,10 @@ def _attack_was_sent(target):
     try:
         from db_manager import get_attack_log
         since = int(target.get("last_attack_at", 0) or 0) - 120
-        for r in get_attack_log(limit=50, target=target.get("target_city_name") or ""):
+        for r in get_attack_log(limit=300):   # no SQL name filter — see _target_loot_rows
+            if not _is_target(target, r.get("target_city_id"), r.get("target_city"),
+                              r.get("target_player")):
+                continue
             if r.get("success") and int(r.get("ts", 0) or 0) >= since:
                 return True
         return False

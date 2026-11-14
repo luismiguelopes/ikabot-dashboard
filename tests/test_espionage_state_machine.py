@@ -24,6 +24,9 @@ def _patch(monkeypatch, missions):
     monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(em, "_get_city_safehouse_position", lambda cid: 3)
     monkeypatch.setattr(em, "_is_farm_target", lambda cid: False)  # no real DB access
+    # report-baseline state: in memory only, "tab read just now, no reports yet"
+    monkeypatch.setattr(em, "_report_state", {"max": 0, "at": em.time.time(), "loaded": True})
+    monkeypatch.setattr(em, "_save_report_state", lambda: None)
     return holder
 
 
@@ -760,3 +763,140 @@ def test_sweep_keeps_only_the_newest_pool_of_a_farm_target(monkeypatch, tmp_path
     assert [q["originCityId"] for q in queued] == ["1"]
     assert h["missions"][0]["state"] == "RECALLED"
     assert h["missions"][1]["state"] == "DONE"
+
+
+# ── P13.1: a report must come from THIS execution (report-id baseline) ───────────
+
+def test_warehouse_collect_ignores_reports_older_than_the_execution(monkeypatch):
+    """The new report is missing/failed (no resources); the previous scout's successful one
+    (id 5 == baseline) must NOT be adopted as fresh."""
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_WAREHOUSE", collectAfter=_now() - 1,
+                                      executedAt=_now() - 60, reportBaselineId=5)])
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: {"garrisonThresholdTotal": 50000})
+    old = {"5": {"resources": {"wood": 90000}, "success": True, "targetCityId": "100"},
+           "9": {"resources": None, "success": False, "targetCityId": "100"}}
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k: old)
+    em.collect_mission_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "EXECUTING_WAREHOUSE"      # still waiting — nothing adopted
+    assert not m.get("result")
+
+
+def test_warehouse_collect_takes_the_report_newer_than_the_baseline(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_WAREHOUSE", collectAfter=_now() - 1,
+                                      needGarrison=False, reportBaselineId=5)])
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: {"garrisonThresholdTotal": 50000})
+    reports = {"5": {"resources": {"wood": 1}, "success": True, "targetCityId": "100"},
+               "9": {"resources": {"wood": 90000}, "success": True, "targetCityId": "100"}}
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k: reports)
+    em.collect_mission_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "DONE" and m["result"]["resources"] == {"wood": 90000}
+
+
+def test_garrison_collect_never_adopts_a_previous_clean_port(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_GARRISON", garrisonCollectAfter=_now() - 1,
+                                      garrisonExecutedAt=_now() - 60, garrisonBaselineId=7)])
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k:
+                        {"7": {"troops": {}, "success": True, "targetCityId": "100"}})
+    em.collect_garrison_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "EXECUTING_GARRISON" and not m.get("garrisonResult")
+
+
+def test_movements_collect_waits_for_a_report_newer_than_the_baseline(monkeypatch):
+    html_old = '<tr id="message7" class="espionageReports"></tr><tr><td>old</td></tr>'
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_MOVEMENTS", movementsCollectAfter=_now() - 1,
+                                      movementsExecutedAt=_now() - 60, movementsBaselineId=7)])
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: html_old)
+    monkeypatch.setattr(em, "_enemy_return_from_movements",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("relatório antigo lido")))
+    em.collect_movements_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "EXECUTING_MOVEMENTS" and m.get("movementsResult") is None
+
+    assert m["movementsCollectAfter"] > _now()             # backed off, not re-polled at once
+    m["movementsCollectAfter"] = _now() - 1
+
+    seen = {}
+    html_new = html_old + '<tr id="message9" class="espionageReports"></tr><tr><td>new</td></tr>'
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: html_new)
+    monkeypatch.setattr(em, "_enemy_return_from_movements",
+                        lambda html, name, now=None: seen.setdefault("html", html) and None)
+    em.collect_movements_results(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "DONE" and m["movementsResult"] == {"enemyReturnAt": None}
+    assert "message9" in seen["html"] and "message7" not in seen["html"]
+
+
+def test_each_leg_records_its_baseline_before_executing(monkeypatch):
+    for state, after, key, fn in (
+            ("WAITING_AT_CITY", "executeAfter", "reportBaselineId", em.execute_waiting_missions),
+            ("WAITING_FOR_GARRISON", "garrisonExecuteAfter", "garrisonBaselineId", em.execute_garrison_missions),
+            ("WAITING_FOR_MOVEMENTS", "movementsExecuteAfter", "movementsBaselineId", em.execute_movements_missions)):
+        h = _patch(monkeypatch, [_mission(state=state, **{after: _now() - 1})])
+        monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
+        monkeypatch.setattr(em, "_report_baseline", lambda *a, **k: 42)
+        monkeypatch.setattr(em, "_execute_spy_mission", lambda *a, **k: (True, "ok"))
+        fn(session=object())
+        assert h["missions"][0][key] == 42, state
+
+
+def test_report_baseline_rereads_the_tab_when_stale(monkeypatch):
+    _patch(monkeypatch, [])
+    monkeypatch.setattr(em, "_report_state", {"max": 10, "at": em.time.time() - 3600, "loaded": True})
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k:
+                        '<tr id="message31" class="x"></tr><tr id="message12" class="x"></tr>')
+    assert em._report_baseline(object(), "1", 3) == 31
+    # fresh look → no second read
+    monkeypatch.setattr(em, "_fetch_reports_html",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("não devia reler")))
+    assert em._report_baseline(object(), "1", 3) == 31
+
+
+def test_report_baseline_is_none_when_the_tab_cannot_be_read(monkeypatch):
+    _patch(monkeypatch, [])
+    monkeypatch.setattr(em, "_report_state", {"max": None, "at": 0, "loaded": True})
+    monkeypatch.setattr(em, "_fetch_reports_html", lambda *a, **k: "")
+    assert em._report_baseline(object(), "1", 3) is None      # collector falls back to legacy
+
+
+# ── P13.6: a failed safehouse read is not "0 spies" ──────────────────────────────
+
+def test_failed_view_read_does_not_declare_the_spy_gone(monkeypatch):
+    for state, after, fn in (
+            ("WAITING_AT_CITY", "executeAfter", em.execute_waiting_missions),
+            ("WAITING_FOR_GARRISON", "garrisonExecuteAfter", em.execute_garrison_missions),
+            ("WAITING_FOR_MOVEMENTS", "movementsExecuteAfter", em.execute_movements_missions)):
+        h = _patch(monkeypatch, [_mission(state=state, **{after: _now() - 1})])
+        monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (None, None))
+        fn(session=object())
+        m = h["missions"][0]
+        assert m["state"] == state, state                 # leg kept, retried later
+        assert m[after] > _now() and m["viewFailures"] == 1
+        assert not em._spy_pool_gone(m.get("error"))
+
+
+def test_view_unreachable_many_times_gives_up_without_a_spy_gone_error(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 1,
+                                      viewFailures=em._VIEW_FETCH_MAX_FAILS - 1)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (None, None))
+    em.execute_waiting_missions(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "FAILED"
+    assert not em._spy_pool_gone(m["error"])              # the pool stays reusable
+
+
+# ── P13.10: the game's reason for a rejected executeMission is kept ──────────────
+
+def test_execute_rejection_keeps_the_games_reason(monkeypatch):
+    import json as _json
+
+    class _S:
+        def post(self, params=None):
+            return _json.dumps([["updateGlobalData", {"actionRequest": "tok"}],
+                                ["provideFeedback", [{"type": 11, "text": "O espião está <b>ocupado</b>"}]]])
+    monkeypatch.setattr(em, "save_capture", lambda *a, **k: None)
+    ok, reason = em._execute_spy_mission(_S(), "1", "100", 3, "SID", 1, em.MISSION_WAREHOUSE)
+    assert (ok, reason) == (False, "rejected")
+    assert em._last_execute_feedback == "O espião está  ocupado"

@@ -8,12 +8,12 @@ import random
 import time
 import uuid
 
-from empire_utils import LOGS_DIR, logger, active_elapsed
+from empire_utils import LOGS_DIR, logger, active_elapsed, save_capture
 from espionage_parsers import (
     _parse_safehouse_page, _parse_active_spy_missions, _parse_arrival_countdown,
     _parse_spy_session_id, _parse_reports_from_html, _parse_garrison_troops,
     _parse_movement_datetime, parse_fleet_movements, enemy_fleet_clean_window_secs,
-    _alt_to_resource_key, _RESOURCE_ALT_MAP,
+    _alt_to_resource_key, _RESOURCE_ALT_MAP, split_report_chunks,
 )
 # Spy-count persistence layer lives in spy_counts.py (P11.4 extraction).
 # Re-exported here so existing callers' imports keep resolving unchanged.
@@ -811,6 +811,10 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
 
 
 
+# Game's own text for the last executeMission rejection (read right after the call).
+_last_execute_feedback = ""
+
+
 def _execute_spy_mission(session, origin_city_id, target_city_id, position,
                          spy_session_id, num_agents, mission_type, num_decoys=0):
     """POST executeMission. Returns (ok, reason):
@@ -857,18 +861,27 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
                     ikabot_config.actionRequest = tok
                 break
 
+        global _last_execute_feedback
+        _last_execute_feedback = ""
         saw_feedback = False
+        types, texts = [], []
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "provideFeedback":
                 saw_feedback = True
-                feedback = entry[1]
-                if isinstance(feedback, list):
-                    for fb in feedback:
-                        if isinstance(fb, dict) and fb.get("type") == 10:
+                fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
+                for fb in fb_list:
+                    if isinstance(fb, dict):
+                        if fb.get("type") == 10:
                             return True, "ok"
+                        types.append(fb.get("type"))
+                        texts.append(_strip_tags(str(fb.get("text") or fb.get("locakey") or "")))
         if saw_feedback:
-            logger.warning("[espionage] executeMission tipo=%d rejeitado (feedback sem type=10) — raw: %s",
-                           mission_type, resp[:300])
+            # The reason is in provideFeedback[].text; the raw response opens with a long
+            # updateGlobalData blob, so the old raw[:300] dump never reached it.
+            _last_execute_feedback = " | ".join(t for t in texts if t) or "sem texto"
+            logger.warning("[espionage] executeMission tipo=%d rejeitado — types=%s motivo: %s",
+                           mission_type, types, _last_execute_feedback)
+            save_capture("spy_execute_rejected.json", resp)
             return False, "rejected"
         logger.warning("[espionage] executeMission tipo=%d sem feedback (re-render, missão não executou) — raw: %s",
                        mission_type, resp[:300])
@@ -882,6 +895,139 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
 
 
 
+
+
+# ── Report baseline (P13.1): tie a report to the execution that produced it ───────
+# Every report in the reports tab is stamped reportedAt = parse time, and the collectors
+# used to take the NEWEST report of the target city that had a resources / troops table. So
+# when a new report was missing or had failed (no table), the PREVIOUS scout's report was
+# adopted as if it were fresh — an old "clean port" read as current, invisibly to every
+# freshness guard downstream. Report ids come from one game-wide increasing sequence, so the
+# highest id seen at any parse BEFORE an executeMission is a lower bound: only reports with a
+# greater id can have been produced by that execution. Each leg stores that bound when it
+# executes and its collector ignores anything at or below it.
+REPORT_STATE_PATH = os.path.join(LOGS_DIR, "spy_report_state.json")
+_REPORT_BASELINE_MAX_AGE = 10 * 60   # re-read the tab before executing if our last look is older
+_report_state = {"max": None, "at": 0, "loaded": False}
+
+
+def _load_report_state():
+    if _report_state["loaded"]:
+        return
+    _report_state["loaded"] = True
+    try:
+        with open(REPORT_STATE_PATH) as f:
+            d = json.load(f)
+        _report_state["max"] = int(d["max"]) if d.get("max") is not None else None
+        _report_state["at"] = int(d.get("at", 0) or 0)
+    except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
+        pass
+
+
+def _save_report_state():
+    try:
+        from empire_utils import atomic_write_json
+        atomic_write_json(REPORT_STATE_PATH, {"max": _report_state["max"], "at": _report_state["at"]})
+    except Exception:
+        pass
+
+
+def _note_report_ids(report_ids):
+    """Record that the reports tab was just read and the highest report id it held."""
+    _load_report_state()
+    ids = []
+    for r in report_ids or ():
+        try:
+            ids.append(int(r))
+        except (TypeError, ValueError):
+            pass
+    cur = _report_state["max"]
+    top = max(ids) if ids else None
+    if top is not None and (cur is None or top > cur):
+        _report_state["max"] = top
+    elif cur is None:
+        _report_state["max"] = 0          # tab read, no reports at all → everything later is new
+    _report_state["at"] = int(time.time())
+    _save_report_state()
+
+
+def _report_baseline(session, origin_city_id, position):
+    """Highest report id known to exist right now — call it just BEFORE an executeMission.
+    Re-reads the reports tab first when we have never looked or our last look is stale, so
+    a report that appeared in between (e.g. scouted by hand in-game) can't pass as this
+    execution's. None only if the tab could not be read at all (collector then falls back
+    to the legacy 'newest report' behaviour rather than stalling the mission)."""
+    _load_report_state()
+    if _report_state["max"] is None or time.time() - _report_state["at"] > _REPORT_BASELINE_MAX_AGE:
+        time.sleep(random.randint(3, 8))
+        html = _fetch_reports_html(session, origin_city_id, position)
+        if html:
+            _note_report_ids(split_report_chunks(html).keys())
+    return _report_state["max"]
+
+
+# A leg whose report is not in the tab yet used to be re-polled on every spy step (≥15s
+# apart): a mission that had FAILED in the game — no resources table, so never matched —
+# was polled ~180 times an hour for two hours (seen in the first hour of request accounting,
+# 14/11: 186 safehouse views in one hour for two stuck missions). Back off instead.
+_COLLECT_BACKOFF = (30, 60, 120, 240, 480, 600)
+
+
+def _collect_later(missions, i, key, now):
+    """Push mission i's collect time `key` forward, a little further after every miss."""
+    misses = int(missions[i].get("collectMisses", 0) or 0)
+    missions[i]["collectMisses"] = misses + 1
+    missions[i][key] = now + _COLLECT_BACKOFF[min(misses, len(_COLLECT_BACKOFF) - 1)]
+
+
+def _report_is_for(report, m):
+    """True if a parsed report is about mission m's target city."""
+    target_cid = str(m.get("targetCityId", ""))
+    report_cid = report.get("targetCityId")
+    if report_cid and target_cid:
+        return str(report_cid) == target_cid
+    target = (m.get("targetCityName") or "").strip().lower()
+    found = (report.get("targetCityName") or "").strip().lower()
+    return bool(target) and target == found
+
+
+def _failed_report_for(reports, m, baseline):
+    """The game's own "mission failed" report for mission m's current leg, or None.
+
+    Only meaningful with a baseline: every report newer than it was produced after this leg
+    executed, and the only mission run on that target since is this leg — so an explicit
+    failure (result icon "Missão falhada!" / noReport body) for the city IS this leg failing.
+    Arrival notices are not failures."""
+    if baseline is None:
+        return None
+    for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True):
+        if not _is_new_report(rid, baseline):
+            break
+        r = reports[rid]
+        if r.get("failed") and not r.get("isArrival") and _report_is_for(r, m):
+            return r
+    return None
+
+
+def _failed_report_error(report):
+    """Mission error text for a failed report. Says the spies are gone ONLY when the game
+    says all of them were lost (lost == sent) — that wording is a spy-gone marker."""
+    lost, sent = report.get("lostAgents"), report.get("sentAgents")
+    if sent and lost is not None and lost >= sent:
+        return "Missão falhada no jogo — %d/%d agentes perdidos (possivelmente capturado)" % (lost, sent)
+    if sent is not None and lost is not None:
+        return "Missão falhada no jogo — %d/%d agentes perdidos, espião continua estacionado" % (lost, sent)
+    return "Missão falhada no jogo (relatório sem dados)"
+
+
+def _is_new_report(report_id, baseline):
+    """True if the report can belong to an execution whose baseline is `baseline`."""
+    if baseline is None:
+        return True
+    try:
+        return int(report_id) > int(baseline)
+    except (TypeError, ValueError):
+        return False
 
 
 def _fetch_reports_html(session, origin_city_id, position):
@@ -918,6 +1064,8 @@ def _fetch_reports_html(session, origin_city_id, position):
 
     if not html:
         logger.warning("[espionage] reports tab: sem HTML no changeView")
+    else:
+        save_capture("spy_reports_tab.html", html)
     return html
 
 
@@ -929,7 +1077,9 @@ def _fetch_all_reports(session, origin_city_id, position):
     html = _fetch_reports_html(session, origin_city_id, position)
     if not html:
         return {}
-    return _parse_reports_from_html(html)
+    reports = _parse_reports_from_html(html)
+    _note_report_ids(reports.keys())
+    return reports
 
 
 def _enemy_return_from_movements(html, city_name, now=None):
@@ -1058,6 +1208,29 @@ def check_spy_arrivals(session):
 _WAREHOUSE_MAX_RETRIES = 3
 
 
+# The safehouse view failing to load (network blip, bad JSON → spy_count None) is NOT the same
+# as the view loading and showing 0 spies. Treating None as 0 declared a perfectly good
+# stationed spy "detected", which is a spy-gone marker: the pool was never reused again and a
+# "spies lost" alert went out (P13.6). A failed read is retried shortly; only after several
+# in a row is the leg given up, with an error that does not claim the spies are gone.
+_VIEW_FETCH_MAX_FAILS = 5
+
+
+def _view_unreachable(missions, i, retry_key, now):
+    """Count one failed safehouse read for mission i and reschedule its leg. Returns True
+    while it should keep retrying, False once it has failed too many times in a row."""
+    fails = int(missions[i].get("viewFailures", 0) or 0) + 1
+    missions[i]["viewFailures"] = fails
+    if fails >= _VIEW_FETCH_MAX_FAILS:
+        missions[i]["viewFailures"] = 0
+        return False
+    wait = random.randint(60, 180)
+    missions[i][retry_key] = now + wait
+    logger.info("[espionage] %s: vista da espionagem não carregou (%d/%d) — nova tentativa em %ds",
+                missions[i].get("targetCityName", "?"), fails, _VIEW_FETCH_MAX_FAILS, wait)
+    return True
+
+
 def execute_waiting_missions(session):
     """WAITING_AT_CITY → EXECUTING: execute warehouse inspection after executeAfter."""
     data = _load_missions()
@@ -1079,6 +1252,16 @@ def execute_waiting_missions(session):
         time.sleep(random.randint(10, 25))
         spy_count, html = _fetch_spy_missions_view(session, origin_id, m["targetCityId"], position)
 
+        if spy_count is None:
+            if not _view_unreachable(missions, i, "executeAfter", now):
+                missions[i]["state"] = "FAILED"
+                missions[i]["error"] = ("Vista da espionagem inacessível (%dx) — missão abandonada "
+                                        "(espião continua estacionado)" % _VIEW_FETCH_MAX_FAILS)
+                logger.warning("[espionage] %s: vista inacessível %dx → FAILED (espião reutilizável)",
+                               m["targetCityName"], _VIEW_FETCH_MAX_FAILS)
+            changed = True
+            continue
+        missions[i]["viewFailures"] = 0
         if not spy_count:
             missions[i]["state"] = "FAILED"
             missions[i]["error"] = "Espião não encontrado ao tentar executar — possivelmente detectado"
@@ -1087,6 +1270,7 @@ def execute_waiting_missions(session):
             continue
 
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
+        missions[i]["reportBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
         ok, reason = _execute_spy_mission(
@@ -1097,6 +1281,7 @@ def execute_waiting_missions(session):
         if ok:
             missions[i]["state"] = "EXECUTING_WAREHOUSE"
             missions[i]["executedAt"] = now
+            missions[i]["collectMisses"] = 0
             missions[i]["collectAfter"] = now + (random.randint(20, 45) if m.get("fast")
                                                  else random.randint(60, 300))
             missions[i]["missionType"] = "warehouse"
@@ -1123,7 +1308,9 @@ def execute_waiting_missions(session):
             if retries >= _WAREHOUSE_MAX_RETRIES:
                 missions[i]["state"] = "FAILED"
                 missions[i]["error"] = ("executeMission rejeitado pelo servidor (%dx) — "
-                                        "espião pode continuar estacionado" % retries)
+                                        "espião pode continuar estacionado%s"
+                                        % (retries, (" — motivo: " + _last_execute_feedback)
+                                           if _last_execute_feedback else ""))
                 logger.warning("[espionage] %s: warehouse rejeitado %dx → FAILED",
                                m["targetCityName"], retries)
             else:
@@ -1164,13 +1351,28 @@ def collect_mission_results(session):
         reports = _fetch_all_reports(session, origin_id, position)
 
         if not reports:
+            _collect_later(missions, i, "collectAfter", now)
+            changed = True
             continue
 
         matched = False
         target     = (m.get("targetCityName") or "").lower()
         target_cid = str(m.get("targetCityId", ""))
+        baseline = m.get("reportBaselineId")
+        bad = _failed_report_for(reports, m, baseline)
+        if bad:
+            # The game says this inspection failed: stop waiting (it used to sit 2h for a
+            # report that could never match) and let the caller retry / send fresh spies.
+            missions[i]["state"] = "FAILED"
+            missions[i]["error"] = _failed_report_error(bad)
+            missions[i]["result"] = bad
+            logger.info("[espionage] armazém %s → %s", m["targetCityName"], missions[i]["error"])
+            changed = True
+            continue
         for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
             report = reports[rid]
+            if not _is_new_report(rid, baseline):
+                break   # sorted newest-first: everything from here on predates this execution
             if not report.get("resources"):
                 continue
             report_cid = report.get("targetCityId")
@@ -1246,6 +1448,9 @@ def collect_mission_results(session):
             missions[i]["error"] = "Relatório não encontrado após 2h"
             logger.warning("[espionage] %s: relatório ausente após 2h → FAILED", m["targetCityName"])
             changed = True
+        elif not matched:
+            _collect_later(missions, i, "collectAfter", now)
+            changed = True
 
     if changed:
         data["missions"] = missions
@@ -1273,6 +1478,15 @@ def execute_garrison_missions(session):
         time.sleep(random.randint(10, 25))
         spy_count, html = _fetch_spy_missions_view(session, origin_id, m["targetCityId"], position)
 
+        if spy_count is None:
+            if not _view_unreachable(missions, i, "garrisonExecuteAfter", now):
+                missions[i]["state"] = "DONE"
+                missions[i]["garrisonResult"] = {"error": "vista da espionagem inacessível"}
+                logger.warning("[espionage] %s: vista inacessível %dx → DONE com só armazém",
+                               m["targetCityName"], _VIEW_FETCH_MAX_FAILS)
+            changed = True
+            continue
+        missions[i]["viewFailures"] = 0
         if not spy_count:
             # Spy left before garrison — keep warehouse result, mark DONE
             missions[i]["state"] = "DONE"
@@ -1282,6 +1496,7 @@ def execute_garrison_missions(session):
             continue
 
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
+        missions[i]["garrisonBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
         ok, _reason = _execute_spy_mission(
@@ -1292,6 +1507,7 @@ def execute_garrison_missions(session):
         if ok:
             missions[i]["state"] = "EXECUTING_GARRISON"
             missions[i]["garrisonExecutedAt"] = now
+            missions[i]["collectMisses"] = 0
             missions[i]["garrisonCollectAfter"] = now + (random.randint(20, 45) if m.get("fast")
                                                          else random.randint(60, 300))
             missions[i]["spySessionId"] = spy_id
@@ -1329,13 +1545,29 @@ def collect_garrison_results(session):
         reports = _fetch_all_reports(session, origin_id, position)
 
         if not reports:
+            _collect_later(missions, i, "garrisonCollectAfter", now)
+            changed = True
             continue
 
         matched = False
         target     = (m.get("targetCityName") or "").lower()
         target_cid = str(m.get("targetCityId", ""))
+        baseline = m.get("garrisonBaselineId")
+        bad = _failed_report_for(reports, m, baseline)
+        if bad:
+            # Garrison inspection failed in the game: finish on the warehouse result, with a
+            # garrison that is explicitly NOT a clean reading (success False, no troops key).
+            missions[i]["state"] = "DONE"
+            missions[i]["garrisonResult"] = {"success": False, "error": _failed_report_error(bad),
+                                             "reportId": bad.get("reportId")}
+            logger.info("[espionage] garrison %s → %s", m["targetCityName"],
+                        missions[i]["garrisonResult"]["error"])
+            changed = True
+            continue
         for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
             report = reports[rid]
+            if not _is_new_report(rid, baseline):
+                break   # older than this garrison execution → never adopt a previous scout's read
             if report.get("troops") is None:
                 continue  # None = not a garrison report (warehouse report); {} = garrison with no troops
             report_cid = report.get("targetCityId")
@@ -1375,6 +1607,9 @@ def collect_garrison_results(session):
             logger.warning("[espionage] %s: relatório garrison ausente após 2h → DONE com só armazém",
                            m["targetCityName"])
             changed = True
+        elif not matched:
+            _collect_later(missions, i, "garrisonCollectAfter", now)
+            changed = True
 
     if changed:
         data["missions"] = missions
@@ -1406,6 +1641,14 @@ def execute_movements_missions(session):
         time.sleep(random.randint(10, 25))
         spy_count, html = _fetch_spy_missions_view(session, origin_id, m["targetCityId"], position)
 
+        if spy_count is None:
+            if not _view_unreachable(missions, i, "movementsExecuteAfter", now):
+                missions[i]["state"] = "DONE"   # movementsResult stays None → sweep incomplete
+                logger.warning("[espionage] %s: vista inacessível %dx → DONE (sem movimentos)",
+                               m["targetCityName"], _VIEW_FETCH_MAX_FAILS)
+            changed = True
+            continue
+        missions[i]["viewFailures"] = 0
         if not spy_count:
             # Spy left before movements — finish on the garrison result.
             missions[i]["state"] = "DONE"
@@ -1415,6 +1658,7 @@ def execute_movements_missions(session):
             continue
 
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
+        missions[i]["movementsBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
         ok, _reason = _execute_spy_mission(
@@ -1425,6 +1669,7 @@ def execute_movements_missions(session):
         if ok:
             missions[i]["state"] = "EXECUTING_MOVEMENTS"
             missions[i]["movementsExecutedAt"] = now
+            missions[i]["collectMisses"] = 0
             missions[i]["movementsCollectAfter"] = now + (random.randint(20, 45) if m.get("fast")
                                                           else random.randint(60, 300))
             missions[i]["spySessionId"] = spy_id
@@ -1471,6 +1716,34 @@ def collect_movements_results(session):
                                "(sem ETA)", m["targetCityName"])
                 changed = True
             continue
+
+        # Only reports produced after this leg executed may speak for it. Without the bound the
+        # whole tab was parsed, so when the new movements report was missing an OLD one (or
+        # none at all) read as "no fleet returning → clean port" and sealed the sweep.
+        baseline = m.get("movementsBaselineId")
+        if baseline is not None:
+            chunks = split_report_chunks(html)
+            _note_report_ids(chunks.keys())
+            fresh = [c for rid, c in chunks.items() if _is_new_report(rid, baseline)]
+            if not fresh:
+                if active_elapsed(m.get("movementsExecutedAt", 0), now) > 7200:
+                    missions[i]["state"] = "DONE"   # movementsResult stays None → incomplete
+                    logger.warning("[espionage] %s: relatório de movimentos não apareceu em 2h → "
+                                   "DONE (sem movimentos)", m["targetCityName"])
+                else:
+                    _collect_later(missions, i, "movementsCollectAfter", now)
+                changed = True
+                continue
+            html = "".join(fresh)
+            bad = _failed_report_for(_parse_reports_from_html(html), m, baseline)
+            if bad:
+                # The movements mission failed in the game: the port is NOT confirmed. Leave
+                # movementsResult None so the farm treats the sweep as incomplete.
+                missions[i]["state"] = "DONE"
+                logger.info("[espionage] movimentos %s → %s (porto não confirmado)",
+                            m["targetCityName"], _failed_report_error(bad))
+                changed = True
+                continue
 
         eta = _enemy_return_from_movements(html, m.get("targetCityName"), now)
         missions[i]["movementsResult"] = {"enemyReturnAt": eta}

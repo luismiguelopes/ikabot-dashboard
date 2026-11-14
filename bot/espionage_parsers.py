@@ -260,6 +260,17 @@ def _alt_to_resource_key(alt_text):
     return None
 
 
+def split_report_chunks(html):
+    """{report_id: html_chunk} for every report row pair in the safehouse reports tab."""
+    import re
+    splits = list(re.finditer(r'(?=<tr[^>]+id=["\']message(\d+)["\'])', html or "", re.IGNORECASE))
+    out = {}
+    for k, split in enumerate(splits):
+        end = splits[k + 1].start() if k + 1 < len(splits) else len(html)
+        out[split.group(1)] = html[split.start():end]
+    return out
+
+
 def _parse_reports_from_html(html):
     """
     Parse all espionage reports embedded in the safehouse reports tab HTML.
@@ -328,6 +339,29 @@ def _parse_reports_from_html(html):
         success = bool(re.search(r'completada com sucesso|completed successfully',
                                  chunk, re.IGNORECASE))
 
+        # Header fields, from a real capture of the tab (2026-11-14):
+        #   <td class="subject …">Recursos em Tróia 3</td>
+        #   <td class="resultImage"><img alt="Missão falhada!" …></td>
+        #   <td class="lostAgents" …> 0 /4 </td>      (lost / sent)
+        #   <td class="date" …>14.11.2026 13:33:43 </td>   (game-server clock)
+        # and, in the body of a failed mission, <div class='noReport'>A missão não foi bem
+        # sucedida.</div>. `failed` is an EXPLICIT failure — not merely "success text absent".
+        def _cell(cls):
+            cm_ = re.search(r'<td[^>]*class=["\']' + cls + r'[^"\']*["\'][^>]*>(.*?)</td>',
+                            chunk, re.DOTALL | re.IGNORECASE)
+            if not cm_:
+                return None
+            return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', cm_.group(1))).strip()
+
+        result_alt = re.search(r'class=["\']resultImage["\'].*?alt=["\']([^"\']*)["\']',
+                               chunk, re.DOTALL | re.IGNORECASE)
+        failed = bool((result_alt and re.search(r'falhad|failed', result_alt.group(1), re.IGNORECASE))
+                      or re.search(r'class=["\']noReport["\']', chunk, re.IGNORECASE))
+        lost_agents = sent_agents = None
+        lm_ = re.match(r'\s*(\d+)\s*/\s*(\d+)', _cell('lostAgents') or '')
+        if lm_:
+            lost_agents, sent_agents = int(lm_.group(1)), int(lm_.group(2))
+
         # Detect arrival-only notification ("O teu espião chegou a X")
         is_arrival = bool(re.search(
             r'o teu espi[aã]o chegou\b|your spy (?:has )?arrived',
@@ -366,6 +400,11 @@ def _parse_reports_from_html(html):
             "islandX":        island_x,
             "islandY":        island_y,
             "success":        success,
+            "failed":         failed,
+            "subject":        _cell('subject'),
+            "dateText":       _cell('date'),        # server clock, as shown in the game
+            "lostAgents":     lost_agents,
+            "sentAgents":     sent_agents,
             "resources":      resources if resources else None,
             "troops":         troops,
             "reportedAt":     int(time.time()),

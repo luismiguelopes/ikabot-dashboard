@@ -17,7 +17,7 @@ import random
 import time
 import unicodedata
 
-from empire_utils import LOGS_DIR, logger
+from empire_utils import LOGS_DIR, logger, save_capture
 
 OWN_CITIES_PATH = os.path.join(LOGS_DIR, "own_cities.json")
 
@@ -141,6 +141,7 @@ def _fetch_plunder_form(session, ikabot_config, origin_id, target_id):
             "ajax":              1,
         })
         time.sleep(random.randint(2, 5))
+        save_capture("plunder_form.json", raw)
         upkeep = {}
         for m in re.finditer(r'name=\\"cargo_army_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"', raw):
             upkeep[m.group(1)] = m.group(2)
@@ -230,6 +231,7 @@ def _parse_attack_feedback(resp, function, ikabot_config):
             _last_feedback_text = " | ".join(t for t in texts if t) or f"types={types}"
             logger.warning("[attack] %s recusado types=%s — %s", function, types,
                            _last_feedback_text)
+            save_capture("attack_rejected.json", resp)
             return False
     _last_feedback_text = "sem provideFeedback na resposta"
     logger.warning("[attack] %s sem provideFeedback — raw: %.400s", function, resp)
@@ -243,6 +245,7 @@ def _log_attack_attempt(item, ok, source="manual"):
         log_attack({
             "originCity":   item.get("originCityName") or str(item.get("originCityId", "")),
             "targetCity":   item.get("targetCityName", ""),
+            "targetCityId": str(item.get("targetCityId", "") or ""),
             "targetPlayer": item.get("targetPlayerName", ""),
             "islandX":      item.get("islandX"),
             "islandY":      item.get("islandY"),
@@ -380,6 +383,7 @@ def _fetch_blockade_form(session, ikabot_config, origin_id, target_id):
             logger.warning("[attack] _fetch_blockade_form(%s) falhou: %s", view, e)
             continue
 
+        save_capture("blockade_form.json", raw)
         upkeep = {}
         for m in re.finditer(r'name=\\"cargo_fleet_([^\\]+)_upkeep\\"[^>]*value=\\"([^\\"]*)\\"', raw):
             upkeep[m.group(1)] = m.group(2)

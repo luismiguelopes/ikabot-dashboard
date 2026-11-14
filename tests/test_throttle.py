@@ -102,3 +102,35 @@ def test_escape_hatch_disables_wrapping(monkeypatch):
     monkeypatch.setenv("IKABOT_NO_THROTTLE", "1")
     inner = _FakeSession()
     assert eu.throttle_session(inner) is inner
+
+
+# ── P13.23: request accounting ───────────────────────────────────────────────────
+
+def test_request_kind_prefers_function_then_view():
+    assert eu._request_kind((), {"params": {"action": "Espionage", "function": "sendSpy"}}) == "function:sendSpy"
+    assert eu._request_kind(("view=city&cityId=5",), {}) == "view:city"
+    assert eu._request_kind(("action=WorldMap&function=getJSONArea&x_min=0",), {}) == "function:getJSONArea"
+    assert eu._request_kind((), {}) == "other"
+
+
+def test_requests_are_counted_per_hour_and_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr(eu, "REQUEST_STATS_PATH", str(tmp_path / "request_stats.json"))
+    monkeypatch.setattr(eu, "LAST_ALIVE_JSON_PATH", str(tmp_path / "last_alive.json"))
+    _fake_clock(monkeypatch)
+    s = eu.ThrottledSession(_FakeSession())
+    s.get("view=city&cityId=1")
+    s.get("view=city&cityId=2")
+    s.post(params={"action": "transportOperations", "function": "sendArmyPlunderSea"})
+    hours = s._stats["hours"]
+    (st,) = hours.values()
+    assert (st["get"], st["post"]) == (2, 1)
+    assert st["kinds"] == {"view:city": 2, "function:sendArmyPlunderSea": 1}
+    saved = eu.load_request_stats()["hours"]
+    assert list(saved.values())[0]["get"] >= 1          # flushed to disk on the first request
+
+
+def test_counting_never_breaks_a_request(monkeypatch, tmp_path):
+    monkeypatch.setattr(eu, "REQUEST_STATS_PATH", str(tmp_path / "nope" / "x.json"))  # unwritable
+    _fake_clock(monkeypatch)
+    s = eu.ThrottledSession(_FakeSession())
+    assert s.get("view=city") == "GET_OK"

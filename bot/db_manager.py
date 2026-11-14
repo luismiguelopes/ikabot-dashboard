@@ -226,6 +226,19 @@ def _run_migrations(conn):
         except Exception:
             pass
         conn.execute("INSERT INTO schema_version (version) VALUES (16)")
+    if current < 17:
+        # v17 = city ids on the logs, so the farm matches a return / a dispatch to its target
+        # by id instead of by name substring (names collide: "Castle-V" ⊂ "Castle-VII", and one
+        # player owns several targets). Old rows keep '' and fall back to an exact name match.
+        for ddl in (
+            "ALTER TABLE loot_log ADD COLUMN from_city_id TEXT DEFAULT ''",
+            "ALTER TABLE attack_log ADD COLUMN target_city_id TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
+        conn.execute("INSERT INTO schema_version (version) VALUES (17)")
     conn.commit()
 
 
@@ -432,8 +445,9 @@ def log_attack(entry):
             conn.execute("""
                 INSERT INTO attack_log
                 (ts, origin_city, target_city, target_player, island_x, island_y,
-                 mission_type, target_type, source, units, transporters, success, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 mission_type, target_type, source, units, transporters, success, error,
+                 target_city_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 entry.get("ts") or int(time.time()),
                 entry.get("originCity", ""),
@@ -448,6 +462,7 @@ def log_attack(entry):
                 int(entry.get("transporters") or 0),
                 1 if entry.get("success") else 0,
                 entry.get("error"),
+                str(entry.get("targetCityId", "") or ""),
             ))
     finally:
         conn.close()
@@ -616,14 +631,16 @@ def log_loot(entry):
         with conn:
             cur = conn.execute("""
                 INSERT OR IGNORE INTO loot_log
-                (ts, from_city, from_player, to_city, wood, wine, marble, crystal, sulfur, return_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (ts, from_city, from_player, to_city, wood, wine, marble, crystal, sulfur,
+                 return_key, from_city_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 entry.get("ts") or int(time.time()),
                 entry.get("fromCity", ""), entry.get("fromPlayer", ""),
                 entry.get("toCity", ""),
                 int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]),
                 entry.get("returnKey", ""),
+                str(entry.get("fromCityId", "") or ""),
             ))
             return cur.rowcount > 0   # True = newly recorded (not a duplicate return)
     finally:
