@@ -1466,3 +1466,63 @@ Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira 
 - [ ] **P13.62** Paginação da aba de relatórios (10 por página).
 - [ ] **P13.63** Recuo por alvo quando a missão falha sem perder agentes.
 - [ ] **P13.64** Usar `lostAgents`/`sentAgents` dos relatórios.
+
+### J — Quem faz o quê: Fable ou Opus
+
+**Critério.** Vai para o **Fable** tudo o que muda *quando ou como* saem tropas, navios ou
+espiões, ou que mexe na junção farm ↔ fila de ataques ↔ máquina de espiões: é onde uma alteração
+num sítio muda o comportamento noutro, onde os testes actuais não cobrem a junção, e onde errar
+custa tropas ao vivo. Vai para o **Opus** o trabalho delimitado, com correcção já descrita no
+item e resultado fácil de verificar (um ecrã, um ficheiro, um teste). A divisão é pelo tipo de
+trabalho — não foi medida com o Opus neste projecto; se um item do Opus se revelar entrelaçado
+com o farm, pára e passa para o Fable.
+
+**Fable** — por esta ordem
+
+| Item | O quê | Porquê aqui |
+|---|---|---|
+| P13.44 (1) | Teste ponta a ponta farm → fila de ataques → despacho | Define a costura que protege tudo o resto; fazer **primeiro** |
+| P13.3 | Ricochete deduzido da ausência (movimentos `None`, fila consultada, regressos vazios) | Três módulos, e fixa testes que hoje afirmam o comportamento errado |
+| P13.4 | Despromover `is_fleet_target` + rever os 9 alvos sem evidência | Decisão de segurança do farm |
+| P13.2 | Ondas bloqueio + tropas acopladas | Muda o modelo da fila de ataques |
+| P13.8 | Fracção mínima de navios por raid | Interage com adiamentos e reservas |
+| P13.7 | Classificar navios pela secção do relatório (só o lado do bot) | Muda o que conta como "porto limpo" |
+| P13.61 | Dois strikes por drenagem / recolha de espiões de alvos do farm | Fronteira espionagem ↔ farm |
+| P13.9, P13.63 | Validar relatório antes de "drenado"; recuo quando a missão falha limpa | Gate SPYING |
+| P13.62 | Paginação da aba de relatórios | Mexe no id-base acabado de criar |
+| P13.1 (resto) | `dateText` → hora real do relatório | Todas as guardas de frescura dependem disto |
+| P13.11 | Missões de espionagem em SQLite | Reescreve o armazenamento da máquina de estados |
+| P13.12 (bot) | Fila de construção por linha | Mesmo padrão; o lado da UI (P13.47) é do Opus depois |
+| P13.24 | Wake por ETA sem varrer a fila de construção | Mexe no loop principal e no `smart_sleep` |
+| P13.27 | Simplificar o `actionRequest` | Toca em todos os pedidos; validar ao vivo |
+| P13.28 | `process_farm_targets` → `decide()` | Só depois de tudo acima, com os testes como rede |
+
+**Opus** — pode ir em paralelo com o Fable, desde que não toque nos ficheiros da linha em curso
+
+| Bloco | Itens |
+|---|---|
+| Erros de UI directos | P13.46 (1970, campos que não gravam, vinho a verde, origem = destino, "às HH:MM" vazio) |
+| Confirmações e feedback | P13.48, P13.36, P13.37, P13.49, P13.52 |
+| Robustez do frontend | P13.50, P13.56, P13.38 (wrapper de fetch com 401, `ErrorBoundary`, limpar erros), P13.51 |
+| Ver o farm | P13.34, P13.35, P13.57, P13.39, P13.41, contador de pedidos no dashboard (resto do P13.23) |
+| "Há navios" na UI | P13.33 — **só depois** de o Fable fechar o P13.7 e o API devolver `enemyShips`/`garrisonOk` |
+| Fila de construção na UI | P13.47 — **só depois** do P13.12 |
+| Estado em ficheiros | P13.14 (`atomic_write_json` em todo o lado), P13.15, P13.16, P13.17, P13.18 |
+| Logística | P13.19, P13.20 *(confirmar primeiro o que o jogo reporta com vinho a 0)*, P13.21, P13.22 |
+| Pedidos | P13.25 (custos por tipo), P13.26, P13.55, P13.40 |
+| Dados e legado | P13.29 (`total_loot` a partir do `loot_log`), P13.31, P13.32, P13.64 |
+| Definições | P13.30 + P13.53 (registo único + `useSettings`) — começar pelo bug da consolidação |
+| Estrutura do frontend | P13.42, P13.60 (ESLint, `npm run build` no deploy) |
+| Testes | P13.43 (restantes capturas → fixtures), P13.45 (`conftest.py`, estado global) |
+| Calculadoras e acabamentos | P13.54, P13.58, P13.59 |
+
+**Regras para uma sessão com o Opus**
+1. Um item (ou um bloco da tabela) por sessão; começar por ler o item no plano e o `CLAUDE.md`.
+2. Teste primeiro, depois a correcção; correr a suite inteira antes de qualquer deploy.
+3. Não alterar `process_farm_targets`, `process_attack_queue`, os colectores de relatórios nem o
+   `smart_sleep` para além do que o item pede. P13.19 e P13.26 tocam no `farm_manager`: mudar
+   só a função indicada.
+4. Mudança no frontend → `cd frontend && npm run build`; mudança em `.py` → skill de deploy.
+5. Depois de um deploy que toque no bot, olhar para o log durante um ciclo e para o
+   `health.json` (uma falha no `smart_sleep` agora aparece lá).
+6. Dúvida sobre se algo muda um despacho ao jogo → não fazer, anotar no plano para o Fable.
