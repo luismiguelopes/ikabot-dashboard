@@ -125,6 +125,7 @@ def _collect_movements(session, city_id):
 
         movements = []
         loot_returns = []
+        empty_returns = []
         hostiles = []
         for m in movements_raw:
             time_left = int(float(m["eventTime"])) - time_now
@@ -153,6 +154,8 @@ def _collect_movements(session, city_id):
                 "targetCityId": str(m["target"].get("cityId", "") or ""),
                 "direction": "<-" if is_returning else "->",
                 "mission": m["event"].get("missionText", ""),
+                # The game's own class for the mission: "plunder", "blockade", "transport", …
+                "missionClass": m["event"].get("missionIconClass", ""),
                 "timeLeft": max(time_left, 0),
                 "arrivalTime": arrival_ts,
                 "isHostile": bool(m.get("isHostile", False)),
@@ -218,6 +221,24 @@ def _collect_movements(session, city_id):
                         "returnKey":  event_key,
                     })
 
+            # A pillage coming home with NOTHING aboard (P13.3): it either turned back from a
+            # sea fight or found the warehouse empty. Record it as a zero-loot return, so
+            # "came back empty" is something we SAW — until now the farm could only infer a
+            # bounce from the absence of a loot row, which a missed movements refresh also
+            # produces. Only pillages count: a blockade fleet also returns with no cargo.
+            elif (is_returning and entry["isOwn"] and not entry["resources"]
+                    and entry["missionClass"] == "plunder"
+                    and m["origin"].get("avatarName") != m["target"].get("avatarName")):
+                empty_returns.append({
+                    "ts":         arrival_ts,
+                    "fromCity":   m["target"].get("name", ""),
+                    "fromCityId": str(m["target"].get("cityId", "") or ""),
+                    "fromPlayer": m["target"].get("avatarName", ""),
+                    "toCity":     m["origin"].get("name", ""),
+                    "resources":  [0, 0, 0, 0, 0],
+                    "returnKey":  event_key,
+                })
+
             movements.append(entry)
 
         _settings = _load_alert_settings()
@@ -252,14 +273,26 @@ def _collect_movements(session, city_id):
             except Exception:
                 logger.warning("[loot] falha ao registar saque", exc_info=True)
 
+        for er in empty_returns:
+            try:
+                from db_manager import log_loot
+                if log_loot(er):
+                    logger.warning("[loot] %s (%s) → %s: pilhagem regressa VAZIA (ricochete ou "
+                                   "armazém vazio), chega às %s", er["fromCity"], er["fromPlayer"],
+                                   er["toCity"], time.strftime("%H:%M", time.localtime(er["ts"])))
+            except Exception:
+                logger.warning("[loot] falha ao registar regresso vazio", exc_info=True)
+
         # F6: alert on newly-seen incoming hostile movements
         if hostiles and _settings.get("incomingEnabled", True):
             _alert_incoming_attacks(hostiles, time_now)
 
         return movements
     except Exception:
+        # None, not [] (P13.3): "could not read the movements" must never be stored as "there
+        # are no movements" — the farm reads an empty list as "no raid in flight".
         logger.warning(lm("movements_error"), exc_info=True)
-        return []
+        return None
 
 
 def _write_scan_status(status, phase, progress, total, message=""):
@@ -584,7 +617,8 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
 
     atomic_write_json(os.path.join(LOGS_DIR, "resources.json"), resources_data, indent=4)
 
-    atomic_write_json(os.path.join(LOGS_DIR, "movements.json"), movements, indent=4)
+    if movements is not None:        # a failed read keeps the previous file
+        atomic_write_json(os.path.join(LOGS_DIR, "movements.json"), movements, indent=4)
 
     ts = int(time.time())
     try:
@@ -606,4 +640,7 @@ def refresh_movements(session, first_city_id):
     """Re-fetch movements.json after transport dispatch so arrival ETAs are visible."""
     time.sleep(random.randint(5, 10))
     movements = _collect_movements(session, first_city_id)
+    if movements is None:
+        return False                 # read failed — movements.json left as it was
     atomic_write_json(os.path.join(LOGS_DIR, "movements.json"), movements, indent=4)
+    return True

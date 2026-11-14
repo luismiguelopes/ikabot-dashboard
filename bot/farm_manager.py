@@ -61,6 +61,13 @@ _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the rep
 #     wakes, never in one burst (anti-detection — a human doesn't fire two attacks the same ms).
 # SPYING is NOT a slot: spies use the safehouse, not ships, so a scout never blocks a raid —
 # that is why #1 (spying) must step aside for a ready target below it.
+# is_fleet_target used to be a one-way ratchet: once set (ships seen, a returning fleet, or a
+# bounce) nothing ever cleared it, so a target flagged by one bad inference paid a full triple
+# sweep before every raid for ever (18 of 31 targets by 14/11, 9 with no recorded sighting).
+# A fleet target now earns its way back: this many CONSECUTIVE complete live sweeps showing no
+# ship in port and no fleet due back clear the flag. Any sighting or empty return resets the
+# count. `fleetDemoteAfterSweeps` in farm settings overrides; 0 keeps the old ratchet.
+_FLEET_DEMOTE_AFTER_SWEEPS = 3
 _MAX_CONCURRENT_FARM = 2
 _PARALLEL_SHIP_FLOOR = 50
 _PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor / cap just blocked
@@ -112,6 +119,38 @@ def get_farm_fleet():
         return {str(k): int(v) for k, v in fleet.items() if int(v) > 0}
     except (ValueError, TypeError):
         return {}
+
+
+# A raid sized for N trade ships that leaves with a handful sends the whole army on a
+# round trip of hours for a sliver of the loot. Below this fraction of the ships the wave
+# was sized for, wait for the fleet instead (P13.8). `minShipFraction` in farm settings.
+_MIN_SHIP_FRACTION = 0.5
+
+
+def _min_ship_fraction():
+    try:
+        return min(1.0, max(0.0, float(_load_farm_settings().get("minShipFraction",
+                                                                  _MIN_SHIP_FRACTION))))
+    except (ValueError, TypeError):
+        return _MIN_SHIP_FRACTION
+
+
+def _trade_fleet_size():
+    """Total trade ships the empire owns (statusSummary.json), or None if unknown."""
+    try:
+        with open(os.path.join(LOGS_DIR, "statusSummary.json")) as f:
+            total = int(json.load(f).get("ships", {}).get("total", 0) or 0)
+        return total if total > 0 else None
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def _fleet_demote_after():
+    try:
+        return max(0, int(_load_farm_settings().get("fleetDemoteAfterSweeps",
+                                                    _FLEET_DEMOTE_AFTER_SWEEPS)))
+    except (ValueError, TypeError):
+        return _FLEET_DEMOTE_AFTER_SWEEPS
 
 
 def early_respy_enabled():
@@ -690,6 +729,36 @@ def _raid_in_flight(target):
     return False
 
 
+_MOVEMENTS_FRESH_SECS = 10 * 60
+
+
+def _movements_fresh(now):
+    """True if movements.json was written recently. A failed movements read now leaves the
+    old file in place (it used to be overwritten with an empty list), so "no movement to the
+    target" only means "the troops are home" when the file is actually fresh."""
+    try:
+        return now - os.path.getmtime(MOVEMENTS_PATH) <= _MOVEMENTS_FRESH_SECS
+    except OSError:
+        return False
+
+
+def _queued_raid(target):
+    """The army wave for this target still waiting in the attack queue, or None. While it is
+    there the troops have NOT left: the attack manager may be deferring it (no free ships) or
+    holding it for its blockade. Without this look the farm saw "no movement after 5 minutes",
+    declared the raid over, and queued a second one on top of the first."""
+    try:
+        from db_manager import queue_items
+        tid = str(target.get("target_city_id", ""))
+        for it in queue_items("attack"):
+            if (str(it.get("targetCityId", "")) == tid and it.get("missionType", "army") == "army"
+                    and it.get("targetType", "enemy") != "own"):
+                return it
+    except Exception:
+        pass
+    return None
+
+
 def _attack_was_sent(target):
     """True if a successful dispatch to this target was logged since the farm queued the raid.
 
@@ -1088,6 +1157,16 @@ def process_farm_targets(session, in_active_hours=True):
             logger.info("[farm] %s: saque estimado %d > tecto por vaga %d — navios dimensionados "
                         "ao tecto", name, loot, raid_cap)
         transporters = max(1, math.ceil(wave_loot / ship_cap))
+        # The floor is a share of what the wave can actually use: a warehouse bigger than the
+        # whole fleet "asks" for more ships than exist, and must still go with all of them.
+        fleet_size = _trade_fleet_size()
+        min_transporters = (math.ceil(min(transporters, fleet_size) * _min_ship_fraction())
+                            if fleet_size else 0)
+        if min_transporters and _free_ships_once() < min_transporters:
+            logger.info("[farm] %s: a vaga pede %d navios e só há %d livres (mínimo %d) — "
+                        "raide adiado até a frota regressar", name, transporters,
+                        _free_ships_once(), min_transporters)
+            return None
         if farm_army:
             avail = military.get("byCityName", {}).get(origin_name, {}).get("troops", {})
             troop_units = {uid: min(qty, avail.get(uid, {}).get("amount", 0))
@@ -1164,7 +1243,14 @@ def process_farm_targets(session, in_active_hours=True):
             # enemy fleet off (it flees & disperses). Wave 2: troops timed to LAND fleet_lead
             # after the fleet — inside the clean window. Transports are usually faster than
             # warships, so we DELAY the troop launch (real times) so the order is fleet→troops.
-            queue_add("attack", dict(base, missionType="fleet",
+            # The two waves are ONE operation (P13.2): the army item names the fleet item it
+            # depends on, and the attack manager only releases it once the blockade has really
+            # been sent — re-timed from the moment it left. If the blockade is retried the
+            # troops wait; if it is dropped the troops are cancelled. Before, the army kept its
+            # original schedule whatever happened to the fleet and could land first, or alone.
+            import uuid as _uuid
+            fleet_item_id = _uuid.uuid4().hex[:8]
+            queue_add("attack", dict(base, id=fleet_item_id, missionType="fleet",
                       units=fleet_units, transporters=0, dispatchAfter=now))
             fleet_lead    = max(1, int(t.get("fleet_lead_min", 5))) * 60
             if combat_ships > 0:
@@ -1190,8 +1276,13 @@ def process_farm_targets(session, in_active_hours=True):
             else:
                 logger.info("⚔️ [farm] %s: ataque agendado de %s (saque ~%d, %d navios)",
                             name, origin_name, loot, transporters)
-        queue_add("attack", dict(base, missionType="army",
-                  units=troop_units, transporters=transporters, dispatchAfter=army_after))
+        army_item = dict(base, missionType="army", units=troop_units,
+                         transporters=transporters, minTransporters=min_transporters,
+                         dispatchAfter=army_after)
+        if need_fleet:
+            army_item.update(waitsForFleet=fleet_item_id, fleetTravel=int(fleet_travel),
+                             troopTravel=int(troop_travel), fleetLead=int(fleet_lead))
+        queue_add("attack", army_item)
         return {"return_at": return_at, "transporters": transporters,
                 "enemy_return_at": new_enemy_return, "troop_journey": troop_travel,
                 "is_fleet_target": 1 if (is_fleet_target or enemy_ships > 0) else 0}
@@ -1577,7 +1668,28 @@ def process_farm_targets(session, in_active_hours=True):
                 # wall-clock, which used to kill in-flight reports across downtime.
                 continue
 
-            loot     = sum((m.get("result") or {}).get("resources", {}).values())
+            # The warehouse reading must be a real one BEFORE it can mean anything (P13.9): the
+            # "drained → disable + ignore for 60 days" verdict below used to run on whatever
+            # was there — a missing/empty/failed result read as "0 loot", and resources=None
+            # crashed the pass. An unusable reading is a failed scout: try again.
+            wres = m.get("result") or {}
+            resources = wres.get("resources")
+            if not isinstance(resources, dict) or not resources or wres.get("success") is False:
+                tries = int(t.get("scout_fail_count", 0) or 0) + 1
+                if tries >= _MAX_SCOUT_FAILS:
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                                      "scout_fail_count": 0, "next_action": "spy",
+                                      "force_fresh_spy": 1})
+                    logger.warning("[farm] %s: relatório de armazém inutilizável %dx — a saltar a "
+                                   "ronda (o alvo NÃO é dado como drenado)", name, tries)
+                else:
+                    wait = random.randint(5, 15) * 60
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                                      "scout_fail_count": tries, "next_action": "spy"})
+                    logger.info("[farm] %s: relatório de armazém sem dados válidos (%d/%d) — "
+                                "nova espionagem em %dmin", name, tries, _MAX_SCOUT_FAILS, wait // 60)
+                continue
+            loot     = sum(int(v or 0) for v in resources.values())
             gres     = m.get("garrisonResult") or {}
             garrison = gres.get("troops") or {}
             # Real enemy-fleet return ETA from the movements scout (fleet targets): feeds the
@@ -1619,7 +1731,7 @@ def process_farm_targets(session, in_active_hours=True):
             # Type-based decision: flee ships (lancha/reparador) are driven off by a blockade;
             # any other warship actually fights → too dangerous. combat ships beyond the
             # tolerated cap (max_enemy_ships, default 0) → skip + alert.
-            combat_ships, flee_ships = _classify_enemy_fleet(garrison)
+            combat_ships, flee_ships = _classify_enemy_fleet(garrison, gres.get("fleet"))
             min_loot   = int(t.get("min_loot", 50000))
             max_combat = int(t.get("max_enemy_ships", 0))
 
@@ -1702,6 +1814,24 @@ def process_farm_targets(session, in_active_hours=True):
                 first_sweep = _never_swept(t)
                 t["swept_at"] = now
                 farm_update(tid, {"swept_at": now})
+                # Fleet-target demotion: count consecutive complete sweeps with a clean port
+                # (no ship now, none due back); enough of them clear the flag.
+                if int(t.get("is_fleet_target", 0) or 0) == 1:
+                    port_clean = enemy_ships == 0 and not (m.get("movementsResult") or {}).get("enemyReturnAt")
+                    streak = (int(t.get("clean_sweeps", 0) or 0) + 1) if port_clean else 0
+                    need = _fleet_demote_after()
+                    if port_clean and need and streak >= need:
+                        t["is_fleet_target"] = 0
+                        t["enemy_return_at"] = 0
+                        t["clean_sweeps"] = 0
+                        farm_update(tid, {"is_fleet_target": 0, "enemy_return_at": 0,
+                                          "clean_sweeps": 0, "last_enemy_ships": 0})
+                        logger.info("[farm] %s: %d varrimentos completos seguidos com o porto limpo "
+                                    "— deixa de ser alvo de frota (volta ao ataque directo)",
+                                    name, streak)
+                    else:
+                        t["clean_sweeps"] = streak
+                        farm_update(tid, {"clean_sweeps": streak})
                 if first_sweep:
                     try:
                         from telegram_notifier import notify_target_swept
@@ -1776,13 +1906,25 @@ def process_farm_targets(session, in_active_hours=True):
                     refresh_movements(session, first_city_id)
                 except Exception:
                     pass
+            # The wave is still in the attack queue → the troops have not left. Keep waiting on
+            # the attack manager; move the return estimate so we don't wake on a stale one.
+            queued = _queued_raid(t)
+            if queued:
+                leaves = max(now, int(queued.get("dispatchAfter", 0) or 0))
+                expected = leaves + _round_trip_secs(t) + 300
+                if expected > return_at + 60:
+                    farm_update(tid, {"attack_return_at": expected})
+                    logger.info("[farm] %s: a vaga ainda está na fila de ataques (não saiu) — "
+                                "regresso reestimado para ~%dmin", name, (expected - now) // 60)
+                continue
+            mv_fresh = _movements_fresh(now)
             # Refine the wake from the actual fleet movement when available
             real = _real_return_eta(t)
             if real and abs(real - return_at) > 60:
                 farm_update(tid, {"attack_return_at": real})
                 return_at = real
             elif (not real and now < return_at and int(t.get("last_attack_at", 0)) > 0
-                  and not _raid_in_flight(t)
+                  and mv_fresh and not _raid_in_flight(t)
                   and now - int(t.get("last_attack_at", 0)) > _RAID_GRACE_SECS):
                 # The estimate overshot: no movement to/from this target and grace has passed →
                 # troops are already home and ships are free. Don't block the queue any longer.
@@ -1819,14 +1961,30 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
 
             if now >= return_at:
-                # Bounce detection: a raid that came home without ANY registered loot most
-                # likely turned back from a sea fight (enemy warship docked since the last
-                # garrison scout — seen live with 2 triremes at a "safe" target). Don't
-                # re-attack blind: force a FULL garrison re-scout (fleet targets always get
-                # one) so the blockade/skip logic can see the port. Worst case (loot_log
-                # missed a real return) costs one spy round instead of a 6h bounced raid.
-                if (int(t.get("last_attack_at", 0) or 0) > 0 and _recent_return_loot(t) is None
-                        and not _attack_was_sent(t)):
+                # What came home? Three different things used to be read as one "bounce":
+                #   • a zero-loot return we actually SAW (recorded by the movements collector)
+                #     → the raid turned back from a sea fight or found nothing: a real signal,
+                #       the target becomes a fleet target and gets a full re-scout;
+                #   • the wave never left (deferred, then dropped from the attack queue)
+                #     → not a bounce, retry;
+                #   • no return recorded at all → we simply did not see it (movements were not
+                #     refreshed while it sailed home). That is missing data, not evidence: do
+                #     NOT brand the target, but require a fresh full sweep before the next raid.
+                recent = _recent_return_loot(t) if int(t.get("last_attack_at", 0) or 0) > 0 else -1
+                if recent is None and not mv_fresh and now - return_at < 1800:
+                    # can't see the movements right now — look again shortly before deciding
+                    farm_update(tid, {"attack_return_at": now + random.randint(180, 360)})
+                    continue
+                if recent == 0:
+                    delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
+                                      "next_action": "spy", "is_fleet_target": 1,
+                                      "clean_sweeps": 0, "respy_launched_at": 0})
+                    logger.warning("[farm] %s: a pilhagem regressou VAZIA (ricochete naval ou "
+                                   "armazém vazio) — alvo tratado como de frota; re-espionagem "
+                                   "completa em %dmin", name, delay // 60)
+                    continue
+                if recent is None and not _attack_was_sent(t):
                     # The raid never left port (deferred for lack of ships, then dropped from the
                     # attack queue). Not a bounce: keep the target's classification and intel,
                     # un-count the phantom raid and retry the attack.
@@ -1839,14 +1997,14 @@ def process_farm_targets(session, in_active_hours=True):
                                    "ataques) — não é ricochete; nova tentativa em %dmin",
                                    name, delay // 60)
                     continue
-                if int(t.get("last_attack_at", 0) or 0) > 0 and _recent_return_loot(t) is None:
+                if recent is None:
                     delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
-                                      "next_action": "spy", "is_fleet_target": 1,
+                                      "next_action": "spy", "swept_at": 0,
                                       "respy_launched_at": 0})
-                    logger.warning("[farm] %s: tropas regressaram SEM saque registado — "
-                                   "possível ricochete naval; re-espionagem completa em %dmin",
-                                   name, delay // 60)
+                    logger.warning("[farm] %s: regresso não observado (sem registo de saque nem de "
+                                   "regresso vazio) — varrimento completo antes do próximo ataque, "
+                                   "sem marcar o alvo como de frota; em %dmin", name, delay // 60)
                     continue
                 if int(t.get("respy_launched_at", 0)) > 0:
                     # An early re-spy is already in flight/done — normally hand straight to

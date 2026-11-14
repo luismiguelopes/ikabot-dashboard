@@ -42,14 +42,33 @@ def has_pending_attacks():
     return bool(_attack_queue_items())
 
 
+def _wave_state(item, queued_ids):
+    """How an army wave stands with the blockade it depends on (P13.2):
+      None      — not part of a blockade wave, or its fleet has already been sent
+      "waiting" — the fleet item is still in the queue (not sent yet / being retried)
+      "orphan"  — the fleet item is gone without ever being sent (failed and dropped)."""
+    fleet_id = item.get("waitsForFleet")
+    if not fleet_id:
+        return None
+    return "waiting" if fleet_id in queued_ids else "orphan"
+
+
 def has_due_attacks():
-    """True only if at least one pending attack has reached its dispatchAfter time.
-    smart_sleep must use this (not has_pending_attacks) — otherwise a future-scheduled
-    attack makes the wait loop spin without sleeping until the attack is due."""
+    """True only if at least one pending attack has something to do now: its dispatchAfter
+    has come and it is not held back by its blockade (an orphaned wave IS due — it has to be
+    cancelled). smart_sleep must use this (not has_pending_attacks) — otherwise an item that
+    cannot be handled yet makes the wait loop spin without sleeping."""
     try:
         now = int(time.time())
-        return any(int(it.get("dispatchAfter", 0)) <= now
-                   for it in _attack_queue_items())
+        items = _attack_queue_items()
+        ids = {it.get("id") for it in items}
+        for it in items:
+            state = _wave_state(it, ids)
+            if state == "orphan":
+                return True
+            if state is None and int(it.get("dispatchAfter", 0)) <= now:
+                return True
+        return False
     except Exception:
         return False
 
@@ -296,7 +315,7 @@ def _cap_to_available_ships(requested, session=None, reserve=0):
 
 
 def _send_army_plunder(session, origin_id, target_id, island_id, units, transporters,
-                       wine_reserve=0):
+                       wine_reserve=0, min_transporters=0):
     """Player pillage. The POST function is taken from the game's own form:
     'sendArmyPlunderSea' for a target on another island (troops ride transport ships),
     'sendArmyPlunderLand' for one on the SAME island (troops march overland). Hardcoding
@@ -319,6 +338,11 @@ def _send_army_plunder(session, origin_id, target_id, island_id, units, transpor
             logger.info("[attack] pilhagem adiada — navios cedidos à reserva de vinho (P11.10)")
         else:
             logger.info("[attack] pilhagem adiada — 0 navios livres (a regressar)")
+        return _DEFER
+    if int(min_transporters or 0) > 0 and capped < int(min_transporters):
+        # P13.8: not worth an army round trip for a fraction of the ships the wave was sized for
+        logger.info("[attack] pilhagem adiada — %d navios livres, a vaga precisa de pelo menos %d "
+                    "(pedidos %d)", capped, int(min_transporters), int(transporters))
         return _DEFER
 
     _change_to_origin_city(session, ikabot_config, origin_id)
@@ -553,7 +577,8 @@ def _dispatch_attack(session, item):
                 wine_reserve = 0
         return _send_army_plunder(session, origin_id, item["targetCityId"],
                                   item["islandId"], item.get("units", {}),
-                                  item.get("transporters", 0), wine_reserve=wine_reserve)
+                                  item.get("transporters", 0), wine_reserve=wine_reserve,
+                                  min_transporters=item.get("minTransporters", 0))
 
     logger.info("[attack] a despachar fleet → %s (%s)",
                 item.get("targetCityName"), item.get("targetPlayerName"))
@@ -566,6 +591,48 @@ def _last_failure_is_vacation():
     feedback — a permanent condition (for hours/days), so retrying is pointless."""
     txt = unicodedata.normalize("NFKD", _last_feedback_text or "").encode("ascii", "ignore").decode().lower()
     return "ferias" in txt or "vacation" in txt or "urlaub" in txt
+
+
+def _cancel_orphan_wave(item, queue_remove):
+    """The blockade this army wave was waiting for was never sent (failed and dropped).
+    Sending the troops alone into a port that needed a blockade is a guaranteed bounce, so
+    the wave is cancelled and the farm target released to scout again."""
+    queue_remove(ATTACK_QUEUE, [item.get("id")])
+    logger.warning("[attack] %s (%s): o bloqueio desta vaga nunca saiu — tropas CANCELADAS "
+                   "(não seguem sem bloqueio)", item.get("targetPlayerName"),
+                   item.get("targetCityName"))
+    try:
+        from telegram_notifier import notify_attack_failed
+        notify_attack_failed(item.get("targetCityName", "?"), item.get("targetPlayerName", "?"), 0)
+    except Exception:
+        pass
+    try:
+        from db_manager import farm_get, farm_update
+        t = farm_get(str(item.get("targetCityId", "")))
+        if t and t.get("state") == "ATTACKING":
+            farm_update(str(item["targetCityId"]), {
+                "state": "IDLE", "next_action": "spy", "respy_launched_at": 0,
+                "next_run_at": int(time.time()) + random.randint(5, 15) * 60,
+                "total_raids": max(0, int(t.get("total_raids", 0) or 0) - 1)})
+    except Exception:
+        logger.warning("[attack] libertar o alvo do farm após cancelar a vaga falhou", exc_info=True)
+
+
+def _release_wave_after_fleet(fleet_item, queue_add):
+    """The blockade has just been sent: re-time and release the army wave that waits for it,
+    so the troops land `fleetLead` after the fleet really arrives — counted from NOW, not
+    from when the raid was planned (the fleet may have been retried in between)."""
+    now = int(time.time())
+    for it in _attack_queue_items():
+        if it.get("waitsForFleet") != fleet_item.get("id"):
+            continue
+        fleet_travel = int(it.get("fleetTravel", 0) or 0)
+        troop_travel = int(it.get("troopTravel", 0) or 0)
+        lead = int(it.get("fleetLead", 0) or 0)
+        after = max(now, now + fleet_travel + lead - troop_travel)
+        queue_add(ATTACK_QUEUE, dict(it, waitsForFleet="", fleetSentAt=now, dispatchAfter=after))
+        logger.info("[attack] bloqueio a caminho de %s — tropas libertadas, saem em %dmin",
+                    it.get("targetCityName"), max(0, (after - now) // 60))
 
 
 def _skip_farm_target_vacation(target_city_id):
@@ -606,7 +673,18 @@ def process_attack_queue(session, in_active_hours=True):
         return
 
     dispatched = 0
+    released = set()        # army waves re-timed during this pass (their fleet just left)
     for item in pending:
+        # Blockade waves (P13.2): the army item is held until its fleet item has been sent.
+        if item.get("waitsForFleet"):
+            if item["waitsForFleet"] in released:
+                continue                                   # re-timed just now → next pass
+            state = _wave_state(item, {it.get("id") for it in _attack_queue_items()})
+            if state == "waiting":
+                continue
+            if state == "orphan":
+                _cancel_orphan_wave(item, queue_remove)
+                continue
         if int(time.time()) < item.get("dispatchAfter", 0):
             continue
 
@@ -615,6 +693,12 @@ def process_attack_queue(session, in_active_hours=True):
             logger.info("[attack] aguardar %ds antes do próximo ataque", delay)
             time.sleep(delay)
 
+        # Clear the last rejection text first: a dispatch that fails WITHOUT game feedback
+        # (network error, exception) must not inherit the previous item's reason — a stale
+        # "player on vacation" text made an unrelated failure drop its item and push the farm
+        # target 24h ahead.
+        global _last_feedback_text
+        _last_feedback_text = ""
         ok = _dispatch_attack(session, item)
         dispatched += 1
 
@@ -637,6 +721,9 @@ def process_attack_queue(session, in_active_hours=True):
         _log_attack_attempt(item, ok)
         if ok:
             queue_remove(ATTACK_QUEUE, [item.get("id")])
+            if item.get("missionType") == "fleet":
+                released.add(item.get("id"))
+                _release_wave_after_fleet(item, queue_add)
             logger.info("⚔️ [attack] ataque despachado → %s (%s)",
                         item.get("targetPlayerName"), item.get("targetCityName"))
             try:
@@ -728,14 +815,24 @@ def _enemy_fleet_count(garrison_troops):
 _FLEE_SHIP_NAMES = {"lancha", "reparador"}
 
 
-def _classify_enemy_fleet(garrison_troops):
+def _classify_enemy_fleet(garrison_troops, fleet_units=None):
     """Split an enemy garrison's NAVAL units into (combat_ships, flee_ships) counts.
+    When the report's own fleet section is available (`fleet_units`, a dict — reports parsed
+    since P13.7), EVERY unit in it is a ship, whatever its name: only the flee/fight split
+    still goes by name. Without it (older stored reports) ships are recognised by name.
     flee_ships = lancha rápida / reparador (run from a blockade); combat_ships = every other
     warship (fights). Land units are ignored. Drives the F4.b decision:
       combat_ships > 0  → too dangerous, skip + alert
       else flee_ships>0 → blockade (drive them off) then pillage
       else              → troops only."""
     combat = flee = 0
+    if isinstance(fleet_units, dict):
+        for name, count in fleet_units.items():
+            if any(f in _strip_accents(name) for f in _FLEE_SHIP_NAMES):
+                flee += int(count or 0)
+            else:
+                combat += int(count or 0)
+        return combat, flee
     for name, count in (garrison_troops or {}).items():
         norm = _strip_accents(name)
         if not any(nav in norm for nav in _NAVAL_UNIT_NAMES):

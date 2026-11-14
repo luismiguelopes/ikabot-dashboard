@@ -1412,6 +1412,16 @@ def collect_mission_results(session):
                         missions[i]["garrisonResult"]       = None
                         logger.info("[espionage] armazém %s: total %s — threshold atingido, garrison em %ds",
                                     m["targetCityName"], f"{sum(resources.values()):,}", delay)
+                elif str(m.get("targetCityId", "")) in _enabled_farm_target_ids():
+                    # An ENABLED farm target is the farm's to judge (P13.61): it applies its own
+                    # per-target min_loot, disables the target and marks it ignored ONCE. This
+                    # pipeline used to recall the spy and ignore it too, 20 seconds earlier —
+                    # two strikes per drain (so "permanent" came twice as fast), and a recall
+                    # of spies the farm keeps stationed on purpose.
+                    missions[i]["state"] = "DONE"
+                    logger.info("[espionage] armazém %s: total %s — abaixo do limiar, alvo do "
+                                "farm: decisão fica com o farm", m["targetCityName"],
+                                f"{sum(resources.values()):,}")
                 else:
                     missions[i]["state"] = "DONE"
                     logger.info("[espionage] armazém %s: total %s — threshold não atingido, DONE",

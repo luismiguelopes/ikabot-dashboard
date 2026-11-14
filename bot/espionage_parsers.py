@@ -385,10 +385,11 @@ def _parse_reports_from_html(html):
                     except ValueError:
                         pass
 
-        troops = None
+        troops = fleet_units = None
         if re.search(r'Tropas\s+em\b|Frotas\s+em\b', chunk, re.IGNORECASE):
             # Keep {} for empty garrison — distinguishes "garrison checked, no troops" from "not a garrison report"
             troops = _parse_garrison_troops(chunk)
+            fleet_units = _parse_garrison_sections(chunk)["fleet"]   # ships, by the report's own row
 
         results[report_id] = {
             "reportId":       report_id,
@@ -407,6 +408,7 @@ def _parse_reports_from_html(html):
             "sentAgents":     sent_agents,
             "resources":      resources if resources else None,
             "troops":         troops,
+            "fleet":          fleet_units,
             "reportedAt":     int(time.time()),
         }
 
@@ -414,15 +416,17 @@ def _parse_reports_from_html(html):
     return results
 
 
-def _parse_garrison_troops(html):
-    """
-    Parse the table-structured garrison report HTML.
+def _parse_garrison_sections(html):
+    """Parse the table-structured garrison report HTML, keeping the two arms apart.
     Format: header row (Quartel/Estaleiro + unit names),
-            data row (Tropas/Frotas em CITY + counts or "-")
-    Returns {unit_name: count} for all non-zero units.
-    """
+            data row (Tropas em CITY / Frotas em CITY + counts or "-").
+    Returns {"army": {unit_name: count}, "fleet": {unit_name: count}} for non-zero units.
+
+    The report itself says which units are ships (the "Frotas em" row). Classifying by unit
+    NAME instead (attack_manager._NAVAL_UNIT_NAMES) is fail-open: a ship whose name is not on
+    the list counts as a land unit and the port reads as clean (P13.7)."""
     import re
-    troops = {}
+    out = {"army": {}, "fleet": {}}
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
     current_headers = []
     for row in rows:
@@ -443,6 +447,7 @@ def _parse_garrison_troops(html):
         if first in ('Quartel', 'Estaleiro'):
             current_headers = cells[1:]
         elif first.startswith('Tropas em') or first.startswith('Frotas em'):
+            section = out["fleet"] if first.startswith('Frotas em') else out["army"]
             values = cells[1:]
             for i, val in enumerate(values):
                 if i >= len(current_headers):
@@ -453,9 +458,19 @@ def _parse_garrison_troops(html):
                 try:
                     count = int(val.replace('.', '').replace(',', ''))
                     if count > 0:
-                        troops[unit_name] = troops.get(unit_name, 0) + count
+                        section[unit_name] = section.get(unit_name, 0) + count
                 except ValueError:
                     pass
+    return out
+
+
+def _parse_garrison_troops(html):
+    """Flat {unit_name: count} of a garrison report — army and fleet merged (the shape the
+    rest of the code and the stored missions use). See _parse_garrison_sections."""
+    sections = _parse_garrison_sections(html)
+    troops = dict(sections["army"])
+    for name, count in sections["fleet"].items():
+        troops[name] = troops.get(name, 0) + count
     return troops
 
 

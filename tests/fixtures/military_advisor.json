@@ -1,0 +1,282 @@
+[
+ [
+  "updateGlobalData",
+  {
+   "time": 1794685048,
+   "actionRequest": "x"
+  }
+ ],
+ [
+  "changeView",
+  [
+   "militaryAdvisor",
+   "",
+   {
+    "viewScriptParams": {
+     "militaryAndFleetMovements": [
+      {
+       "event": {
+        "id": 3792650,
+        "type": "army",
+        "mission": 1,
+        "missionState": 2,
+        "missionText": "Transportar (em curso)",
+        "missionIconClass": "transport",
+        "isFleetReturning": false,
+        "isReturning": 0,
+        "isInFight": 0,
+        "isCombatant": 0,
+        "isFirstOwnLoadingQueueEvent": false,
+        "loadingAccelerated": false,
+        "canAbort": true,
+        "canRetreat": false
+       },
+       "eventTime": 1794686633,
+       "eventDate": "21:03:53",
+       "hideUnits": false,
+       "army": {
+        "amount": 0,
+        "units": []
+       },
+       "fleet": {
+        "amount": 2,
+        "ships": [
+         {
+          "cssClass": "ship_freighter",
+          "amount": "2"
+         }
+        ]
+       },
+       "resources": [
+        {
+         "cssClass": "resource_icon wood",
+         "amount": "102.000"
+        },
+        {
+         "cssClass": "resource_icon wine",
+         "amount": "3.000"
+        }
+       ],
+       "isOwnArmyOrFleet": true,
+       "isSameAlliance": false,
+       "isHostile": false,
+       "tritonEngines": false,
+       "origin": {
+        "name": "Casa 1",
+        "avatarId": 103448,
+        "avatarName": "Eu",
+        "cityId": 30817,
+        "islandId": 341
+       },
+       "target": {
+        "name": "Casa 2",
+        "avatarId": 103448,
+        "avatarName": "Eu",
+        "islandId": 341,
+        "cityId": 53561,
+        "hasBarbarianFleet": false
+       }
+      },
+      {
+       "event": {
+        "id": 3792770,
+        "type": "fleet",
+        "mission": 7,
+        "missionState": 2,
+        "missionText": "Pilhar (Voltar)",
+        "missionIconClass": "plunder",
+        "isFleetReturning": true,
+        "isReturning": 2,
+        "isInFight": 0,
+        "isCombatant": 0,
+        "isFirstOwnLoadingQueueEvent": false,
+        "loadingAccelerated": false,
+        "canAbort": false,
+        "canRetreat": false
+       },
+       "eventTime": 1794690448,
+       "eventDate": "22:07:28",
+       "hideUnits": false,
+       "army": {
+        "amount": 298,
+        "units": [
+         {
+          "cssClass": "phalanx",
+          "amount": "138"
+         },
+         {
+          "cssClass": "mortar",
+          "amount": "22"
+         },
+         {
+          "cssClass": "spartan",
+          "amount": "138"
+         }
+        ]
+       },
+       "fleet": {
+        "amount": 144,
+        "ships": [
+         {
+          "cssClass": "ship_transport",
+          "amount": "144"
+         }
+        ]
+       },
+       "resources": [
+        {
+         "cssClass": "resource_icon wood",
+         "amount": "19.775"
+        },
+        {
+         "cssClass": "resource_icon wine",
+         "amount": "22.455"
+        }
+       ],
+       "isOwnArmyOrFleet": true,
+       "isSameAlliance": false,
+       "isHostile": false,
+       "tritonEngines": false,
+       "origin": {
+        "name": "Casa 1",
+        "avatarId": 103448,
+        "avatarName": "Eu",
+        "cityId": 30817,
+        "islandId": 168
+       },
+       "target": {
+        "name": "Alvo 3",
+        "avatarId": 103165,
+        "avatarName": "Dono C",
+        "islandId": 168,
+        "cityId": 28208,
+        "hasBarbarianFleet": false
+       }
+      },
+      {
+       "event": {
+        "id": 3791340,
+        "type": "fleet",
+        "mission": 6,
+        "missionState": 2,
+        "missionText": "Ocupar porto (Voltar)",
+        "missionIconClass": "blockade",
+        "isFleetReturning": true,
+        "isReturning": 2,
+        "isInFight": 0,
+        "isCombatant": 0,
+        "isFirstOwnLoadingQueueEvent": false,
+        "loadingAccelerated": false,
+        "canAbort": false,
+        "canRetreat": false
+       },
+       "eventTime": 1794691378,
+       "eventDate": "22:22:58",
+       "hideUnits": false,
+       "army": {
+        "amount": 0,
+        "units": []
+       },
+       "fleet": {
+        "amount": 40,
+        "ships": [
+         {
+          "cssClass": "ship_steamboat",
+          "amount": "40"
+         }
+        ]
+       },
+       "resources": [],
+       "isOwnArmyOrFleet": true,
+       "isSameAlliance": false,
+       "isHostile": false,
+       "tritonEngines": false,
+       "origin": {
+        "name": "Casa 1",
+        "avatarId": 103448,
+        "avatarName": "Eu",
+        "cityId": 30817,
+        "islandId": 168
+       },
+       "target": {
+        "name": "Alvo 3",
+        "avatarId": 103165,
+        "avatarName": "Dono C",
+        "islandId": 168,
+        "cityId": 28208,
+        "hasBarbarianFleet": false
+       }
+      },
+      {
+       "event": {
+        "id": 3799999,
+        "type": "fleet",
+        "mission": 7,
+        "missionState": 2,
+        "missionText": "Pilhar (Voltar)",
+        "missionIconClass": "plunder",
+        "isFleetReturning": true,
+        "isReturning": 2,
+        "isInFight": 0,
+        "isCombatant": 0,
+        "isFirstOwnLoadingQueueEvent": false,
+        "loadingAccelerated": false,
+        "canAbort": false,
+        "canRetreat": false
+       },
+       "eventTime": 1794690448,
+       "eventDate": "22:07:28",
+       "hideUnits": false,
+       "army": {
+        "amount": 298,
+        "units": [
+         {
+          "cssClass": "phalanx",
+          "amount": "138"
+         },
+         {
+          "cssClass": "mortar",
+          "amount": "22"
+         },
+         {
+          "cssClass": "spartan",
+          "amount": "138"
+         }
+        ]
+       },
+       "fleet": {
+        "amount": 144,
+        "ships": [
+         {
+          "cssClass": "ship_transport",
+          "amount": "144"
+         }
+        ]
+       },
+       "resources": [],
+       "isOwnArmyOrFleet": true,
+       "isSameAlliance": false,
+       "isHostile": false,
+       "tritonEngines": false,
+       "origin": {
+        "name": "Casa 1",
+        "avatarId": 103448,
+        "avatarName": "Eu",
+        "cityId": 30817,
+        "islandId": 168
+       },
+       "target": {
+        "name": "Alvo 9",
+        "avatarId": 1,
+        "avatarName": "Dono Z",
+        "islandId": 168,
+        "cityId": 99001,
+        "hasBarbarianFleet": false
+       }
+      }
+     ]
+    }
+   }
+  ]
+ ]
+]

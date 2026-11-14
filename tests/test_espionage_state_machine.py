@@ -903,3 +903,17 @@ def test_execute_rejection_keeps_the_games_reason(monkeypatch):
     ok, reason = em._execute_spy_mission(_S(), "1", "100", 3, "SID", 1, em.MISSION_WAREHOUSE)
     assert (ok, reason) == (False, "rejected")
     assert em._last_execute_feedback == "O espião está  ocupado"
+
+
+# ── P13.61: a below-threshold report on an ENABLED farm target is the farm's call ──
+
+def test_low_loot_on_enabled_farm_target_is_left_to_the_farm(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="EXECUTING_WAREHOUSE", collectAfter=_now() - 1)])
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: {"garrisonThresholdTotal": 50000})
+    monkeypatch.setattr(em, "_fetch_all_reports", lambda *a, **k: _warehouse_report(1000))
+    monkeypatch.setattr(em, "_enabled_farm_target_ids", lambda: {"100"})
+    boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("o farm é que decide"))
+    monkeypatch.setattr(em, "_queue_recall", boom)
+    monkeypatch.setattr(em, "_auto_mark_ignored", boom)
+    em.collect_mission_results(session=object())
+    assert h["missions"][0]["state"] == "DONE"

@@ -250,6 +250,15 @@ def _run_migrations(conn):
             )
         """)
         conn.execute("INSERT INTO schema_version (version) VALUES (18)")
+    if current < 19:
+        # v19 = clean_sweeps: consecutive full sweeps (garrison + movements) of a fleet target
+        # that showed no ship and no returning fleet — lets is_fleet_target be earned back.
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN clean_sweeps INTEGER DEFAULT 0")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        conn.execute("INSERT INTO schema_version (version) VALUES (19)")
     conn.commit()
 
 
@@ -650,7 +659,7 @@ _FARM_UPDATE_COLS = {
     "respy_every", "raids_since_spy", "next_action", "last_transporters",
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
-    "mode", "low_raids", "scout_fail_count", "force_fresh_spy", "swept_at",
+    "mode", "low_raids", "scout_fail_count", "force_fresh_spy", "swept_at", "clean_sweeps",
 }
 
 

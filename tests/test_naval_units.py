@@ -100,3 +100,33 @@ def test_classify_ignores_land_units():
 def test_classify_only_combat():
     combat, flee = am._classify_enemy_fleet({"Trirreme": 3, "Barco Morteiro": 2})
     assert combat == 5 and flee == 0
+
+
+# ── P13.7: ships are whatever the report's "Frotas em" row lists ─────────────────
+
+def test_fleet_section_counts_a_ship_the_keyword_list_does_not_know():
+    """An unlisted / renamed / foreign-language ship used to read as a land unit → clean port."""
+    import attack_manager as am
+    garrison = {"Hoplita": 50, "Navio Fantasma": 4}
+    assert am._classify_enemy_fleet(garrison) == (0, 0)                       # by name: missed
+    assert am._classify_enemy_fleet(garrison, {"Navio Fantasma": 4}) == (4, 0)
+
+
+def test_fleet_section_never_counts_land_units_with_ship_like_names():
+    import attack_manager as am
+    garrison = {"Catapulta": 10, "Morteiro": 5, "Lancha rápida": 3}
+    assert am._classify_enemy_fleet(garrison, {"Lancha rápida": 3}) == (0, 3)   # flee ship only
+    assert am._classify_enemy_fleet(garrison, {}) == (0, 0)                     # empty harbour
+
+
+def test_garrison_report_keeps_army_and_fleet_apart():
+    import espionage_parsers as ep
+    html = """<table>
+    <tr><th>Quartel</th><td><div class="army hoplite" title="Hoplita"></div></td></tr>
+    <tr><td>Tropas em ALVO</td><td>1.250</td></tr>
+    <tr><th>Estaleiro</th><td><div class="fleet ram" title="Aríete a vapor"></div></td>
+        <td><div class="fleet x" title="Navio Fantasma"></div></td></tr>
+    <tr><td>Frotas em ALVO</td><td>12</td><td>2</td></tr></table>"""
+    sections = ep._parse_garrison_sections(html)
+    assert sections == {"army": {"Hoplita": 1250}, "fleet": {"Aríete a vapor": 12, "Navio Fantasma": 2}}
+    assert ep._parse_garrison_troops(html) == {"Hoplita": 1250, "Aríete a vapor": 12, "Navio Fantasma": 2}

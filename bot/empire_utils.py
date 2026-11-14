@@ -665,7 +665,8 @@ _CONFIG_SCHEMAS = {
     "farm_settings.json": {
         "army": dict, "fleet": dict, "spyAgents": int, "shipReserveEnabled": bool,
         "reserveHorizonMin": int, "earlyRespyEnabled": bool, "earlyReportMaxAgeMins": int,
-        "spyFreshnessHours": int,
+        "spyFreshnessHours": int, "lootCapPerRaid": int, "fleetDemoteAfterSweeps": int,
+        "minShipFraction": float,
     },
     "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
                                 "processingEnabled": bool},
@@ -685,6 +686,8 @@ def _type_ok(value, expected):
         return isinstance(value, int) and not isinstance(value, bool)
     if expected is bool:
         return isinstance(value, bool)
+    if expected is float:               # a whole number is a fine value for a float setting
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     return isinstance(value, expected)
 
 
