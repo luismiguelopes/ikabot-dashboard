@@ -984,13 +984,24 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
     estão atribuídos a **duas** missões diferentes de Tróia 3.
   - Correcção: os ids dos relatórios são monótonos → guardar o maior id visto **antes** do
     `executeMission` e só aceitar ids superiores; guardar a data real do relatório se der para ler.
-- [ ] **P13.2 Ondas bloqueio + tropas não estão acopladas** **[C]** — para um alvo de frota o farm
+- [x] **P13.2 Ondas bloqueio + tropas não estão acopladas** **[C]** ✅ 2026-11-14 — o item das
+      tropas leva `waitsForFleet` (id do item da frota) e os tempos reais; o gestor de ataques
+      só o liberta depois de o bloqueio **sair mesmo**, com a hora recalculada a partir desse
+      momento; bloqueio em repetição → tropas esperam; bloqueio removido → tropas canceladas e
+      alvo do farm libertado para re-espiar. Texto original: para um alvo de frota o farm
       enfileira dois itens independentes (frota `dispatchAfter=now`, tropas à hora calculada). Se o
       despacho da frota falha, é repetido 5-15 min depois (ou removido à 3.ª), mas as tropas
       mantêm a hora original → chegam **antes** do bloqueio, ou sem bloqueio nenhum. Correcção: id
       de vaga; as tropas só saem depois do sucesso da frota, com a hora recalculada; frota
       removida → cancelar as tropas e avisar o farm.
-- [ ] **P13.3 "Ricochete naval" deduzido da ausência de dados** **[C]** — três caminhos para um
+- [x] **P13.3 "Ricochete naval" deduzido da ausência de dados** **[C]** ✅ 2026-11-14 —
+      (a) leitura de movimentos falhada devolve `None` e o ficheiro anterior fica; (b) o farm
+      consulta a fila de ataques (`_queued_raid`): vaga ainda em fila = tropas não saíram, espera
+      e reestima o regresso; (c) o colector regista **regressos de pilhagem vazios** (classe
+      `plunder` do jogo, nunca o bloqueio). Três desfechos distintos: regresso vazio **visto** →
+      alvo de frota + re-espionagem; vaga que nunca saiu → nova tentativa; regresso **não
+      observado** → `swept_at=0` (varrimento completo antes do próximo raid) **sem** marcar
+      frota; movimentos desactualizados → volta a olhar em minutos. Texto original: três caminhos para um
       falso positivo, todos acabam em `is_fleet_target=1`:
   - `_collect_movements` devolve `[]` em erro e os chamadores **gravam** esse `[]` em
     `movements.json` → o farm lê "nenhum raid em voo" → "tropas já em casa" → sem saque → ricochete.
@@ -1002,7 +1013,11 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
     `attack_return_at`. Acrescentar um wake pouco depois da chegada ao alvo e **registar também os
     regressos vazios** (movimento de regresso sem recursos) — passa a haver prova positiva de
     ricochete em vez de inferência.
-- [ ] **P13.4 `is_fleet_target` nunca volta a 0** **[D]** — 18 dos 31 alvos estão marcados; 9 têm
+- [x] **P13.4 `is_fleet_target` nunca volta a 0** **[D]** ✅ 2026-11-14 — coluna `clean_sweeps`
+      (v19): 3 varrimentos completos seguidos com porto limpo (sem navios, sem frota a
+      regressar) limpam a marca; qualquer avistamento ou regresso vazio repõe a contagem
+      (`fleetDemoteAfterSweeps`, 0 = nunca). Os 9 alvos sem evidência estão desactivados; se
+      forem reactivados despromovem-se sozinhos. Texto original: 18 dos 31 alvos estão marcados; 9 têm
       registo de frota (navios no último scout ou bloqueio enviado), 9 não têm nenhum (Ninho de
       Águia, Vinhedo1, Indiota, Tróia 5, Castle-VIII/VII/V/M/C — os cinco Castle são o cenário
       exacto do P13.0). Cada alvo marcado paga um varrimento triplo antes de cada raid.
@@ -1021,16 +1036,25 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       tentar executar", que é um marcador de espiões perdidos (nunca mais reutilizados + alerta de
       captura). O mesmo em `execute_garrison_missions` / `execute_movements_missions` (acabam em
       DONE sem a perna). Distinguir `None` (tentar outra vez) de `0`.
-- [ ] **P13.7 Classificação naval por palavras-chave em português é fail-open** **[C]** — um navio
+- [x] **P13.7 Classificação naval por palavras-chave em português é fail-open** **[C]** ✅
+      2026-11-14 (lado do bot) — o parser guarda a secção "Frotas em" à parte
+      (`garrisonResult.fleet`) e tudo o que lá está é navio, seja qual for o nome; as
+      palavras-chave ficam só para fugir/combater e para relatórios antigos. A UI (P13.33) pode
+      agora usar `garrisonResult.fleet`. Texto original: um navio
       cujo nome não esteja em `_NAVAL_UNIT_NAMES` conta como unidade terrestre → "porto limpo". O
       relatório já separa as linhas "Tropas em" e "Frotas em"; o `_parse_garrison_troops` é que as
       funde. Guardar a secção e classificar pela estrutura (as palavras-chave ficam só para
       distinguir navios que fogem).
-- [ ] **P13.8 Raide parte com uma fracção dos navios** **[C]** — `_send_army_plunder` corta os
+- [x] **P13.8 Raide parte com uma fracção dos navios** **[C]** ✅ 2026-11-14 — mínimo de 50%
+      (`minShipFraction`) do que a vaga pode usar (limitado ao tamanho da frota, para um armazém
+      maior que a frota não ficar preso); o farm não enfileira abaixo disso e o despacho adia.
+      Texto original: `_send_army_plunder` corta os
       transporters ao disponível e só adia com 0. Uma vaga dimensionada para centenas de navios
       pode sair com meia dúzia. Exigir uma fracção mínima do pedido nos raids do farm; o piso
       fixo de 50 em `_raid_ships_ready` passa a relativo à vaga.
-- [ ] **P13.9 Gate "drenado" corre antes de validar o relatório** **[C]** — em SPYING,
+- [x] **P13.9 Gate "drenado" corre antes de validar o relatório** **[C]** ✅ 2026-11-14 —
+      relatório de armazém sem dados válidos é um scout falhado (nova tentativa), nunca
+      "drenado". Texto original: em SPYING,
       `loot < min_loot` desactiva e ignora o alvo 60 dias sem olhar para `result.success`; hoje
       está protegido por fora (só chegam a DONE relatórios com sucesso), mas é a mesma classe do
       P12.3. Validar primeiro; `resources: None` rebenta com `AttributeError`.
@@ -1040,7 +1064,9 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       Tróia 3 teve o armazém rejeitado 3× sem motivo no log. 48 das 93 missões guardadas estão
       FAILED — sem o texto não dá para saber porquê.
 
-- [ ] **P13.61 Um alvo drenado leva dois strikes de "ignorar"** **[D]** — visto no log de hoje
+- [x] **P13.61 Um alvo drenado leva dois strikes de "ignorar"** **[D]** ✅ 2026-11-14 — num alvo
+      **activo** do farm o pipeline de espionagem só fecha a missão; recolher/ignorar fica com o
+      farm. Texto original: visto no log de hoje
       (Vinhedo 3, 08:57-08:58): com o armazém abaixo do limiar, o **pipeline de espionagem**
       recolhe o espião e faz auto-ignorar (strike 5/4) e, 20s depois, o **farm** drena o mesmo
       alvo e faz auto-ignorar outra vez (strike 6/4). Cada drenagem conta a dobrar, logo o
@@ -1451,7 +1477,11 @@ Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira 
 
 **Sequência proposta** (os números são os itens P13 acima):
 
-1. **Acabar com os ricochetes** — passo 4 de H, por esta ordem:
+1. ✅ **Acabar com os ricochetes** *(2026-11-14, 553 testes; `test_farm_attack_e2e.py` corre
+   farm → fila de ataques → despacho numa fila real; `test_movements_real.py` usa uma captura
+   real)*. Bug extra encontrado pelo teste ponta a ponta: uma falha de despacho **sem resposta
+   do jogo** herdava o texto da rejeição anterior — um "está de férias" antigo fazia remover o
+   item e saltar o alvo 24h. Corrigido. Ordem seguida:
    P13.3 (movimentos `None` em erro; consultar a fila de ataques antes de dizer "nunca saiu";
    registar regressos vazios) → P13.4 (despromover `is_fleet_target` + rever os 9 alvos sem
    evidência) → P13.2 (ondas bloqueio/tropas acopladas) → P13.8 (fracção mínima de navios) →
@@ -1546,3 +1576,11 @@ com o farm, pára e passa para o Fable.
 5. Depois de um deploy que toque no bot, olhar para o log durante um ciclo e para o
    `health.json` (uma falha no `smart_sleep` agora aparece lá).
 6. Dúvida sobre se algo muda um despacho ao jogo → não fazer, anotar no plano para o Fable.
+
+**Estado do lado do Fable (2026-11-14, fim do dia).** Feitos: P13.0, P13.1, P13.2, P13.3, P13.4,
+P13.5, P13.6, P13.7 (bot), P13.8, P13.9, P13.10, P13.11, P13.12, P13.13, P13.14, P13.23,
+P13.44 (1), P13.61. **Restam para o Fable:** P13.62 (paginação dos relatórios), P13.1-resto
+(`dateText` → hora real), P13.24 (wake sem varrer a fila de construção), P13.27
+(`actionRequest`), P13.63 (recuo por alvo) e, por último, P13.28 (`decide()` do farm). Nenhum
+bloqueia o Opus: os blocos da tabela J podem arrancar já, e P13.33/P13.47 ficaram
+desbloqueados (o API já dá `garrisonResult.fleet` e ids na fila).
