@@ -1050,14 +1050,23 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
 
 ### B — Perda silenciosa de estado
 
-- [ ] **P13.11 `spy_missions.json` é a peça mais frágil** **[C]** — bot e Flask fazem ambos
+- [x] **P13.11 `spy_missions.json` é a peça mais frágil** **[C]** ✅ 2026-11-14 — missões em
+      SQLite (`spy_missions`, uma linha por missão, schema v18; `db_manager.missions_load/save`).
+      Gravação por **fusão**: quem carrega recebe um instantâneo (`_base`) e ao gravar só escreve
+      o que alterou, campo a campo, sobre a linha como está na BD; linhas que não viu ficam
+      intactas; uma leitura falhada devolve lista vazia **com instantâneo vazio**, que não apaga
+      nada. O dashboard (`force-warehouse`, `recall-spy`, leituras) usa a mesma store. Migração
+      automática do JSON (ficheiro renomeado para `.migrated`). Texto original: bot e Flask fazem ambos
       ler-modificar-gravar sem escrita atómica nem lock; cada função da máquina de estados segura
       a lista em memória durante minutos de pedidos antes de gravar (edições do Flask nesse
       intervalo perdem-se); `_load_missions` devolve lista vazia se apanhar o ficheiro a meio e a
       gravação seguinte **apaga tudo**. O `force-warehouse` do Flask duplica o re-armar do bot mas
       limpa menos campos. Passar as missões para SQLite (uma linha por missão), como as filas.
       *(Não é o split do P11.4 — é mudar o armazenamento.)*
-- [ ] **P13.12 Fila de construção gravada em bloco** **[C]** — `save_queue` apaga tudo e reinsere
+- [x] **P13.12 Fila de construção gravada em bloco** **[C]** ✅ 2026-11-14 — `save_queue` passou
+      a fundir (mesmo esquema do P13.11): remove só o que quem grava removeu, edita só o que
+      editou, acrescenta o que acrescentou, e só reordena se quem grava reordenou. Um item
+      adicionado na UI a meio de uma passagem do bot já não desaparece. Texto original: `save_queue` apaga tudo e reinsere
       o que estava em memória; o bot carrega no início de uma passagem de minutos e grava no fim,
       o Flask faz o mesmo em cada clique. Um item adicionado na UI a meio de uma passagem
       desaparece. Operações por linha (inserir/remover/reordenar por id), como no P0.3.
@@ -1067,7 +1076,9 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       dentro de `except Exception: pass`: sem log e sem registo de saúde. É aqui que corre quase
       toda a actividade do farm; uma passagem que rebente é repetida a cada 60s em silêncio total.
       Usar `health_guard` como no ciclo completo.
-- [ ] **P13.14 Escritas JSON não atómicas** **[C]** — `empire.json`, `resources.json`,
+- [x] **P13.14 Escritas JSON não atómicas** **[C]** ✅ 2026-11-14 — 52 escritas convertidas para
+      `atomic_write_json` (bot) / `_atomic_write_json` (dashboard): tmp + `os.replace`. Ficam de
+      fora só os dumps de HTML de diagnóstico e o `history.jsonl`. Texto original: `empire.json`, `resources.json`,
       `movements.json`, `military.json`, `world_scan.json`, `last_alive.json`… são escritos com
       `open("w")` enquanto o Flask lê, e o SSE dispara o refetch precisamente na mudança de mtime.
       Várias rotas lêem sem `try` → 500 esporádico. Um helper `atomic_write_json` (tmp +
@@ -1285,8 +1296,8 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
 `BuildingsPage`, `WinePanorama`, `AuthGate`)
 
 - [ ] **P13.46 Bugs directos** **[C]**
-  - `Construction.tsx:104` — `nowSecs = now / 1000`, mas o `useLiveClock` já devolve segundos:
-    todas as previsões "pronto às…" do orçamento saem com data de **Janeiro de 1970**.
+  - ✅ (2026-11-14) `Construction.tsx:104` — `nowSecs = now / 1000`, mas o `useLiveClock` já
+    devolve segundos: as previsões "pronto às…" do orçamento saíam com data de Janeiro de 1970.
   - `SettingsPage.tsx:754` — `ignoreExpiryDays` e `ignorePermanentAfter` são editáveis e mostram
     "guardado", mas o POST (`app.py:1040`) só persiste três outras chaves: **nunca são gravados**
     (e o valor por omissão na UI é 30 dias contra 60 no servidor).
@@ -1296,7 +1307,10 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
     outra cidade mas o estado mantém a antiga → o envio falha com "origem e destino iguais".
   - Janela horária da fila com início ≥ fim (ex.: 22→6): o servidor ignora e responde `ok`.
   - Agendar "às HH:MM" sem hora envia **já** (igual ao despacho de ataques, P13.41).
-- [ ] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** — remover e
+- [~] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** —
+      *feito 2026-11-14:* remover e reordenar enviam o **id** do item (o API devolve os ids);
+      item que já saiu da fila → 409 com aviso e a lista é actualizada. *Falta:* a lista
+      refrescar sozinha com o SSE, o "+" rápido do `BuildingsPage` e o modelo em bloco. remover e
       reordenar enviam um índice; a lista só é lida ao abrir o separador. Se o bot tirar o item
       da cabeça entretanto, o clique remove ou move **outro edifício**. Enviar a identidade do
       item e recusar com 409 se não bater (resolve-se com o P13.12). O "+" rápido em
@@ -1443,8 +1457,14 @@ Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira 
    evidência) → P13.2 (ondas bloqueio/tropas acopladas) → P13.8 (fracção mínima de navios) →
    P13.7 + P13.33 (uma só fonte para "há navios", no bot e na UI) → P13.61 (dois strikes).
    Teste que falta e que protege tudo isto: farm → fila de ataques → despacho (P13.44-1).
-2. **Parar de perder estado** — P13.14 (escritas atómicas em todo o lado; o helper já existe) →
-   P13.11 (missões em SQLite) → P13.12 + P13.47 (fila de construção por linha e por identidade).
+2. ✅ **Parar de perder estado** *(2026-11-14)* — P13.14 (escritas atómicas) → P13.11 (missões em
+   SQLite) → P13.12 + P13.47 (fila de construção por fusão e por identidade). 527 testes.
+   ⚠️ **Lição de deploy:** os ficheiros `.py` montados ficam visíveis nos containers assim que
+   são gravados, e o Flask recarrega sozinho quando o `db_manager.py` muda. A migração das
+   missões correu no dashboard **antes** de o bot ser recriado, e o bot antigo ficou ~4 min
+   (14:41-14:45) sem ver missões (Tróia 3 foi dada como "espião não chegou a partir" e
+   recuperou sozinha). **Uma alteração com migração de dados deve ser escrita e deployada de
+   seguida, ou com o bot parado.**
 3. **Erros de UI que enganam ou gastam** *(achados dos subagentes, baratos)*:
    - P13.46: datas de 1970 no orçamento; campos de ignorar que não gravam; cidade sem vinho a
      verde; origem = destino nos transportes; "às HH:MM" vazio envia já.
