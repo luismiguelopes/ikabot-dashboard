@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { pollInterval, clearPoll } from '../api'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration } from '../utils'
 import { MATERIALS, COST_KEYS } from '../constants'
@@ -47,8 +48,8 @@ function CyclesCard() {
     .then(d => setCycles(d.cycles || [])).catch(() => {})
   useEffect(() => {
     load()
-    const id = setInterval(load, 15000)
-    return () => clearInterval(id)
+    const id = pollInterval(load, 15000)
+    return () => clearPoll(id)
   }, [])
 
   async function force(c: CycleInfo) {
@@ -132,8 +133,8 @@ function ActivityCard() {
   useEffect(() => {
     const load = () => fetch('/api/activity').then(r => r.json()).then(setData).catch(() => {})
     load()
-    const id = setInterval(load, 15000)
-    return () => clearInterval(id)
+    const id = pollInterval(load, 15000)
+    return () => clearPoll(id)
   }, [])
   if (!data || (data.pending.length === 0 && data.flags.length === 0 && data.recent.length === 0)) return null
   const qIcon: Record<string, string> = {
@@ -176,6 +177,20 @@ function ActivityCard() {
   )
 }
 
+// Declared at module level: defined inside CombatSummary's render it was a NEW component type
+// on every render, so React unmounted and remounted the tiles every second (the live clock).
+function Tile({ icon, label, value, sub, danger }: { icon: string; label: string; value: string; sub?: string; danger?: boolean }) {
+  return (
+    <div className={`flex-1 min-w-[120px] rounded-lg px-3 py-2.5 ${danger ? 'bg-red-50 border border-red-200' : 'bg-slate-50'}`}>
+      <div className="text-[11px] uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+        <i className={`fa-solid ${icon} ${danger ? 'text-red-500' : 'text-slate-400'}`} />{label}
+      </div>
+      <div className={`text-lg font-semibold ${danger ? 'text-red-600' : 'text-slate-700'}`}>{value}</div>
+      {sub && <div className="text-[11px] text-slate-400">{sub}</div>}
+    </div>
+  )
+}
+
 function CombatSummary() {
   const t   = useT()
   const now = useLiveClock()
@@ -200,24 +215,14 @@ function CombatSummary() {
       }).catch(() => {})
     }
     load()
-    const id = setInterval(load, 30000)
-    return () => clearInterval(id)
+    const id = pollInterval(load, 30000)
+    return () => clearPoll(id)
   }, [])
 
   const enabled   = farms.filter(f => f.enabled)
   const attacking = enabled.filter(f => f.state === 'ATTACKING').length
   const nextAtk   = pending.map(p => p.dispatchAfter).filter(d => d > now).sort((a, b) => a - b)[0]
   if (enabled.length === 0 && pending.length === 0 && loot24 === 0 && incoming.count === 0) return null
-
-  const Tile = ({ icon, label, value, sub, danger }: { icon: string; label: string; value: string; sub?: string; danger?: boolean }) => (
-    <div className={`flex-1 min-w-[120px] rounded-lg px-3 py-2.5 ${danger ? 'bg-red-50 border border-red-200' : 'bg-slate-50'}`}>
-      <div className="text-[11px] uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
-        <i className={`fa-solid ${icon} ${danger ? 'text-red-500' : 'text-slate-400'}`} />{label}
-      </div>
-      <div className={`text-lg font-semibold ${danger ? 'text-red-600' : 'text-slate-700'}`}>{value}</div>
-      {sub && <div className="text-[11px] text-slate-400">{sub}</div>}
-    </div>
-  )
 
   return (
     <Card className="mb-6">
@@ -248,12 +253,17 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
 
   const [queue, setQueue] = useState<BuildingQueue | null>(null)
   const [costsData, setCostsData] = useState<BuildingCostsData | null>(null)
+  // The queue: when the empire data really changed (not on every re-render of `data`).
   useEffect(() => {
     fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
+  }, [data.lastUpdatedTs])
+  // The cost table (every city × building × level) changes every 3 days — fetch it once.
+  // It used to be re-fetched on every live update, i.e. on every heartbeat of the bot.
+  useEffect(() => {
     fetch('/api/building-costs').then(r => r.ok ? r.json() : null).then(d => {
       if (d && !(d as any).error) setCostsData(d)
     }).catch(() => {})
-  }, [data])
+  }, [])
 
   const goldProd   = s.gold.production
   const goldRunway = goldProd < 0 ? s.gold.total / Math.abs(goldProd) / 24 : null

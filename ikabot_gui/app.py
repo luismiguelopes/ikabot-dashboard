@@ -764,10 +764,14 @@ def api_building_queue_settings():
         if isinstance(ah, dict):
             try:
                 s, e = int(ah.get("start", 0)), int(ah.get("end", 24))
-                if 0 <= s < e <= 24:
-                    settings["activeHours"] = {"start": s, "end": e}
             except (ValueError, TypeError):
-                pass
+                return jsonify({"error": "Horas activas inválidas"}), 400
+            # An inverted or empty window (22→6) used to be dropped while answering "ok".
+            # The window cannot cross midnight: it is one stretch within the day.
+            if not 0 <= s < e <= 24:
+                return jsonify({"error": "As horas activas têm de ir de uma hora mais cedo para "
+                                         "uma mais tarde, no mesmo dia (ex.: 7 → 23)."}), 400
+            settings["activeHours"] = {"start": s, "end": e}
     if "resourceBuffer" in body:
         buf = body["resourceBuffer"]
         if isinstance(buf, list) and len(buf) == 5:
@@ -814,49 +818,69 @@ _NOTIFY_DIGEST_MODES = ("off", "hourly", "daily")
 _DISCORD_WEBHOOK_RE = re.compile(r"^https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]+$")
 
 
+_NOTIFY_SECRETS = (("botToken", "TELEGRAM_BOT_TOKEN"), ("discordWebhook", "DISCORD_WEBHOOK_URL"))
+
+
+def _read_notify_settings():
+    try:
+        with open(TELEGRAM_SETTINGS_PATH) as f:
+            saved = json.load(f)
+        return saved if isinstance(saved, dict) else {}
+    except Exception:
+        return {}
+
+
 @app.route("/api/telegram-settings", methods=["GET"])
 def api_telegram_settings_get():
+    """Notification settings. The two secrets (bot token, Discord webhook) are NEVER sent to
+    the browser: each comes back empty with `<name>Set` / `<name>Hint` (its last 4
+    characters) / `<name>Source` ("file" or "env"). They used to be returned in full — the
+    environment values included — into plain text fields."""
+    saved = _read_notify_settings()
     data = {"botToken": "", "chatId": "", "discordWebhook": "", **_NOTIFY_DEFAULT_MIN,
             "telegramMuted": [], "discordMuted": [], "digest": "daily", "digestHour": 21}
-    if os.path.exists(TELEGRAM_SETTINGS_PATH):
-        try:
-            with open(TELEGRAM_SETTINGS_PATH) as f:
-                saved = json.load(f)
-            for k in data:
-                v = saved.get(k)
-                if v not in (None, ""):
-                    data[k] = v
-        except Exception:
-            pass
-    if not data["botToken"]:
-        data["botToken"] = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    for k in data:
+        v = saved.get(k)
+        if v not in (None, ""):
+            data[k] = v
     if not data["chatId"]:
         data["chatId"] = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not data["discordWebhook"]:
-        data["discordWebhook"] = os.getenv("DISCORD_WEBHOOK_URL", "")
+    for key, env in _NOTIFY_SECRETS:
+        stored, from_env = str(saved.get(key) or ""), os.getenv(env, "")
+        value = stored or from_env
+        data[key] = ""
+        data[key + "Set"] = bool(value)
+        data[key + "Hint"] = ("…" + value[-4:]) if len(value) >= 8 else ""
+        data[key + "Source"] = "file" if stored else ("env" if from_env else None)
     return jsonify(data)
 
 
 @app.route("/api/telegram-settings", methods=["POST"])
 def api_telegram_settings_save():
     body = request.get_json(force=True) or {}
-    data = {
-        "botToken":       str(body.get("botToken", "")).strip(),
-        "chatId":         str(body.get("chatId", "")).strip(),
-        "discordWebhook": str(body.get("discordWebhook", "")).strip(),
-    }
+    saved = _read_notify_settings()
+    data = {"chatId": str(body.get("chatId", saved.get("chatId", ""))).strip()}
+    # A secret is only replaced when a new value is typed; an empty field keeps what is
+    # stored (the browser never has the current value), and `<name>Clear` removes it. A
+    # value that lives in the environment is not copied into the file.
+    for key, _env in _NOTIFY_SECRETS:
+        typed = str(body.get(key, "") or "").strip()
+        if body.get(key + "Clear"):
+            data[key] = ""
+        else:
+            data[key] = typed or str(saved.get(key) or "")
     if data["discordWebhook"] and not _DISCORD_WEBHOOK_RE.match(data["discordWebhook"]):
         return jsonify({"ok": False, "error": "invalid_discord_webhook"}), 400
     for k, default in _NOTIFY_DEFAULT_MIN.items():
-        lvl = str(body.get(k, default))
+        lvl = str(body.get(k, saved.get(k, default)))
         data[k] = lvl if lvl in _NOTIFY_LEVELS else default
     for k in ("telegramMuted", "discordMuted"):
-        raw = body.get(k) or []
+        raw = body.get(k, saved.get(k)) or []
         data[k] = [c for c in _NOTIFY_CATEGORIES if isinstance(raw, list) and c in raw]
-    mode = str(body.get("digest", "daily"))
+    mode = str(body.get("digest", saved.get("digest", "daily")))
     data["digest"] = mode if mode in _NOTIFY_DIGEST_MODES else "daily"
     try:
-        data["digestHour"] = min(23, max(0, int(body.get("digestHour", 21))))
+        data["digestHour"] = min(23, max(0, int(body.get("digestHour", saved.get("digestHour", 21)))))
     except (TypeError, ValueError):
         data["digestHour"] = 21
     os.makedirs(LOGS_DIR, exist_ok=True)
@@ -1036,9 +1060,16 @@ def api_espionage_settings_post():
         existing["minLootTotal"] = max(0, int(body["minLootTotal"]))
     if "processingEnabled" in body:
         existing["processingEnabled"] = bool(body["processingEnabled"])
+    # These two were editable in Settings and showed "saved", but were never stored.
+    for key, lo, hi in (("ignoreExpiryDays", 1, 365), ("ignorePermanentAfter", 1, 20)):
+        if key in body:
+            try:
+                existing[key] = max(lo, min(hi, int(body[key])))
+            except (TypeError, ValueError):
+                pass
     os.makedirs(LOGS_DIR, exist_ok=True)
     _atomic_write_json(ESPIONAGE_SETTINGS_PATH, existing, indent=2)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "settings": existing})
 
 
 @app.route("/api/espionage/dispatch", methods=["POST"])
@@ -2182,14 +2213,22 @@ def api_stream():
     watched = [
         EMPIRE_JSON_PATH, RESOURCES_JSON_PATH, STATUS_SUMMARY_JSON_PATH,
         MOVEMENTS_JSON_PATH, QUEUE_SENTINEL_PATH, NEXT_CYCLE_JSON_PATH,
-        LAST_ALIVE_JSON_PATH, WORLD_SCAN_JSON_PATH, WORLD_SCAN_STATUS_PATH,
+        WORLD_SCAN_JSON_PATH, WORLD_SCAN_STATUS_PATH,
     ]
+    # The heartbeat is rewritten every ≤60s. Watched with the data files it fired `update`
+    # all the time, and every `update` made the browser re-fetch the whole empire (and the
+    # home page the whole cost table). It gets its own light event carrying the timestamp.
 
     def generate():
         last_mtimes = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in watched}
+        alive_mtime = os.path.getmtime(LAST_ALIVE_JSON_PATH) if os.path.exists(LAST_ALIVE_JSON_PATH) else 0
         yield ": connected\n\n"
         while True:
             time.sleep(2)
+            mtime = os.path.getmtime(LAST_ALIVE_JSON_PATH) if os.path.exists(LAST_ALIVE_JSON_PATH) else 0
+            if mtime != alive_mtime:
+                alive_mtime = mtime
+                yield "event: alive\ndata: %d\n\n" % int(mtime)
             changed = False
             for p in watched:
                 mtime = os.path.getmtime(p) if os.path.exists(p) else 0

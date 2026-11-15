@@ -63,3 +63,22 @@ export function installAuthInterceptor() {
     return res
   }
 }
+
+
+// ── Polling that rests while the tab is hidden ───────────────────────────────
+// Every poll in the app kept firing with the tab in the background (a dozen requests every
+// 15–60s for nobody). Drop-in for setInterval: same arguments, same id for clearInterval; the
+// callback is skipped while the document is hidden and runs once when it becomes visible again.
+export function pollInterval(fn: () => void, ms: number): ReturnType<typeof setInterval> {
+  const id = setInterval(() => { if (!document.hidden) fn() }, ms)
+  const onVisible = () => { if (!document.hidden) fn() }
+  document.addEventListener('visibilitychange', onVisible)
+  _pollCleanup.set(id, onVisible)
+  return id
+}
+const _pollCleanup = new Map<ReturnType<typeof setInterval>, () => void>()
+export function clearPoll(id: ReturnType<typeof setInterval>) {
+  clearInterval(id)
+  const h = _pollCleanup.get(id)
+  if (h) { document.removeEventListener('visibilitychange', h); _pollCleanup.delete(id) }
+}

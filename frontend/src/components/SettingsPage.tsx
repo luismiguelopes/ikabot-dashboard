@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { pushToast } from './ui/Toast'
 import { apiAction } from '../api'
 import { useT, useLang } from '../i18n'
 import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
@@ -412,12 +413,15 @@ function TelegramCard() {
   const [digestHour, setDigestHour] = useState(21)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'invalid' | 'testing' | 'tested'>('idle')
   const [channels, setChannels] = useState<{ telegram: ChannelResult; discord: ChannelResult } | null>(null)
+  const [secretInfo, setSecretInfo] = useState({ token: '', webhook: '' })
 
   useEffect(() => {
     fetch('/api/telegram-settings')
       .then(r => r.json())
       .then(d => {
-        setToken(d.botToken || ''); setChatId(d.chatId || ''); setWebhook(d.discordWebhook || '')
+        // the server never sends the secrets — only whether each is set, and its last characters
+        setToken(''); setChatId(d.chatId || ''); setWebhook('')
+        setSecretInfo({ token: d.botTokenSet ? (d.botTokenHint || '••••') : '', webhook: d.discordWebhookSet ? (d.discordWebhookHint || '••••') : '' })
         setTgMin(d.telegramMinLevel || 'info'); setDcMin(d.discordMinLevel || 'activity')
         setTgMuted(d.telegramMuted || []); setDcMuted(d.discordMuted || [])
         setDigest(d.digest || 'daily'); setDigestHour(d.digestHour ?? 21)
@@ -434,8 +438,21 @@ function TelegramCard() {
                              telegramMinLevel: tgMin, discordMinLevel: dcMin,
                              telegramMuted: tgMuted, discordMuted: dcMuted, digest, digestHour }),
     })
-      .then(r => { setStatus(r.ok ? 'saved' : 'invalid'); setTimeout(() => setStatus('idle'), 4000) })
-      .catch(() => setStatus('idle'))
+      .then(async r => {
+        if (r.ok) {
+          setSecretInfo(prev => ({ token: token ? '…' + token.slice(-4) : prev.token,
+                                   webhook: webhook ? '…' + webhook.slice(-4) : prev.webhook }))
+          setToken(''); setWebhook('')
+          setStatus('saved')
+        } else {
+          // only a bad webhook is "invalid webhook" — any other failure says what it was
+          const body = await r.json().catch(() => ({}))
+          if (body.error === 'invalid_discord_webhook') setStatus('invalid')
+          else { pushToast(body.error || t('transport_save_failed'), 'error'); setStatus('idle'); return }
+        }
+        setTimeout(() => setStatus('idle'), 4000)
+      })
+      .catch(() => { pushToast(t('transport_save_failed'), 'error'); setStatus('idle') })
   }
 
   const handleTest = () => {
@@ -496,8 +513,8 @@ function TelegramCard() {
           </p>
           <div>
             <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_token')}</label>
-            <input type="text" value={token} onChange={e => setToken(e.target.value)}
-              placeholder="123456:ABC-DEF…" className={INPUT_CLS} />
+            <input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)}
+              placeholder={secretInfo.token ? t('settings_secret_set', { hint: secretInfo.token }) : '123456:ABC-DEF…'} className={INPUT_CLS} />
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">{t('settings_telegram_chatid')}</label>
@@ -512,8 +529,8 @@ function TelegramCard() {
           </p>
           <div>
             <label className="block text-xs text-slate-500 mb-1">{t('settings_discord_webhook')}</label>
-            <input type="text" value={webhook} onChange={e => setWebhook(e.target.value)}
-              placeholder="https://discord.com/api/webhooks/…" className={INPUT_CLS} />
+            <input type="password" autoComplete="off" value={webhook} onChange={e => setWebhook(e.target.value)}
+              placeholder={secretInfo.webhook ? t('settings_secret_set', { hint: secretInfo.webhook }) : 'https://discord.com/api/webhooks/…'} className={INPUT_CLS} />
           </div>
           {levelSelect(dcMin, setDcMin)}
           {mutePicker(dcMuted, setDcMuted)}
@@ -723,7 +740,7 @@ function EspionagemTab() {
   const [saved, setSaved]                 = useState(false)
   const [thresholdTotal, setThresholdTotal] = useState(DEFAULT_GARRISON_TOTAL)
   const [minLootTotal, setMinLootTotal]   = useState(50000)
-  const [ignoreExpiryDays, setIgnoreExpiryDays]         = useState(30)
+  const [ignoreExpiryDays, setIgnoreExpiryDays]         = useState(60)
   const [ignorePermanentAfter, setIgnorePermanentAfter] = useState(4)
   const [farmLoots, setFarmLoots]         = useState<number[]>([])
   const [thSaved, setThSaved]             = useState(false)

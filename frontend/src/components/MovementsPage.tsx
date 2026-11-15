@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { pollInterval, clearPoll } from '../api'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
@@ -34,8 +35,8 @@ function MovementsTab() {
   // The list was loaded once, on opening: movements reached "arrived" and stayed there.
   useEffect(() => {
     fetchMovements()
-    const id = setInterval(fetchMovements, 60000)
-    return () => clearInterval(id)
+    const id = pollInterval(fetchMovements, 60000)
+    return () => clearPoll(id)
   }, [])
 
   if (error && !movements) return (

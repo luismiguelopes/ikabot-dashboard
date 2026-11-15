@@ -247,6 +247,10 @@ export function DispatchPanel() {
       setFeedback({ ok: false, msg: 'Selecciona pelo menos uma unidade.' })
       return
     }
+    if ((scheduleType === 'at' || scheduleType === 'arrive') && !atTime) {   // empty time meant "now"
+      setFeedback({ ok: false, msg: t('schedule_time_missing') })
+      return
+    }
     if (target.type === 'own' && !target.islandId) {
       setFeedback({ ok: false, msg: 'Cidade própria ainda sem islandId — força uma actualização do império (Home → Atualizar) e tenta de novo.' })
       return

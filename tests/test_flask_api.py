@@ -419,10 +419,14 @@ def test_notify_settings_roundtrip_with_discord(monkeypatch, tmp_path):
     r = c.post("/api/telegram-settings", json={"botToken": "T", "chatId": "1",
                                                "discordWebhook": f" {hook} "})
     assert r.get_json()["ok"] is True
-    assert c.get("/api/telegram-settings").get_json() == {
-        "botToken": "T", "chatId": "1", "discordWebhook": hook,
-        "telegramMinLevel": "info", "discordMinLevel": "activity",
-        "telegramMuted": [], "discordMuted": [], "digest": "daily", "digestHour": 21}
+    d = c.get("/api/telegram-settings").get_json()
+    # P13.51: the secrets never travel to the browser — only "is it set" and a short hint
+    assert d["botToken"] == "" and d["discordWebhook"] == ""
+    assert d["botTokenSet"] is True and d["discordWebhookSet"] is True
+    assert d["discordWebhookHint"] == "…EF_9" and d["discordWebhookSource"] == "file"
+    assert d["chatId"] == "1" and d["telegramMinLevel"] == "info" and d["digestHour"] == 21
+    stored = json.load(open(flask_app.TELEGRAM_SETTINGS_PATH))
+    assert stored["botToken"] == "T" and stored["discordWebhook"] == hook
     c.post("/api/telegram-settings", json={"discordWebhook": hook, "telegramMinLevel": "warning",
                                            "discordMinLevel": "bogus"})
     d = c.get("/api/telegram-settings").get_json()
@@ -754,3 +758,44 @@ def test_logs_endpoint_reads_the_tail(monkeypatch, tmp_path):
     dbg = c.get("/api/logs?lines=30&debug=1").get_json()["lines"]
     assert len(dbg) == 30 and dbg[-1].endswith("linha 4999")
     assert len(c.get("/api/logs?lines=2000").get_json()["lines"]) == 500      # all the INFO there is
+
+
+# ── P13.46: direct bugs ──────────────────────────────────────────────────────────
+
+def test_ignore_settings_are_actually_saved(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    r = c.post("/api/espionage/settings", json={"ignoreExpiryDays": 45, "ignorePermanentAfter": 99})
+    assert r.get_json()["ok"] is True
+    saved = json.load(open(flask_app.ESPIONAGE_SETTINGS_PATH))
+    assert saved["ignoreExpiryDays"] == 45 and saved["ignorePermanentAfter"] == 20
+
+
+def test_inverted_active_hours_are_refused(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "QUEUE_SETTINGS_JSON_PATH", str(tmp_path / "queue_settings.json"))
+    assert c.post("/api/building-queue/settings",
+                  json={"activeHours": {"start": 7, "end": 23}}).status_code == 200
+    r = c.post("/api/building-queue/settings", json={"activeHours": {"start": 22, "end": 6}})
+    assert r.status_code == 400 and "error" in r.get_json()
+    saved = json.load(open(flask_app.QUEUE_SETTINGS_JSON_PATH))
+    assert saved["activeHours"] == {"start": 7, "end": 23}
+
+
+def test_notify_secrets_survive_a_save_and_env_values_are_not_copied(monkeypatch, tmp_path):
+    c = _tg_client(monkeypatch, tmp_path)
+    hook = "https://discord.com/api/webhooks/123456/abc-DEF_9"
+    c.post("/api/telegram-settings", json={"botToken": "123456:SECRET-token", "discordWebhook": hook})
+    # the form comes back with empty secret fields; saving something else keeps them
+    c.post("/api/telegram-settings", json={"botToken": "", "discordWebhook": "", "digest": "hourly"})
+    stored = json.load(open(flask_app.TELEGRAM_SETTINGS_PATH))
+    assert stored["botToken"] == "123456:SECRET-token" and stored["discordWebhook"] == hook
+    assert stored["digest"] == "hourly"
+    # explicit removal
+    c.post("/api/telegram-settings", json={"botTokenClear": True})
+    assert json.load(open(flask_app.TELEGRAM_SETTINGS_PATH))["botToken"] == ""
+    # a token that lives in the environment is reported, never written to the file
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "999999:ENV-token-xyz")
+    d = c.get("/api/telegram-settings").get_json()
+    assert d["botToken"] == "" and d["botTokenSet"] is True and d["botTokenSource"] == "env"
+    c.post("/api/telegram-settings", json={"chatId": "7"})
+    assert json.load(open(flask_app.TELEGRAM_SETTINGS_PATH))["botToken"] == ""

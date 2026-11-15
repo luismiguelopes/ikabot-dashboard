@@ -215,6 +215,10 @@ export function TransportTab() {
       setFeedback({ ok: false, msg: t('transport_select_resource') })
       return
     }
+    if (scheduleType === 'at' && !atTime) {          // an empty time used to mean "send now"
+      setFeedback({ ok: false, msg: t('schedule_time_missing') })
+      return
+    }
     setSubmitting(true)
     setFeedback(null)
     try {
@@ -293,7 +297,13 @@ export function TransportTab() {
                 <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
                   {t('transport_origin')}
                 </label>
-                <select className={selectClass()} value={originName} onChange={e => setOriginName(e.target.value)}>
+                <select className={selectClass()} value={originName} onChange={e => {
+                  // Picking the current destination as origin left the destination state on the
+                  // same city (the select showed another) → "origin and destination are equal".
+                  const next = e.target.value
+                  setOriginName(next)
+                  if (next === destName) setDestName(ownCities.find(c => c.name !== next)?.name ?? '')
+                }}>
                   {ownCities.map(c => <option key={c.cityId} value={c.name}>{c.name}</option>)}
                 </select>
               </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
 import { LangContext, loadLang, useT } from './i18n'
 import { loadThresholds } from './utils'
 import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
@@ -7,14 +7,15 @@ import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
 import { ToastHost } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { setApiLang } from './api'
+import { setApiLang, pollInterval, clearPoll } from './api'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
 import { CitiesPage } from './components/CitiesPage'
 import { BuildingsPage } from './components/BuildingsPage'
 import { MovementsPage } from './components/MovementsPage'
 import { AlertsPage } from './components/AlertsPage'
-import { HistoryPage } from './components/HistoryPage'
+// chart.js (200 KB) is only needed on the History page — load it when that page opens
+const HistoryPage = lazy(() => import('./components/HistoryPage').then(m => ({ default: m.HistoryPage })))
 import { CalculadorasPage } from './components/calculadoras/CalculadorasPage'
 import { BuildingQueueTab } from './components/Construction'
 import { MundoPage } from './components/mundo/MundoPage'
@@ -51,8 +52,8 @@ function SubsystemHealthBanner() {
         .catch(() => {})
     }
     check()
-    const id = setInterval(check, 60000)
-    return () => { stop = true; clearInterval(id) }
+    const id = pollInterval(check, 60000)
+    return () => { stop = true; clearPoll(id) }
   }, [])
   return (
     <>
@@ -233,14 +234,20 @@ export default function App() {
   }, [paused, refreshPause])
 
   const [sseConnected, setSseConnected] = useState(true)
+  const [liveAlive, setLiveAlive] = useState<number | null>(null)
 
   useEffect(() => {
     const es = new EventSource('/api/stream')
     es.onopen = () => setSseConnected(true)
     es.onerror = () => setSseConnected(false)
     es.addEventListener('update', fetchData)
-    const fallback = setInterval(fetchData, AUTO_REFRESH_SECONDS * 1000)
-    return () => { es.close(); clearInterval(fallback) }
+    // the bot's heartbeat: just the timestamp, no reload of the empire data
+    es.addEventListener('alive', (e: MessageEvent) => {
+      const ts = Number(e.data)
+      if (ts > 0) setLiveAlive(ts)
+    })
+    const fallback = pollInterval(fetchData, AUTO_REFRESH_SECONDS * 1000)
+    return () => { es.close(); clearPoll(fallback) }
   }, [fetchData])
 
   const [movCount, setMovCount] = useState(0)
@@ -278,7 +285,7 @@ export default function App() {
           lastUpdated={data.lastUpdated}
           lastUpdatedTs={data.lastUpdatedTs}
           nextCycleAt={data.nextCycleAt}
-          lastAlive={data.lastAlive}
+          lastAlive={Math.max(liveAlive ?? 0, data.lastAlive ?? 0) || null}
           offlineAfterSecs={data.offlineAfterSecs}
           alertCount={alertCount}
           movCount={movCount}
@@ -315,7 +322,7 @@ export default function App() {
               {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
               {page === 'movements'    && <MovementsPage />}
               {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
-              {page === 'history'      && <HistoryPage data={data} />}
+              {page === 'history'      && <Suspense fallback={null}><HistoryPage data={data} /></Suspense>}
               {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
               {page === 'construction' && <BuildingQueueTab data={data} />}
               {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}

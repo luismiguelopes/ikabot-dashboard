@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { pollInterval, clearPoll } from '../api'
 import { useT } from '../i18n'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
@@ -41,8 +42,8 @@ export function LogsPage() {
 
   // Poll every 5s
   useEffect(() => {
-    const id = setInterval(fetchLogs, 5000)
-    return () => clearInterval(id)
+    const id = pollInterval(fetchLogs, 5000)
+    return () => clearPoll(id)
   }, [fetchLogs])
 
   // Auto-scroll to bottom when new lines arrive

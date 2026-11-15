@@ -4,7 +4,7 @@ import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { ConfirmModal } from '../ui/Modal'
 import { pushToast } from '../ui/Toast'
-import { apiAction } from '../../api'
+import { apiAction, pollInterval, clearPoll } from '../../api'
 import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
 import { InactivosTab } from './InactivosTab'
 import { IgnoradasTab } from './IgnoradasTab'
@@ -124,8 +124,8 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
 
   // Re-fetch scan data every 60s so auto-marks and new scan results appear without page reload
   useEffect(() => {
-    const id = setInterval(fetchScan, 60000)
-    return () => clearInterval(id)
+    const id = pollInterval(fetchScan, 60000)
+    return () => clearPoll(id)
   }, [fetchScan])
 
   // Follow the scan: quickly while it runs, slowly otherwise (so a scan started after the page

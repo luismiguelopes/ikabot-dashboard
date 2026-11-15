@@ -6,7 +6,7 @@ import { MATERIALS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { ConstructionTemplate } from './ConstructionTemplate'
-import { apiAction } from '../api'
+import { apiAction, pollInterval, clearPoll } from '../api'
 import type { ApiData, BuildingQueue, BuildingCostsData, Movement, QueueItem } from '../types'
 
 interface BuildingInCity {
@@ -208,8 +208,8 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   // items: re-read it whenever the empire data refreshes and every 30s.
   useEffect(() => { fetchQueue() }, [data?.lastUpdatedTs])
   useEffect(() => {
-    const id = setInterval(fetchQueue, 30000)
-    return () => clearInterval(id)
+    const id = pollInterval(fetchQueue, 30000)
+    return () => clearPoll(id)
   }, [])
 
   useEffect(() => {

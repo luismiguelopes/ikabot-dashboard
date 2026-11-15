@@ -25,7 +25,8 @@ export function WinePanorama({ resourcesData, wine, buyStatus }: {
       const cons = Number(d.wineConsumptionPerHour) || 0
       const prod = Number(d.wineProductionPerHour) || 0
       const runsOut = d.wineRunsOutIn
-      const runwayH = cons > 0 && runsOut != null && runsOut > 0 ? runsOut / 3600 : null
+      // 0 = already dry: the most critical case (it used to show green, with "—", sorted last)
+      const runwayH = cons > 0 && runsOut != null && runsOut >= 0 ? runsOut / 3600 : null
       let status: 'crit' | 'low' | 'ok' | 'idle'
       if (cons === 0) status = 'idle'
       else if (runwayH != null && runwayH < threshold) status = 'crit'

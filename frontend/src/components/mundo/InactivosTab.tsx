@@ -5,7 +5,7 @@ import { Card } from '../ui/Card'
 import { Td } from '../ui/TableCells'
 import { ConfirmModal } from '../ui/Modal'
 import { pushToast } from '../ui/Toast'
-import { apiAction } from '../../api'
+import { apiAction, pollInterval, clearPoll } from '../../api'
 import { SpyModal } from './SpyModal'
 import { AttackModal } from './AttackModal'
 import { FarmSettings } from '../dispatch/FarmSettings'
@@ -166,8 +166,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     const load = () => fetch('/api/espionage/missions').then(r => r.json())
       .then((d: { missions: SpyMission[] }) => { if (d.missions) setMissions(d.missions) }).catch(() => {})
     load()
-    const id = setInterval(load, 30000)
-    return () => clearInterval(id)
+    const id = pollInterval(load, 30000)
+    return () => clearPoll(id)
   }, [])
 
   useEffect(() => {
@@ -196,8 +196,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         if (Array.isArray(d)) setLootByCity(Object.fromEntries(d.map(s => [lootKey(s.from_player, s.from_city), s])))
       }).catch(() => {})
     loadLoot()
-    const id = setInterval(() => { loadFarm(); loadLoot() }, 30000)
-    return () => clearInterval(id)
+    const id = pollInterval(() => { loadFarm(); loadLoot() }, 30000)
+    return () => clearPoll(id)
   }, [])
 
   async function handleAddFarm(p: EnrichedPlayer, mode: 'farm' | 'loop' = 'farm') {
