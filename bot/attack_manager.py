@@ -703,6 +703,11 @@ def process_attack_queue(session, in_active_hours=True):
                 queue_remove(ATTACK_QUEUE, [item.get("id")])
                 logger.warning("[attack] %s adiado %d vezes (sem navios) — removido da fila",
                                item.get("targetPlayerName"), deferrals)
+                try:
+                    from telegram_notifier import notify_queue_item_dropped
+                    notify_queue_item_dropped("combat", "%s (%s)" % (item.get("targetCityName", "?"), item.get("targetPlayerName", "?")), "adiado %d vezes por falta de navios" % deferrals)
+                except Exception:
+                    pass
             else:
                 wait_min = random.randint(5, 15)
                 queue_add(ATTACK_QUEUE, dict(item, deferrals=deferrals,

@@ -175,7 +175,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                 from telegram_notifier import notify_wine_critical, clear_wine_critical
                 for city_name, city_res in resources_data.items():
                     t = city_res.get("wineRunsOutIn", -1)
-                    if t != -1 and 0 < t < WINE_CRITICAL_NOTIFY_SECS:
+                    # 0 = already dry: the most critical case, not "no problem"
+                    if t != -1 and 0 <= t < WINE_CRITICAL_NOTIFY_SECS:
                         notify_wine_critical(city_name, t / 3600)
                     else:
                         clear_wine_critical(city_name)

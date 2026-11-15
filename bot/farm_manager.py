@@ -392,7 +392,11 @@ def _confirm_inactive(session, t):
         except Exception:
             logger.warning("[farm] %s: fetch da ilha para confirmar inactividade falhou — "
                            "a tentar o world scan em cache", t.get("target_city_name", tid))
-    return _scan_says_inactive(tid)
+    # The live look failed (or there is no island id): remember the fallback answer too, or
+    # every call inside the memo window repeats the failing island request.
+    res = _scan_says_inactive(tid)
+    _inactive_memo[tid] = (now, res)
+    return res
 
 
 def _disable_active_target(t):
@@ -620,12 +624,18 @@ def farm_ship_reserve(now=None):
         now = int(time.time())
     horizon = horizon_min * 60
     reserve = _pending_plunder_transporters(now, horizon)
-    for t in _enabled_targets():
-        if t.get("state", "IDLE") == "ATTACKING":
-            continue  # ships already committed to this raid
-        if int(t.get("next_run_at", 0) or 0) <= now + horizon:
-            reserve += max(_MIN_RESERVE_PER_TARGET, int(t.get("last_transporters", 0) or 0))
-    return reserve
+    targets = _enabled_targets()
+    # Only as many raids as there are free attack slots can leave: the sum over EVERY due
+    # target (overdue ones included) used to exceed the whole fleet whenever a few targets
+    # were waiting, so consolidation, the building queue and non-critical wine never got a
+    # trade ship. Reserve for the free slots only — the largest needs, so the bound holds
+    # whichever target the farm picks.
+    slots = _attack_slots_free(targets)
+    needs = sorted((max(_MIN_RESERVE_PER_TARGET, int(t.get("last_transporters", 0) or 0))
+                    for t in targets
+                    if t.get("state", "IDLE") != "ATTACKING"   # those ships are already committed
+                    and int(t.get("next_run_at", 0) or 0) <= now + horizon), reverse=True)
+    return reserve + sum(needs[:slots])
 
 
 def apply_ship_reserve(ships_available, label, now=None):
@@ -1025,6 +1035,28 @@ def next_farm_eta():
     return min(etas) if etas else None
 
 
+# Per-ship cargo capacity only changes with research, but it was asked of the game (one page
+# load) on EVERY farm pass — and the farm passes run every minute or so while it works.
+_SHIP_CAP_TTL = 6 * 3600
+_ship_cap_cache = {}
+
+
+def _ship_capacity(session):
+    """Cargo per trade ship, read from the game at most every _SHIP_CAP_TTL."""
+    now = time.time()
+    if _ship_cap_cache.get("cap") and now - _ship_cap_cache.get("at", 0) < _SHIP_CAP_TTL:
+        return _ship_cap_cache["cap"]
+    try:
+        from ikabot.helpers.pedirInfo import getShipCapacity
+        cap, _ = getShipCapacity(session)
+        if cap > 0:
+            _ship_cap_cache.update(cap=int(cap), at=now)
+            return int(cap)
+    except Exception:
+        pass
+    return _ship_cap_cache.get("cap") or 500
+
+
 def process_farm_targets(session, in_active_hours=True):
     if not in_active_hours:
         return
@@ -1060,14 +1092,7 @@ def process_farm_targets(session, in_active_hours=True):
     spy_agents  = get_farm_spy_agents()
     now = int(time.time())
 
-    ship_cap = 500
-    try:
-        from ikabot.helpers.pedirInfo import getShipCapacity
-        cap, _ = getShipCapacity(session)
-        if cap > 0:
-            ship_cap = cap
-    except Exception:
-        pass
+    ship_cap = _ship_capacity(session)
 
     def _enqueue_attack(t, loot, enemy_ships, combat_ships=0):
         """Pick origin, build units and enqueue the attack(s). Returns (return_at,
@@ -1148,9 +1173,6 @@ def process_farm_targets(session, in_active_hours=True):
                 return None
             return (best.get("name", ""), str(best.get("cityId")), best.get("x", 0), best.get("y", 0))
 
-        origin = _pick_origin(enemy_ships > 0)
-        if not origin:
-            return None
         # ── F4.b: decide whether this wave needs a blockade first ───────────────
         # enemy_ships>0  → fleet present now → blockade first.
         # enemy_ships==0 on a known fleet-target whose fleet is still dispersed
@@ -1567,6 +1589,7 @@ def process_farm_targets(session, in_active_hours=True):
                         farm_update(tid, {
                             "state": "ATTACKING", "attack_return_at": res["return_at"],
                             "last_attack_at": now, "last_transporters": res["transporters"],
+                            "respy_launched_at": 0,
                             "total_raids": int(t.get("total_raids", 0)) + 1,
                             "enemy_return_at": res["enemy_return_at"],
                             "last_troop_journey": res["troop_journey"],
@@ -1924,7 +1947,6 @@ def process_farm_targets(session, in_active_hours=True):
                 "last_loot": loot, "last_enemy_ships": enemy_ships,
                 "last_transporters": res["transporters"],
                 "total_raids": int(t.get("total_raids", 0)) + 1,
-                "total_loot": int(t.get("total_loot", 0)) + loot,
                 "respy_launched_at": 0,
                 "enemy_return_at": res["enemy_return_at"],
                 "last_troop_journey": res["troop_journey"],
@@ -1996,6 +2018,13 @@ def process_farm_targets(session, in_active_hours=True):
                                       "spy_dispatched_at": now, "last_spy_at": now})
                     logger.info("[farm] %s: re-espionagem antecipada enquanto as tropas regressam (%s%s)",
                                 name, spy, "" if need_garrison else ", só armazém")
+                else:
+                    # No city has a spy to send. Give the early scout up for this raid (-1):
+                    # left at 0 the target stayed "due" for the whole lead window and the farm
+                    # pass re-ran on every loop of the sleep; the normal scout follows the return.
+                    farm_update(tid, {"respy_launched_at": -1})
+                    logger.info("[farm] %s: sem espiões para a re-espionagem antecipada — fica "
+                                "para depois do regresso", name)
                 continue
 
             if now >= return_at:

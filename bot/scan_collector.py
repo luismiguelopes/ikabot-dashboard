@@ -110,39 +110,66 @@ def _write_scan_status(status, phase, progress, total, message):
         pass
 
 
-def _publish_partial(cp):
-    """Write current accumulated results to world_scan.json (progressive update)."""
-    done = cp["totalIslands"] - len(cp["islandsQueue"])
-    scan_path = os.path.join(LOGS_DIR, "world_scan.json")
+_ISLAND_SCAN_TRIES = 2     # an island whose request fails goes back to the end of the queue once
+
+
+def _previous_scan():
+    """The scan that was current when this one started (saved by collect_shallow_scan)."""
     try:
-        atomic_write_json(scan_path, {
+        with open(os.path.join(LOGS_DIR, "world_scan_prev.json")) as f:
+            prev = json.load(f)
+        return prev if isinstance(prev, dict) else {}
+    except Exception:
+        return {}
+
+
+def _merged_scan(cp, final):
+    """(players, islands) to publish: what this scan has read so far, laid over the previous
+    scan. While the scan runs, every island not yet re-read keeps its previous entries — the
+    file used to be rewritten from the first island on, so for the whole scan the World list
+    shrank, the farm's inactivity lookup said "unknown" and drained targets were not ignored.
+    At the end only islands whose request FAILED keep their previous entries (their inactives
+    used to vanish until the next scan); islands no longer in range are dropped."""
+    scanned = {str(i.get("islandId")) for i in cp["islands"]}
+    prev = _previous_scan()
+    if final:
+        keep = {str(i) for i in cp.get("failedIslands", [])} - scanned
+        wanted = lambda iid: iid in keep
+    else:
+        wanted = lambda iid: iid not in scanned
+    players = cp["players"] + [p for p in prev.get("players", [])
+                               if wanted(str(p.get("islandId")))]
+    islands = cp["islands"] + [i for i in prev.get("islands", [])
+                               if wanted(str(i.get("islandId")))]
+    return players, islands
+
+
+def _publish(cp, final):
+    done = cp["totalIslands"] if final else cp["totalIslands"] - len(cp["islandsQueue"])
+    players, islands = _merged_scan(cp, final)
+    try:
+        atomic_write_json(os.path.join(LOGS_DIR, "world_scan.json"), {
             "lastUpdated":    int(time.time()),
             "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
             "ownCities":      cp["ownCities"],
-            "players":        cp["players"],
-            "islands":        cp["islands"],
-            "scanInProgress": True,
+            "players":        players,
+            "islands":        islands,
+            "scanInProgress": not final,
             "scanProgress":   {"done": done, "total": cp["totalIslands"]},
+            "failedIslands":  [str(i) for i in cp.get("failedIslands", [])],
         }, indent=2)
     except Exception:
-        pass
+        logger.warning("[scan] escrita do world_scan.json falhou", exc_info=True)
+
+
+def _publish_partial(cp):
+    """Write current accumulated results to world_scan.json (progressive update)."""
+    _publish(cp, final=False)
 
 
 def _finalize_scan(cp):
     """Publish final world_scan.json (no scanInProgress), record timestamp, delete checkpoint."""
-    scan_path = os.path.join(LOGS_DIR, "world_scan.json")
-    try:
-        atomic_write_json(scan_path, {
-            "lastUpdated":    int(time.time()),
-            "scanRadius":     cp.get("radius", WORLD_SCAN_RADIUS),
-            "ownCities":      cp["ownCities"],
-            "players":        cp["players"],
-            "islands":        cp["islands"],
-            "scanInProgress": False,
-            "scanProgress":   {"done": cp["totalIslands"], "total": cp["totalIslands"]},
-        }, indent=2)
-    except Exception:
-        pass
+    _publish(cp, final=True)
 
     try:
         from db_manager import save_scan_timestamp
@@ -282,69 +309,25 @@ def scan_next_island(session):
 
     own_cities = cp["ownCities"]
 
-    try:
-        html = session.get("view=island&islandId=" + str(island["id"]))
-        island_data = getIsland(html)
-
-        nearest = min(own_cities,
-            key=lambda c: _dist(island["x"], island["y"], c["x"], c["y"]))
-        nearest_dist = _dist(island["x"], island["y"], nearest["x"], nearest["y"])
-
-        cities_list = island_data.get("cities", [])
-        free_slots = sum(1 for c in cities_list if c.get("type") == "empty")
-        cp["islands"].append({
-            "islandId":       str(island["id"]),
-            "islandName":     island_data.get("name", island.get("name", "")),
-            "x":              island["x"],
-            "y":              island["y"],
-            "resourceType":   int(island["resource_type"]) if island.get("resource_type") else 0,
-            "woodLevel":      island_data.get("resourceLevel", ""),
-            "luxuryLevel":    island_data.get("tradegoodLevel", ""),
-            "wonder":         island_data.get("wonderName", ""),
-            "wonderLevel":    island_data.get("wonderLevel", ""),
-            "freeSlots":      free_slots,
-            "totalSlots":     len(cities_list),
-            "hasOwnCity":     bool(island_data.get("isOwnCityOnIsland", False)),
-            "nearestOwnCity": nearest["name"],
-            "distance":       round(nearest_dist, 1),
-        })
-
-        avatar_scores = island_data.get("avatarScores", {})
-        for city_slot in cities_list:
-            if city_slot.get("type") == "empty":
-                continue
-            state = city_slot.get("state", "")
-            if state not in ("inactive", "vacation"):
-                continue
-            owner_name = city_slot.get("ownerName", "")
-            if not owner_name:
-                continue
-            owner_id = str(city_slot.get("ownerId", city_slot.get("Id", "")))
-            scores_raw = avatar_scores.get(owner_id, {})
-            cp["players"].append({
-                "playerId":       owner_id,
-                "cityId":         str(city_slot.get("id", "")),
-                "playerName":     owner_name,
-                "allyTag":        city_slot.get("ownerAllyTag", city_slot.get("AllyTag", "")),
-                "state":          state,
-                "cityName":       city_slot.get("name", ""),
-                "islandId":       str(island["id"]),
-                "islandName":     island_data.get("name", island.get("name", "")),
-                "islandX":        island["x"],
-                "islandY":        island["y"],
-                "nearestOwnCity": nearest["name"],
-                "distance":       round(nearest_dist, 1),
-                "scores": {
-                    "building": scores_raw.get("building_score_main", "0"),
-                    "research": scores_raw.get("research_score_main", "0"),
-                    "army":     scores_raw.get("army_score_main", "0"),
-                    "trader":   scores_raw.get("trader_score_secondary", "0"),
-                    "rank":     scores_raw.get("place", ""),
-                },
-            })
-
-    except Exception as e:
-        logger.warning(lm("scan_island_error", id=island["id"], err=e))
+    res = _scan_one_island(session, island["id"], island["x"], island["y"], own_cities,
+                           int(island["resource_type"]) if island.get("resource_type") else 0)
+    if res is None:
+        # The request failed: the island used to be dropped, and its inactives disappeared
+        # until the next scan. Put it back at the end of the queue once; if it fails again its
+        # previous entries are kept (see _merged_scan).
+        tries = int(island.get("tries", 0)) + 1
+        if tries < _ISLAND_SCAN_TRIES:
+            islands_queue.append(dict(island, tries=tries))
+        else:
+            cp.setdefault("failedIslands", []).append(str(island["id"]))
+    else:
+        island_entry, players = res
+        if not island_entry.get("islandName"):
+            island_entry["islandName"] = island.get("name", "")
+            for p in players:
+                p["islandName"] = island_entry["islandName"]
+        cp["islands"].append(island_entry)
+        cp["players"].extend(players)
 
     # Persist progress
     cp["islandsQueue"] = islands_queue

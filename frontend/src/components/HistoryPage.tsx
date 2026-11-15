@@ -25,13 +25,20 @@ export function HistoryPage({ data }: Props) {
   useEffect(() => {
     setHistory(null)
     const url = city ? `/api/history?city=${encodeURIComponent(city)}` : '/api/history'
+    // `current` guards against an older, slower answer landing after a newer one when the
+    // city is switched quickly (it could also crash the chart: empire rows vs city rows).
+    let current = true
     fetch(url)
       .then(r => r.json())
-      .then(setHistory)
-      .catch(() => setHistory([]))
+      .then(d => { if (current) setHistory(Array.isArray(d) ? d : []) })
+      .catch(() => { if (current) setHistory([]) })
     if (city && metric !== 'resources' && metric !== 'wine_timer') setMetric('resources')
     if (!city && (metric === 'wine_timer')) setMetric('gold')
+    return () => { current = false }
   }, [city])
+
+  // The chart was never destroyed when leaving the page.
+  useEffect(() => () => { chartInstance.current?.destroy(); chartInstance.current = null }, [])
 
   useEffect(() => {
     if (!history || history.length === 0 || !chartRef.current) return

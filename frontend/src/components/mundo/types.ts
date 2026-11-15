@@ -28,6 +28,8 @@ export interface SpyMission {
   dispatchedAt: number; arrivedAt: number | null; executedAt: number | null
   garrisonExecuteAfter: number | null; garrisonExecutedAt: number | null
   missionType: string | null; result: SpyMissionResult | null; garrisonResult: SpyGarrisonResult | null; error?: string
+  // Decided by the backend (one source for "is there a fleet"): never classify units in the browser.
+  garrisonOk?: boolean; enemyShips?: number | null; enemyTroops?: number | null
   /** Epoch of the oldest leg when warehouse + garrison + movements all succeeded; null/undefined otherwise. */
   fullSweepAt?: number | null
 }

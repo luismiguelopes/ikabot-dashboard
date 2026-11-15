@@ -1211,6 +1211,11 @@ def process_building_queue(session, ids, cities):
                 logger.warning("      -> [aviso] %d tentativas falhadas consecutivas para %s. A remover da fila.",
                                next_item["failedAttempts"], next_item["building"])
                 items.pop(0)
+                try:
+                    from telegram_notifier import notify_queue_item_dropped
+                    notify_queue_item_dropped("build", "%s — %s" % (city_name, next_item["building"]), "%d tentativas falhadas seguidas" % next_item["failedAttempts"])
+                except Exception:
+                    pass
 
     # Clean up inProgress entries whose ETA has passed but have no matching queue items.
     # This happens when the user clears/removes queue items while a build is running,

@@ -78,3 +78,44 @@ def test_failed_read_returns_none_and_keeps_the_previous_file(monkeypatch, tmp_p
     assert json.loads(path.read_text())[0]["destination"] == "X (Y)"      # not wiped to []
     assert ec.refresh_movements(_Session(), "30817") is True
     assert len(json.loads(path.read_text())) == 4
+
+
+# ── P13.15: a city whose read failed keeps its previous data, marked as old ─────
+
+def _prev_snapshot(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(ec, "LOGS_DIR", str(tmp_path))
+    (tmp_path / "own_cities.json").write_text(_json.dumps([
+        {"name": "Polis", "cityId": 7, "x": 41, "y": 43, "islandId": "9", "safehousePosition": 8},
+        {"name": "Desire", "cityId": 8, "x": 41, "y": 43, "islandId": "9", "safehousePosition": 3}]))
+    (tmp_path / "resources.json").write_text(_json.dumps(
+        {"Polis": {"Wine": 5000, "wineRunsOutIn": 7200}, "Desire": {"Wine": 1}}))
+    (tmp_path / "empire.json").write_text(_json.dumps(
+        {"Polis": {"_constructionEnds": 0, "Academia": "20", "Espionagem": "32"}}))
+
+
+def test_failed_city_keeps_its_previous_data(tmp_path, monkeypatch):
+    _prev_snapshot(tmp_path, monkeypatch)
+    cities = [{"name": "Desire", "cityId": 8}]
+    resources, empire, names = {"Desire": {"Wine": 9}}, {"Desire": {"Taberna": "5"}}, {"Taberna"}
+
+    stale = ec._carry_over_failed_cities([7], cities, resources, empire, names)
+
+    polis = next(c for c in cities if c["cityId"] == 7)
+    assert polis["stale"] is True and polis["safehousePosition"] == 8
+    assert stale == {"Polis": polis["staleSince"]} and polis["staleSince"] > 0
+    assert resources["Polis"]["Wine"] == 5000 and resources["Desire"]["Wine"] == 9
+    assert empire["Polis"]["Academia"] == "20" and {"Academia", "Espionagem"} <= names
+    assert "_constructionEnds" not in names
+
+
+def test_second_failure_keeps_the_original_stale_date_and_unknown_city_is_skipped(tmp_path, monkeypatch):
+    import json as _json
+    _prev_snapshot(tmp_path, monkeypatch)
+    prev = _json.loads((tmp_path / "own_cities.json").read_text())
+    prev[0].update(stale=True, staleSince=1234)
+    (tmp_path / "own_cities.json").write_text(_json.dumps(prev))
+    cities, resources, empire = [], {}, {}
+    stale = ec._carry_over_failed_cities([7, 999], cities, resources, empire, set())
+    assert stale == {"Polis": 1234} and [c["cityId"] for c in cities] == [7]
+    assert ec._carry_over_failed_cities([], cities, resources, empire, set()) == {}

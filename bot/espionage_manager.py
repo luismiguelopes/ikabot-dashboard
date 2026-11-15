@@ -463,116 +463,132 @@ def process_dispatch_queue(session):
             logger.debug("[espionage] aguardar %ds antes do próximo dispatch", delay)
             time.sleep(delay)
 
-        origin_id  = str(item["originCityId"])
-        num_agents = int(item.get("numAgents", 1))
-
-        # Verificar se já há espião em trânsito ou à espera nesta cidade-alvo
-        target_cid = str(item["targetCityId"])
-        target_x   = item.get("islandX")
-        target_y   = item.get("islandY")
-        active_missions = _load_missions().get("missions", [])
-        already_active = any(
-            m.get("state") in ("TRAVELING", "WAITING_AT_CITY")
-            and str(m.get("targetCityId", "")) == target_cid
-            for m in active_missions
-        )
-        if already_active:
-            logger.info("[espionage] espião já activo para %s (%s) — dispatch ignorado",
-                        item["targetPlayerName"], item["targetCityName"])
-            continue
-
-        # Reactivation guard: never send spies to a target whose owner is active again.
-        # The cached world scan can be stale, so we confirm live (island view) right before
-        # dispatch — the same check the farm runs before every action (_confirm_inactive).
-        # An active owner just captures the spies (as happened with Willesden Green on
-        # 2026-10-30). Only a CONFIRMED-active/vacation verdict blocks; True or an
-        # inconclusive None (fetch failed / not scanned) falls through and still dispatches.
-        island_id = str(item.get("islandId") or "")
-        if island_id:
+        # Each item is removed as soon as it has been handled — whatever happened to it. The
+        # removal used to come after the whole batch: one malformed item (no originCityId /
+        # islandId) raised before it, nothing was removed and the queue never drained again.
+        try:
+            spy_data = _dispatch_item(session, item, spy_data)
+        except Exception as exc:
+            logger.error("[espionage] item da fila de dispatch inválido ou a falhar — removido: %r",
+                         item, exc_info=True)
             try:
-                from farm_manager import _confirm_inactive
-                confirmed = _confirm_inactive(session, {
-                    "target_city_id":   target_cid,
-                    "island_id":        island_id,
-                    "target_city_name": item.get("targetCityName", ""),
-                    "target_player":    item.get("targetPlayerName", ""),
-                })
+                _append_failed_mission(item, "Despacho falhou: %s" % exc)
             except Exception:
-                logger.warning("[espionage] confirmação de inactividade falhou para %s — a continuar",
-                               item.get("targetCityName", target_cid), exc_info=True)
-                confirmed = None
-            if confirmed is False or confirmed == "vacation":
-                reason = ("Jogador em férias — infiltração recusada pelo jogo"
-                          if confirmed == "vacation"
-                          else "Jogador já não está inactivo — espiões não enviados (teriam sido capturados)")
-                logger.warning("[espionage] %s (%s): %s — dispatch cancelado",
-                               item["targetPlayerName"], item["targetCityName"], reason)
-                _append_failed_mission(item, reason)
-                continue
+                pass
+        finally:
+            try:
+                from db_manager import queue_remove
+                queue_remove(SPY_DISPATCH_QUEUE, [item.get("id")])
+            except Exception:
+                logger.error("[espionage] remoção do item da fila de dispatch falhou", exc_info=True)
 
-        # Pre-check: inDefense = espiões na cidade, disponíveis para dispatch.
-        # available pode ser None se o parser não o calculou — usar inDefense como fallback.
-        city_counts  = spy_data.get(origin_id, {})
-        in_defense   = city_counts.get("inDefense")
-        available    = city_counts.get("available")
-        dispatchable = in_defense if in_defense is not None else available
-        if dispatchable is not None and dispatchable < num_agents:
-            if dispatchable >= 1:
-                # Envia com os que houver em vez de falhar a missão inteira.
-                logger.info("[espionage] %s (%s): pedidos %d agentes, só há %d na cidade "
-                            "— a enviar com %d",
-                            item["targetPlayerName"], item["targetCityName"],
-                            num_agents, dispatchable, dispatchable)
-                num_agents = dispatchable
-            else:
-                error = f"Espiões insuficientes: {dispatchable} na cidade, {num_agents} pedidos"
-                logger.warning("[espionage] pre-check falhou para %s: %s",
-                               item["targetPlayerName"], error)
-                _append_failed_mission(item, error)
-                continue
 
-        ok, result = _dispatch_spy(
-            session,
-            origin_city_id=origin_id,
-            target_city_id=item["targetCityId"],
-            target_island_id=item["islandId"],
-            target_player_name=item["targetPlayerName"],
-            target_city_name=item["targetCityName"],
-            island_x=item["islandX"],
-            island_y=item["islandY"],
-            num_agents=num_agents,
-            num_decoys=item.get("numDecoys", 0),
-            fast=bool(item.get("fast")),
-            need_garrison=bool(item.get("needGarrison", True)),
-            need_movements=bool(item.get("needMovements", False)),
-        )
-        if ok:
-            # Decrementar em memória para que o pre-check funcione correctamente
-            # nos dispatches seguintes da mesma batch (spy_data carregado uma vez)
-            entry = spy_data.setdefault(origin_id, {})
-            for key in ("inDefense", "available"):
-                if entry.get(key) is not None:
-                    entry[key] = max(0, entry[key] - num_agents)
+def _dispatch_item(session, item, spy_data):
+    """Handle one spy_dispatch queue item. Returns the (possibly reloaded) spy-count cache."""
+    origin_id  = str(item["originCityId"])
+    num_agents = int(item.get("numAgents", 1))
+
+    # Verificar se já há espião em trânsito ou à espera nesta cidade-alvo
+    target_cid = str(item["targetCityId"])
+    target_x   = item.get("islandX")
+    target_y   = item.get("islandY")
+    active_missions = _load_missions().get("missions", [])
+    already_active = any(
+        m.get("state") in ("TRAVELING", "WAITING_AT_CITY")
+        and str(m.get("targetCityId", "")) == target_cid
+        for m in active_missions
+    )
+    if already_active:
+        logger.info("[espionage] espião já activo para %s (%s) — dispatch ignorado",
+                    item["targetPlayerName"], item["targetCityName"])
+        return spy_data
+
+    # Reactivation guard: never send spies to a target whose owner is active again.
+    # The cached world scan can be stale, so we confirm live (island view) right before
+    # dispatch — the same check the farm runs before every action (_confirm_inactive).
+    # An active owner just captures the spies (as happened with Willesden Green on
+    # 2026-10-30). Only a CONFIRMED-active/vacation verdict blocks; True or an
+    # inconclusive None (fetch failed / not scanned) falls through and still dispatches.
+    island_id = str(item.get("islandId") or "")
+    if island_id:
+        try:
+            from farm_manager import _confirm_inactive
+            confirmed = _confirm_inactive(session, {
+                "target_city_id":   target_cid,
+                "island_id":        island_id,
+                "target_city_name": item.get("targetCityName", ""),
+                "target_player":    item.get("targetPlayerName", ""),
+            })
+        except Exception:
+            logger.warning("[espionage] confirmação de inactividade falhou para %s — a continuar",
+                           item.get("targetCityName", target_cid), exc_info=True)
+            confirmed = None
+        if confirmed is False or confirmed == "vacation":
+            reason = ("Jogador em férias — infiltração recusada pelo jogo"
+                      if confirmed == "vacation"
+                      else "Jogador já não está inactivo — espiões não enviados (teriam sido capturados)")
+            logger.warning("[espionage] %s (%s): %s — dispatch cancelado",
+                           item["targetPlayerName"], item["targetCityName"], reason)
+            _append_failed_mission(item, reason)
+            return spy_data
+
+    # Pre-check: inDefense = espiões na cidade, disponíveis para dispatch.
+    # available pode ser None se o parser não o calculou — usar inDefense como fallback.
+    city_counts  = spy_data.get(origin_id, {})
+    in_defense   = city_counts.get("inDefense")
+    available    = city_counts.get("available")
+    dispatchable = in_defense if in_defense is not None else available
+    if dispatchable is not None and dispatchable < num_agents:
+        if dispatchable >= 1:
+            # Envia com os que houver em vez de falhar a missão inteira.
+            logger.info("[espionage] %s (%s): pedidos %d agentes, só há %d na cidade "
+                        "— a enviar com %d",
+                        item["targetPlayerName"], item["targetCityName"],
+                        num_agents, dispatchable, dispatchable)
+            num_agents = dispatchable
         else:
-            _append_failed_mission(item, result)
-            logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
-                           item["targetPlayerName"], result)
-            # type=11 = sem espiões; actualizar cache em disco e em memória
-            if "type=10" not in result and "11" in result:
-                counts_data = _load_spy_counts()
-                entry = counts_data.setdefault("byCityId", {}).setdefault(origin_id, {})
-                entry["inDefense"] = 0
-                entry["available"] = 0
-                _save_spy_counts(counts_data)
-                spy_data = counts_data["byCityId"]
-                logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
+            error = f"Espiões insuficientes: {dispatchable} na cidade, {num_agents} pedidos"
+            logger.warning("[espionage] pre-check falhou para %s: %s",
+                           item["targetPlayerName"], error)
+            _append_failed_mission(item, error)
+            return spy_data
 
-    # Remove exactly the items handled above; entries queued meanwhile stay untouched
-    try:
-        from db_manager import queue_remove
-        queue_remove(SPY_DISPATCH_QUEUE, [it.get("id") for it in pending])
-    except Exception:
-        logger.error("[espionage] limpeza da fila de dispatch falhou", exc_info=True)
+    ok, result = _dispatch_spy(
+        session,
+        origin_city_id=origin_id,
+        target_city_id=item["targetCityId"],
+        target_island_id=item["islandId"],
+        target_player_name=item["targetPlayerName"],
+        target_city_name=item["targetCityName"],
+        island_x=item["islandX"],
+        island_y=item["islandY"],
+        num_agents=num_agents,
+        num_decoys=item.get("numDecoys", 0),
+        fast=bool(item.get("fast")),
+        need_garrison=bool(item.get("needGarrison", True)),
+        need_movements=bool(item.get("needMovements", False)),
+    )
+    if ok:
+        # Decrementar em memória para que o pre-check funcione correctamente
+        # nos dispatches seguintes da mesma batch (spy_data carregado uma vez)
+        entry = spy_data.setdefault(origin_id, {})
+        for key in ("inDefense", "available"):
+            if entry.get(key) is not None:
+                entry[key] = max(0, entry[key] - num_agents)
+    else:
+        _append_failed_mission(item, result)
+        logger.warning("[espionage] dispatch falhou → guardado como FAILED para %s: %s",
+                       item["targetPlayerName"], result)
+        # type=11 = sem espiões; actualizar cache em disco e em memória
+        if "type=10" not in result and "11" in result:
+            counts_data = _load_spy_counts()
+            entry = counts_data.setdefault("byCityId", {}).setdefault(origin_id, {})
+            entry["inDefense"] = 0
+            entry["available"] = 0
+            _save_spy_counts(counts_data)
+            spy_data = counts_data["byCityId"]
+            logger.info("[espionage] spy_counts invalidados para cidade %s após type=11", origin_id)
+    return spy_data
 
 
 def _append_failed_mission(item, error):
@@ -889,7 +905,7 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
 # executes and its collector ignores anything at or below it.
 REPORT_STATE_PATH = os.path.join(LOGS_DIR, "spy_report_state.json")
 _REPORT_BASELINE_MAX_AGE = 10 * 60   # re-read the tab before executing if our last look is older
-_report_state = {"max": None, "at": 0, "loaded": False}
+_report_state = {"max": None, "at": 0, "loaded": False, "lossMax": None}
 
 
 def _load_report_state():
@@ -901,6 +917,7 @@ def _load_report_state():
             d = json.load(f)
         _report_state["max"] = int(d["max"]) if d.get("max") is not None else None
         _report_state["at"] = int(d.get("at", 0) or 0)
+        _report_state["lossMax"] = int(d["lossMax"]) if d.get("lossMax") is not None else None
     except (FileNotFoundError, OSError, ValueError, TypeError, KeyError):
         pass
 
@@ -908,9 +925,43 @@ def _load_report_state():
 def _save_report_state():
     try:
         from empire_utils import atomic_write_json
-        atomic_write_json(REPORT_STATE_PATH, {"max": _report_state["max"], "at": _report_state["at"]})
+        atomic_write_json(REPORT_STATE_PATH, {"max": _report_state["max"], "at": _report_state["at"],
+                                              "lossMax": _report_state.get("lossMax")})
     except Exception:
         pass
+
+
+def _alert_agent_losses(reports):
+    """Tell the operator about agents lost, with the game's own numbers (P13.64). Every
+    report states lost/sent — including the "report back" one written when spies come home,
+    which no collector reads (Corinto: 1 of 4 lost on the way back, unnoticed). Each report is
+    announced once: the highest id already announced is kept in the report state. The first
+    look only sets that mark, so old reports are not announced after the fact. A failed
+    mission that lost EVERY agent is left to the mission-failure alert."""
+    _load_report_state()
+    ids = sorted((int(r) for r in reports if str(r).isdigit()))
+    if not ids:
+        return
+    mark = _report_state.get("lossMax")
+    if mark is not None:
+        for rid in ids:
+            if rid <= mark:
+                continue
+            r = reports.get(str(rid)) or reports.get(rid) or {}
+            lost, sent = r.get("lostAgents"), r.get("sentAgents")
+            if not lost or not sent or (r.get("failed") and lost >= sent):
+                continue
+            logger.warning("[espionage] %s: %d de %d agente(s) perdido(s) — %s",
+                           r.get("targetCityName") or "?", lost, sent, r.get("subject") or "")
+            try:
+                from telegram_notifier import notify_spy_agents_lost
+                notify_spy_agents_lost(r.get("targetCityName") or "?", r.get("targetOwner") or "",
+                                       int(lost), int(sent), r.get("subject") or "")
+            except Exception:
+                pass
+    if mark is None or ids[-1] > mark:
+        _report_state["lossMax"] = ids[-1]
+        _save_report_state()
 
 
 def _note_report_ids(report_ids):
@@ -988,6 +1039,22 @@ def _failed_report_for(reports, m, baseline):
         if r.get("failed") and not r.get("isArrival") and _report_is_for(r, m):
             return r
     return None
+
+
+def _apply_agent_losses(mission, report):
+    """Record the agents a mission lost, as the game's report states them (lost/sent), and
+    shrink the mission's numAgents to the survivors — the next leg (and a later re-execution of
+    the parked spies) must not ask for agents that are no longer there. Returns the number
+    lost (0 when the report does not say)."""
+    lost, sent = (report or {}).get("lostAgents"), (report or {}).get("sentAgents")
+    if not sent or not lost or lost < 0:
+        return 0
+    lost = min(int(lost), int(sent))
+    mission["lostAgents"] = int(mission.get("lostAgents", 0) or 0) + lost
+    mission["numAgents"] = max(0, int(sent) - lost)
+    logger.info("[espionage] %s: %d de %d agente(s) perdido(s) — ficam %d",
+                mission.get("targetCityName", "?"), lost, sent, mission["numAgents"])
+    return lost
 
 
 def _failed_report_error(report):
@@ -1098,6 +1165,7 @@ def _fetch_all_reports(session, origin_city_id, position, baseline=None):
     if not html:
         return {}
     reports = _parse_reports_from_html(html)
+    _alert_agent_losses(reports)
     _note_report_ids(reports.keys())
     return reports
 
@@ -1387,6 +1455,7 @@ def collect_mission_results(session):
             missions[i]["state"] = "FAILED"
             missions[i]["error"] = _failed_report_error(bad)
             missions[i]["result"] = bad
+            _apply_agent_losses(missions[i], bad)
             logger.info("[espionage] armazém %s → %s", m["targetCityName"], missions[i]["error"])
             changed = True
             continue
@@ -1406,6 +1475,7 @@ def collect_mission_results(session):
                     continue
 
             missions[i]["result"] = report
+            _apply_agent_losses(missions[i], report)
 
             if report.get("success"):
                 settings  = _load_espionage_settings()
@@ -1590,6 +1660,7 @@ def collect_garrison_results(session):
             # Garrison inspection failed in the game: finish on the warehouse result, with a
             # garrison that is explicitly NOT a clean reading (success False, no troops key).
             missions[i]["state"] = "DONE"
+            _apply_agent_losses(missions[i], bad)
             missions[i]["garrisonResult"] = {"success": False, "error": _failed_report_error(bad),
                                              "reportId": bad.get("reportId")}
             logger.info("[espionage] garrison %s → %s", m["targetCityName"],
@@ -1611,6 +1682,7 @@ def collect_garrison_results(session):
                 if target and found and target[:6] not in found and found[:6] not in target:
                     continue
             missions[i]["garrisonResult"] = report
+            _apply_agent_losses(missions[i], report)
             _tr = report.get("troops") or {}
             logger.info("[espionage] garrison %s: %s",
                         m["targetCityName"],
@@ -1772,6 +1844,7 @@ def collect_movements_results(session):
             if bad:
                 # The movements mission failed in the game: the port is NOT confirmed. Leave
                 # movementsResult None so the farm treats the sweep as incomplete.
+                _apply_agent_losses(missions[i], bad)
                 missions[i]["state"] = "DONE"
                 logger.info("[espionage] movimentos %s → %s (porto não confirmado)",
                             m["targetCityName"], _failed_report_error(bad))
@@ -1795,48 +1868,6 @@ def collect_movements_results(session):
     if changed:
         data["missions"] = missions
         _save_missions(data)
-
-
-def force_warehouse_mission(target_city_id):
-    """Force warehouse inspection for a city.
-    - WAITING_AT_CITY → reset executeAfter to now so it runs on next cycle.
-    - No active mission → add a new dispatch queue item from world scan data.
-    """
-    data     = _load_missions()
-    missions = data.get("missions", [])
-
-    for i, m in enumerate(missions):
-        if m.get("state") == "WAITING_AT_CITY" and str(m.get("targetCityId", "")) == str(target_city_id):
-            missions[i]["executeAfter"] = int(time.time()) - 1
-            data["missions"] = missions
-            _save_missions(data)
-            logger.info("[espionage] force-warehouse %s — executeAfter resetado", m.get("targetCityName"))
-            return
-
-    # No active mission — look up city in world_scan and add to dispatch queue
-    try:
-        with open(WORLD_SCAN_JSON_PATH) as f:
-            scan = json.load(f)
-        city = next((p for p in scan.get("players", []) if str(p.get("cityId")) == str(target_city_id)), None)
-        if not city:
-            logger.warning("[espionage] force-warehouse: cidade %s não encontrada no world scan", target_city_id)
-            return
-        from db_manager import queue_add
-        queue_add(SPY_DISPATCH_QUEUE, {
-            "targetCityId":     str(target_city_id),
-            "targetPlayerName": city.get("playerName", ""),
-            "targetCityName":   city.get("cityName", ""),
-            "targetIslandId":   str(city.get("islandId", "")),
-            "islandX":          city.get("islandX"),
-            "islandY":          city.get("islandY"),
-            "numAgents":        1,
-            "numDecoys":        0,
-            "queuedAt":         int(time.time()),
-            "forceWarehouse":   True,
-        })
-        logger.info("[espionage] force-warehouse %s — adicionado à fila de dispatch", city.get("cityName"))
-    except Exception:
-        logger.warning("[espionage] force_warehouse_mission falhou", exc_info=True)
 
 
 # FAILED reasons that mean no spy is stationed any more (captured / vanished) or ever was

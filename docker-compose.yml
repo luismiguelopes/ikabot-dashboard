@@ -39,6 +39,7 @@ services:
       - ./bot/scan_collector.py:/ikabot/ikabot/function/scan_collector.py
       - ./bot/queue_processor.py:/ikabot/ikabot/function/queue_processor.py
       - ./bot/db_manager.py:/ikabot/ikabot/function/db_manager.py
+      - ./bot/settings_registry.py:/ikabot/ikabot/function/settings_registry.py
       - ./bot/telegram_notifier.py:/ikabot/ikabot/function/telegram_notifier.py
       - ./bot/espionage_manager.py:/ikabot/ikabot/function/espionage_manager.py
       - ./bot/espionage_parsers.py:/ikabot/ikabot/function/espionage_parsers.py
@@ -113,6 +114,7 @@ services:
       # Pega na pasta inteira ./ikabot_gui que está ao lado do compose e mete no contentor
       - ./ikabot_gui:/gui
       - ./bot/db_manager.py:/gui/db_manager.py
+      - ./bot/settings_registry.py:/gui/settings_registry.py
       - ./bot/telegram_notifier.py:/gui/telegram_notifier.py
       # P6.11: build de produção do frontend, servido pelo Flask (era um container Vite)
       # Rebuild após mudanças no frontend: cd frontend && npx vite build

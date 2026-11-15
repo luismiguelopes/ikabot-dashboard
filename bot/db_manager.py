@@ -21,6 +21,18 @@ def _connect():
     return conn
 
 
+def _add_column(conn, ddl):
+    """Run an ALTER TABLE … ADD COLUMN, tolerating only "the column is already there".
+    These used to sit in `except Exception: pass` followed by the version insert: any other
+    error (locked database, typo, missing table) left the column missing for good, with the
+    version recorded as applied."""
+    try:
+        conn.execute(ddl)
+    except sqlite3.OperationalError as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
 def _run_migrations(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
@@ -126,26 +138,17 @@ def _run_migrations(conn):
             "ALTER TABLE farm_targets ADD COLUMN last_transporters INTEGER DEFAULT 0",
             "ALTER TABLE farm_targets ADD COLUMN last_enemy_ships INTEGER DEFAULT 0",
         ):
-            try:
-                conn.execute(ddl)
-            except Exception:
-                pass  # column already present (fresh DB created at v8)
+            _add_column(conn, ddl)   # may already be present (fresh DB created at v8)
         conn.execute("INSERT INTO schema_version (version) VALUES (8)")
     if current < 9:
         # v9 = F4.b two-wave timing: minutes the troop wave should LAND after the
         # blockade fleet (the "clean port" window while the enemy fleet is dispersed).
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN fleet_lead_min INTEGER DEFAULT 5")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN fleet_lead_min INTEGER DEFAULT 5")
         conn.execute("INSERT INTO schema_version (version) VALUES (9)")
     if current < 10:
         # v10 = pipelined re-spy: timestamp of a scout launched WHILE the troops are
         # returning (0 = none this cycle), so a re-spy round skips the post-return wait.
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN respy_launched_at INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN respy_launched_at INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (10)")
     if current < 11:
         # v11 = F4.b fleet-flee handling: blockade first, then time troops into the clean
@@ -157,10 +160,7 @@ def _run_migrations(conn):
             "ALTER TABLE farm_targets ADD COLUMN enemy_return_at INTEGER DEFAULT 0",
             "ALTER TABLE farm_targets ADD COLUMN last_troop_journey INTEGER DEFAULT 0",
         ):
-            try:
-                conn.execute(ddl)
-            except Exception:
-                pass
+            _add_column(conn, ddl)
         conn.execute("INSERT INTO schema_version (version) VALUES (11)")
     if current < 12:
         # v12 = loop mode (F12): a target set to mode='loop' is hammered aggressively
@@ -170,20 +170,14 @@ def _run_migrations(conn):
             "ALTER TABLE farm_targets ADD COLUMN mode TEXT DEFAULT 'farm'",
             "ALTER TABLE farm_targets ADD COLUMN low_raids INTEGER DEFAULT 0",
         ):
-            try:
-                conn.execute(ddl)
-            except Exception:
-                pass
+            _add_column(conn, ddl)
         conn.execute("INSERT INTO schema_version (version) VALUES (12)")
     if current < 13:
         # v13 = scout_fail_count: consecutive garrison scouts that came back rejected/without
         # fleet intel on a fleet target. The farm re-scouts instead of raiding blind while this
         # is non-zero, and skips the round once it hits the cap (troops bounce off an unscouted
         # fleet — seen live at Lançassolar).
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN scout_fail_count INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN scout_fail_count INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (13)")
     if current < 14:
         # v14 = force_fresh_spy: set after a fleet target's parked spies are rejected
@@ -191,10 +185,7 @@ def _run_migrations(conn):
         # re-scout then dispatches FRESH spies instead of re-arming the dead parked ones, so a
         # target that can't be scouted stops looping on its stationed spies and holding the
         # queue head (seen live at Jardim De Cima — starved every other farm target for ~12h).
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN force_fresh_spy INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN force_fresh_spy INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (14)")
     if current < 15:
         # v15 = tiered ignore: an auto/manual ignore is temporary (expires_at = when it lifts
@@ -205,10 +196,7 @@ def _run_migrations(conn):
             "ALTER TABLE marks ADD COLUMN expires_at INTEGER",
             "ALTER TABLE marks ADD COLUMN ignore_count INTEGER DEFAULT 0",
         ):
-            try:
-                conn.execute(ddl)
-            except Exception:
-                pass
+            _add_column(conn, ddl)
         conn.execute("INSERT INTO schema_version (version) VALUES (15)")
     if current < 16:
         # v16 = swept_at: when the target last passed a CONFIRMED full live sweep (garrison
@@ -219,12 +207,9 @@ def _run_migrations(conn):
         # by a verified sweep, so a direct raid now requires one. Backfill: a target whose
         # total_loot > 0 already passed the SPYING gate at least once (that path is the only
         # one that adds to total_loot) — keep it raidable; everything else re-sweeps once.
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN swept_at INTEGER DEFAULT 0")
-            conn.execute("UPDATE farm_targets SET swept_at = last_spy_at "
-                         "WHERE total_loot > 0 AND last_spy_at > 0")
-        except Exception:
-            pass
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN swept_at INTEGER DEFAULT 0")
+        conn.execute("UPDATE farm_targets SET swept_at = last_spy_at "
+                     "WHERE total_loot > 0 AND last_spy_at > 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (16)")
     if current < 17:
         # v17 = city ids on the logs, so the farm matches a return / a dispatch to its target
@@ -234,10 +219,7 @@ def _run_migrations(conn):
             "ALTER TABLE loot_log ADD COLUMN from_city_id TEXT DEFAULT ''",
             "ALTER TABLE attack_log ADD COLUMN target_city_id TEXT DEFAULT ''",
         ):
-            try:
-                conn.execute(ddl)
-            except Exception:
-                pass
+            _add_column(conn, ddl)
         conn.execute("INSERT INTO schema_version (version) VALUES (17)")
     if current < 18:
         # v18 = spy missions move out of spy_missions.json into one row per mission (P13.11).
@@ -253,21 +235,13 @@ def _run_migrations(conn):
     if current < 19:
         # v19 = clean_sweeps: consecutive full sweeps (garrison + movements) of a fleet target
         # that showed no ship and no returning fleet — lets is_fleet_target be earned back.
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN clean_sweeps INTEGER DEFAULT 0")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column" not in str(exc).lower():
-                raise
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN clean_sweeps INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (19)")
     if current < 20:
         # v20 = scout_fail_rounds: consecutive farm rounds skipped because the scout kept
         # failing. Each one doubles the wait before the next attempt (capped), so a target
         # where the mission always fails stops costing three attempts every interval.
-        try:
-            conn.execute("ALTER TABLE farm_targets ADD COLUMN scout_fail_rounds INTEGER DEFAULT 0")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column" not in str(exc).lower():
-                raise
+        _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN scout_fail_rounds INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (20)")
     conn.commit()
 
@@ -726,14 +700,49 @@ def farm_add(target):
         conn.close()
 
 
+def _farm_real_loot(conn, targets):
+    """Fill total_loot / loot_returns on each target dict from what actually came home
+    (loot_log). The stored total_loot column summed the SCOUTED warehouse of every
+    spy-then-raid round — Tróia 3 showed 8.3M after 5 raids capped at ~207k each.
+    A row is matched by city id; rows from before ids were logged (no from_city_id) fall back
+    to the exact city name + player."""
+    if not targets:
+        return targets
+    try:
+        rows = conn.execute(
+            "SELECT from_city_id, from_city, from_player, "
+            "SUM(wood + wine + marble + crystal + sulfur) AS total, COUNT(*) AS n "
+            "FROM loot_log GROUP BY from_city_id, from_city, from_player").fetchall()
+    except sqlite3.OperationalError:
+        return targets
+    by_id, by_name = {}, {}
+    norm = lambda v: str(v or "").strip().casefold()
+    for r in rows:
+        cid = str(r["from_city_id"] or "")
+        total, n = int(r["total"] or 0), int(r["n"] or 0)
+        if cid:
+            t0, n0 = by_id.get(cid, (0, 0))
+            by_id[cid] = (t0 + total, n0 + n)
+        else:
+            key = (norm(r["from_city"]), norm(r["from_player"]))
+            t0, n0 = by_name.get(key, (0, 0))
+            by_name[key] = (t0 + total, n0 + n)
+    for t in targets:
+        a = by_id.get(str(t.get("target_city_id") or ""), (0, 0))
+        b = by_name.get((norm(t.get("target_city_name")), norm(t.get("target_player"))), (0, 0))
+        t["total_loot"] = a[0] + b[0]
+        t["loot_returns"] = a[1] + b[1]
+    return targets
+
+
 def farm_list():
     init_db()
     conn = _connect()
     try:
         rows = conn.execute("SELECT * FROM farm_targets ORDER BY created_at").fetchall()
+        return _farm_real_loot(conn, [_farm_row_to_dict(r) for r in rows])
     finally:
         conn.close()
-    return [_farm_row_to_dict(r) for r in rows]
 
 
 def farm_get(target_city_id):
@@ -742,9 +751,9 @@ def farm_get(target_city_id):
     try:
         row = conn.execute("SELECT * FROM farm_targets WHERE target_city_id = ?",
                            (str(target_city_id),)).fetchone()
+        return _farm_real_loot(conn, [_farm_row_to_dict(row)])[0] if row else None
     finally:
         conn.close()
-    return _farm_row_to_dict(row) if row else None
 
 
 def farm_update(target_city_id, fields):

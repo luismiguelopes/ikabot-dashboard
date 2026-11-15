@@ -160,3 +160,16 @@ def test_wine_reserve_off_switch(monkeypatch):
 def test_wine_reserve_zero_count(monkeypatch):
     """reserveShips=0 means no floor even with the switch on."""
     assert _reserve(monkeypatch, {"reserveShips": 0}) == 0
+
+
+def test_city_already_dry_with_consumption_still_reported_gets_wine(monkeypatch, tmp_path):
+    """P13.20: runway exactly 0 while the game still reports the tavern consumption fell
+    between the "draining" branch (0 < runway) and the "emptied" one (consumption 0)."""
+    resources = {
+        "Emperor":   _city(292, 0),              # dry: wineRunsOutIn == 0, consumption 292
+        "Doomentia": _city(335, 335 * 2293),
+    }
+    assert resources["Emperor"]["wineRunsOutIn"] == 0
+    sent, ids = _run(monkeypatch, tmp_path, resources)
+    assert len(sent) == 1 and sent[0]["dest"] == ids["Emperor"]
+    assert sent[0]["wine"] == 292 * 48

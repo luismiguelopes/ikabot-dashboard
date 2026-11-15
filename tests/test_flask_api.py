@@ -544,3 +544,110 @@ def test_force_warehouse_rearms_in_the_store_and_keeps_bot_changes(monkeypatch, 
     got = {m["targetCityId"]: m for m in c.get("/api/espionage/missions").get_json()["missions"]}
     assert got["100"]["state"] == "WAITING_AT_CITY"     # the click survived
     assert got["200"]["state"] == "WAITING_AT_CITY"
+
+
+def test_farm_run_now_is_refused_while_a_raid_is_out(monkeypatch, tmp_path):
+    """P13.31: runNow used to force IDLE with troops still sailing."""
+    c = _client(monkeypatch, tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "C",
+                         "islandX": 40, "islandY": 50, "islandId": "7"})
+    db_manager.farm_update("100", {"state": "ATTACKING", "next_run_at": 999})
+    r = c.post("/api/farm/update", json={"targetCityId": "100", "runNow": True})
+    assert r.status_code == 409
+    t = db_manager.farm_get("100")
+    assert t["state"] == "ATTACKING" and t["next_run_at"] == 999
+    # other edits still go through while the raid is out
+    assert c.post("/api/farm/update", json={"targetCityId": "100", "minLoot": 70000}).status_code == 200
+    db_manager.farm_update("100", {"state": "SPYING"})
+    assert c.post("/api/farm/update", json={"targetCityId": "100", "runNow": True}).status_code == 200
+    assert db_manager.farm_get("100")["state"] == "IDLE"
+
+
+# ── P13.30: one registry for the settings the bot and the dashboard share ────────
+
+def _settings_paths(monkeypatch, tmp_path):
+    for const in ("CONSOLIDATE_SETTINGS_PATH", "CONSOLIDATE_STATE_PATH", "WINE_SETTINGS_PATH",
+                  "WINE_BUY_SETTINGS_PATH", "SPY_BUILD_SETTINGS_PATH"):
+        monkeypatch.setattr(flask_app, const,
+                            str(tmp_path / os.path.basename(getattr(flask_app, const))))
+
+
+def test_saving_consolidation_keeps_the_keys_the_form_does_not_send(monkeypatch, tmp_path):
+    """The dashboard's own default dict lacked skipResources / respectDestCap, and every save
+    rebuilt the file from it — one click on Save silently re-enabled wine consolidation."""
+    c = _client(monkeypatch, tmp_path)
+    _settings_paths(monkeypatch, tmp_path)
+    with open(flask_app.CONSOLIDATE_SETTINGS_PATH, "w") as f:
+        json.dump({"enabled": True, "destCityId": "9", "destCityName": "Polis",
+                   "skipResources": ["Wine"], "respectDestCap": False, "intervalHours": 6}, f)
+    r = c.post("/api/transport/consolidate",
+               json={"enabled": True, "destCityId": "9", "destCityName": "Polis",
+                     "intervalHours": 999, "minSendTotal": 2000, "shipType": "both",
+                     "ignoreCityIds": [5]})
+    assert r.status_code == 200
+    saved = json.load(open(flask_app.CONSOLIDATE_SETTINGS_PATH))
+    assert saved["skipResources"] == ["Wine"] and saved["respectDestCap"] is False
+    assert saved["intervalHours"] == 48 and saved["shipType"] == "both"
+    assert saved["ignoreCityIds"] == ["5"]
+    # what the bot reads is the same thing
+    import transport_manager as tm
+    monkeypatch.setattr(tm, "CONSOLIDATE_SETTINGS_PATH", flask_app.CONSOLIDATE_SETTINGS_PATH)
+    assert tm.get_consolidate_settings() == saved
+    # enabling without a destination is still refused, and nothing is written
+    with open(flask_app.CONSOLIDATE_SETTINGS_PATH, "w") as f:
+        json.dump({}, f)
+    assert c.post("/api/transport/consolidate", json={"enabled": True}).status_code == 400
+    assert json.load(open(flask_app.CONSOLIDATE_SETTINGS_PATH)) == {}
+
+
+def test_partial_save_does_not_reset_the_other_fields(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _settings_paths(monkeypatch, tmp_path)
+    c.post("/api/transport/wine-buy", json={"enabled": True, "dryRun": False, "goldFloor": 500000,
+                                            "targetHours": 80, "refillBelowHours": 60})
+    # a later save of one field (used to rebuild from defaults: dryRun back on, floor reset)
+    d = c.post("/api/transport/wine-buy", json={"maxPricePerUnit": 12}).get_json()["settings"]
+    assert d["enabled"] is True and d["dryRun"] is False and d["goldFloor"] == 500000
+    assert d["maxPricePerUnit"] == 12
+    # cross-field rules and unreadable values
+    d = c.post("/api/transport/wine-buy",
+               json={"targetHours": 24, "criticalHours": "abc"}).get_json()["settings"]
+    assert d["targetHours"] == 24 and d["refillBelowHours"] == 24 and d["criticalHours"] == 6
+    d = c.post("/api/transport/wine", json={"thresholdHours": 30, "targetHours": 10}).get_json()["settings"]
+    assert d["targetHours"] == 30 and d["donorReserveHours"] >= 30 and d["enabled"] is True
+
+
+def test_registry_feeds_the_config_validation():
+    import empire_utils
+    import settings_registry
+    for name, spec in settings_registry.SPECS.items():
+        assert empire_utils._CONFIG_SCHEMAS[spec["file"]] == settings_registry.schema(name)
+    assert settings_registry.defaults("consolidate")["respectDestCap"] is True
+    d = settings_registry.defaults("wine_buy")
+    d["ignoreCityIds"].append("x")                       # defaults are not shared objects
+    assert settings_registry.defaults("wine_buy")["ignoreCityIds"] == []
+
+
+# ── P13.33: the backend decides "garrison known / ships in port" ─────────────────
+
+def test_missions_carry_the_garrison_verdict(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    missions = [
+        {"id": "ok", "garrisonResult": {"success": True, "troops": {"Hoplita": 30, "Trirreme": 2,
+                                                                     "Catapulta": 4},
+                                        "fleet": {"Trirreme": 2}}},
+        {"id": "clean", "garrisonResult": {"success": True, "troops": {}, "fleet": {}}},
+        {"id": "old", "garrisonResult": {"troops": {"Lancha rápida": 3, "Catapulta": 1}}},
+        {"id": "failed", "garrisonResult": {"success": False, "troops": {}}},
+        {"id": "errored", "garrisonResult": {"error": "rejeitado"}},
+        {"id": "none"},
+    ]
+    monkeypatch.setattr(flask_app, "_spy_missions", lambda: missions)
+    got = {m["id"]: m for m in c.get("/api/espionage/missions").get_json()["missions"]}
+    assert (got["ok"]["garrisonOk"], got["ok"]["enemyShips"], got["ok"]["enemyTroops"]) == (True, 2, 34)
+    assert (got["clean"]["garrisonOk"], got["clean"]["enemyShips"], got["clean"]["enemyTroops"]) == (True, 0, 0)
+    # report stored before the fleet section was kept: by unit name — the land Catapulta is not a ship
+    assert (got["old"]["enemyShips"], got["old"]["enemyTroops"]) == (3, 1)
+    for bad in ("failed", "errored", "none"):         # unknown, never "clean port"
+        assert got[bad]["garrisonOk"] is False and got[bad]["enemyShips"] is None
+    assert "garrisonOk" not in missions[0]             # stored missions are not touched

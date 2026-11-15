@@ -30,7 +30,8 @@ export function LogsPage() {
     fetch(`/api/logs?lines=${count}`)
       .then(r => r.json())
       .then((d: { lines?: string[]; note?: string; error?: string }) => {
-        setLines(d.lines ?? [])
+        // a passing failure (no `lines` in the answer) must not wipe the log off the screen
+        if (Array.isArray(d.lines)) setLines(d.lines)
         setNote(d.note ?? d.error ?? null)
       })
       .catch(() => {})

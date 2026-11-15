@@ -107,6 +107,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       .then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => Promise.reject(e.error)))
       .then((d: WorldScanData) => {
         setScanData(d)
+        setError(null)          // a later success clears an earlier failure
         setLoading(false)
       })
       .catch((e: unknown) => {
@@ -127,14 +128,19 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
     return () => clearInterval(id)
   }, [fetchScan])
 
+  // Follow the scan: quickly while it runs, slowly otherwise (so a scan started after the page
+  // was opened shows its progress bar too), and reload the list the moment it stops running.
+  // The old timer compared a `scanStatus` captured when it was created — always 'running'.
+  const running = scanStatus?.status === 'running'
   useEffect(() => {
-    if (scanStatus?.status !== 'running') return
     const timer = setInterval(() => {
-      fetchStatus()
-      if (scanStatus?.status !== 'running') fetchScan()
-    }, 5000)
+      fetch('/api/world-scan/status').then(r => r.json()).then((s: typeof scanStatus) => {
+        setScanStatus(s)
+        if (running && s?.status !== 'running') fetchScan()
+      }).catch(() => {})
+    }, running ? 5000 : 20000)
     return () => clearInterval(timer)
-  }, [scanStatus?.status, fetchScan, fetchStatus])
+  }, [running, fetchScan])
 
   const handleForceRefresh = () => {
     apiAction('/api/world-scan/refresh', { method: 'POST' })

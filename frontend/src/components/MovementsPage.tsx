@@ -15,10 +15,15 @@ function MovementsTab() {
   const lang = useLang()
   const now  = useLiveClock()
 
+  // Only a real list is kept (an error body used to reach `.filter` and blank the page); a
+  // failure keeps what is on screen and a later success clears it.
   const fetchMovements = () =>
     fetch('/api/movements')
       .then(r => r.json())
-      .then(setMovements)
+      .then(d => {
+        if (!Array.isArray(d)) throw new Error((d && d.error) || 'Resposta inesperada')
+        setMovements(d); setError(null)
+      })
       .catch(e => setError(e.message))
 
   const handleRefresh = () => {
@@ -26,9 +31,21 @@ function MovementsTab() {
     fetchMovements()
   }
 
-  useEffect(() => { fetchMovements() }, [])
+  // The list was loaded once, on opening: movements reached "arrived" and stayed there.
+  useEffect(() => {
+    fetchMovements()
+    const id = setInterval(fetchMovements, 60000)
+    return () => clearInterval(id)
+  }, [])
 
-  if (error)      return <p className="text-red-500 text-sm">{error}</p>
+  if (error && !movements) return (
+    <div className="text-sm">
+      <p className="text-red-500">{error}</p>
+      <button onClick={fetchMovements} className="mt-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50">
+        <i className="fa-solid fa-rotate-right mr-1.5" />{t('refresh_btn')}
+      </button>
+    </div>
+  )
   if (!movements) return <p className="text-slate-400 text-sm">{t('loading')}</p>
 
   const own     = movements.filter(m => m.isOwn)

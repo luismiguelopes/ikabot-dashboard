@@ -334,6 +334,15 @@ def notify_transport_error(city: str, resource: str, origin: str) -> None:
           level="warning", category="transport")
 
 
+def notify_queue_item_dropped(kind: str, what: str, why: str) -> None:
+    """A queued item the bot gave up on and removed (it used to leave only a log line).
+    kind: 'transport' | 'build' | 'combat'."""
+    title = {"transport": "Transporte removido da fila", "build": "Construção removida da fila",
+             "combat": "Ataque removido da fila"}.get(kind, "Item removido da fila")
+    _send(f"🗑️ <b>{title}</b>\n{_esc(what)}\n{_esc(why)}", level="error",
+          category=kind if kind in ("transport", "build", "combat") else "system")
+
+
 def notify_wine_critical(city: str, hours_left: float) -> None:
     global _wine_critical_notified
     if city in _wine_critical_notified:
@@ -348,7 +357,10 @@ def clear_wine_critical(city: str) -> None:
 
 
 def notify_attack_dispatched(origin: str, target_city: str, player: str, mission: str) -> None:
-    _record(raids=1)
+    # The digest's "raids" are plunder waves only — a blockade or a deployment is not a raid
+    # (a fleet target used to count twice per round).
+    if mission == "army":
+        _record(raids=1)
     icon = "⚓" if mission == "fleet" else "⚔️"
     _send(f"{icon} <b>Ataque lançado</b>\n{_esc(origin)} → {_esc(target_city)} ({_esc(player)})",
           category="combat")
@@ -476,6 +488,15 @@ def notify_spy_failed(target_city: str, player: str, error: str, spies_lost: boo
         _record(spyFailed=1)
         _send(f"🕵️ <b>Missão de espionagem falhou</b>\n{_esc(target_city)} ({_esc(player)}) — "
               f"{_esc(error)}", level="activity", category="spy")
+
+
+def notify_spy_agents_lost(target_city: str, player: str, lost: int, sent: int, subject: str = "") -> None:
+    """Agents lost on a mission that otherwise went through (numbers from the game's report)."""
+    _record(spiesLost=1)
+    who = f" ({_esc(player)})" if player else ""
+    extra = f"\n{_esc(subject)}" if subject else ""
+    _send(f"🕵️ <b>Espiões perdidos</b>\n{_esc(target_city)}{who} — {lost} de {sent} agente(s){extra}",
+          level="warning", category="spy")
 
 
 def notify_target_swept(target_city: str, player: str, fleet_target: bool) -> None:

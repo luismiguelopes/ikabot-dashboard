@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { apiAction } from '../api'
 import { useT } from '../i18n'
 import { fmtDuration } from '../utils'
 import { Card } from './ui/Card'
@@ -54,11 +55,12 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
   }, [queue])
 
   const handleQuickAdd = (cityName: string, buildingName: string, currentLevel: number) => {
-    fetch('/api/building-queue/add', {
+    // Says what it queued (it used to add silently) and shows the server's reason on refusal.
+    apiAction('/api/building-queue/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cityName, buildingName, targetLevel: currentLevel + 1 }),
-    }).then(fetchQueue)
+    }, { successMsg: `${cityName}: ${buildingName} → ${currentLevel + 1}` }).then(fetchQueue)
   }
 
   const now = Math.floor(Date.now() / 1000)
@@ -138,7 +140,7 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
                                   onClick={() => handleQuickAdd(city, b, parseInt(String(val)))}
                                   disabled={isQueued}
                                   title={isQueued ? 'Já na fila' : 'Adicionar à fila'}
-                                  className={`opacity-0 group-hover:opacity-100 transition-opacity text-[10px] leading-none w-3.5 h-3.5 flex items-center justify-center rounded
+                                  className={`opacity-40 group-hover:opacity-100 focus:opacity-100 transition-opacity text-[10px] leading-none w-3.5 h-3.5 flex items-center justify-center rounded
                                     ${isQueued ? 'text-green-500 cursor-default' : 'text-slate-400 hover:text-indigo-500 cursor-pointer'}`}
                                 >
                                   <i className={`fa-solid ${isQueued ? 'fa-check' : 'fa-plus'}`} />

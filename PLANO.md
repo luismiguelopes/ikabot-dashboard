@@ -1113,38 +1113,38 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       `open("w")` enquanto o Flask lê, e o SSE dispara o refetch precisamente na mudança de mtime.
       Várias rotas lêem sem `try` → 500 esporádico. Um helper `atomic_write_json` (tmp +
       `os.replace`, já usado no `spy_builder` e no notifier) em todo o lado.
-- [ ] **P13.15 Cidade que falha desaparece do snapshot** **[C]** — em `collect_city_data` uma
+- [x] **P13.15 Cidade que falha desaparece do snapshot** **[C]** ✅ 2026-11-15 (`_carry_over_failed_cities`: a cidade mantém a entrada anterior em `own_cities`/`resources`/`empire`, com `stale`/`staleSince`; `statusSummary.staleCities` diz quais) — em `collect_city_data` uma
       cidade com erro é saltada e os ficheiros são reescritos sem ela: vinho, consolidação, origem
       de espiões e `safehousePosition` passam a ver 12 cidades. Manter os dados anteriores dessa
       cidade marcados como antigos.
-- [ ] **P13.16 World scan em curso substitui o anterior** **[C]** — `_publish_partial` reescreve
+- [x] **P13.16 World scan em curso substitui o anterior** **[C]** ✅ 2026-11-15 (`_merged_scan`: durante o scan, as ilhas ainda não relidas mantêm as entradas do scan anterior; uma ilha que falha volta ao fim da fila uma vez e, se falhar de novo, fica com o que se sabia — `failedIslands` no ficheiro) — `_publish_partial` reescreve
       `world_scan.json` desde a 1.ª ilha: durante o scan a lista do Mundo encolhe,
       `_scan_says_inactive` devolve desconhecido e `_auto_mark_ignored` sai em silêncio (os alvos
       drenados não ficam ignorados). Uma ilha cujo pedido falha é descartada sem nova tentativa e
       os seus inactivos somem até ao scan seguinte. Fundir sobre o scan anterior; repor a ilha na fila.
-- [ ] **P13.17 Código morto que envenena a fila** **[C]** — `force_warehouse_mission` (sem
+- [x] **P13.17 Código morto que envenena a fila** **[C]** ✅ 2026-11-15 (`force_warehouse_mission` apagada; cada item do `spy_dispatch` é removido logo após tratado, e um item inválido é registado e removido em vez de encravar a fila) — `force_warehouse_mission` (sem
       chamadores) enfileira um despacho sem `originCityId`/`islandId`; se alguma vez correr, o
       `process_dispatch_queue` rebenta antes do `queue_remove` e a fila nunca mais esvazia. Apagar;
       e remover cada item da fila logo após tratado, não todos no fim.
-- [ ] **P13.18 Migrações engolem qualquer erro** **[C]** — `try: ALTER … except: pass` seguido do
+- [x] **P13.18 Migrações engolem qualquer erro** **[C]** ✅ 2026-11-15 (`_add_column`: só tolera "duplicate column"; os 12 `except: pass` das migrações saíram) — `try: ALTER … except: pass` seguido do
       registo da versão (v15-v17): um erro que não seja "coluna duplicada" deixa a coluna em falta
       para sempre. Apanhar só o duplicado.
 
 ### C — Logística
 
-- [ ] **P13.19 Reserva de navios do farm sobre-reserva** **[C]** — `farm_ship_reserve` soma os
+- [x] **P13.19 Reserva de navios do farm sobre-reserva** **[C]** ✅ 2026-11-15 (a reserva conta só os slots de ataque livres — as maiores necessidades — em vez da soma de todos os alvos à espera) — `farm_ship_reserve` soma os
       `last_transporters` de **todos** os alvos activos devidos nos próximos 45 min (os atrasados
       contam), embora só 2 possam atacar. Com fila de alvos à espera a reserva passa a frota e a
       consolidação, a fila de construção e o vinho não crítico nunca têm navios de comércio.
       Limitar aos slots livres.
-- [ ] **P13.20 Cidade com vinho a 0 pode ficar invisível** **[V]** — o balanceador exige
+- [x] **P13.20 Cidade com vinho a 0 pode ficar invisível** **[V]** ✅ 2026-11-15 (`0 <= runs_out` no balanceador e no alerta de vinho crítico; a confirmação ao jogo deixou de ser precisa — o `>=` está certo nos dois casos) — o balanceador exige
       `0 < runs_out` num ramo e consumo 0 no outro; `runs_out == 0` com consumo ainda reportado
       não entra em nenhum, e o `empireFunction` **limpa** o alerta de vinho crítico nesse caso.
       Usar `>= 0`. (Depende de o jogo reportar consumo com stock 0 — confirmar.)
-- [ ] **P13.21 Compra de vinho não é verificada** **[C]** — o `buy()` stock não devolve resultado;
+- [x] **P13.21 Compra de vinho não é verificada** **[C]** ✅ 2026-11-15 (`_RecordingSession` guarda a resposta que o `buy()` stock deita fora: feedback 10 = comprado, 11 = recusado; sem feedback legível decide o ouro antes/depois. Só o confirmado conta; `failedBuys` no status) — o `buy()` stock não devolve resultado;
       o "comprei", o status e o alerta contam a compra mesmo que a oferta tenha desaparecido.
       Ler o feedback (ou o ouro antes/depois).
-- [ ] **P13.22 Itens removidos sem aviso** **[C]** — transporte manual que falha 3×, item de
+- [x] **P13.22 Itens removidos sem aviso** **[C]** ✅ 2026-11-15 (`notify_queue_item_dropped` para transporte 3×, construção 5× e ataque adiado 12×; consolidação com excedente mas sem navios volta a tentar em 30 min em vez de esperar o intervalo todo) — transporte manual que falha 3×, item de
       construção que falha 5× e ataque adiado 12× saem da fila só com uma linha de log. Notificar.
       A consolidação marca `lastRun` mesmo sem ter enviado nada por falta de navios (espera 6h).
 
@@ -1163,11 +1163,11 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       acorda por causa do farm ou de um espião, o loop principal faz uma passagem "só fila" que
       abre a vista de cada cidade com itens (15-30s entre elas), mesmo sem nada de construção
       devido. Só processar a fila quando o ETA é dela.
-- [ ] **P13.25 Custos de edifícios: 1 pedido por edifício por cidade** **[C]** — ~260 pedidos e
+- [x] **P13.25 Custos de edifícios: 1 pedido por edifício por cidade** **[C]** ✅ 2026-11-15 (cada tipo de edifício lido uma vez, na cidade onde está mais **baixo** e com o índice dessa cidade — a tabela do jogo é uma janela de ~3 níveis abaixo a 46 acima do edifício; redutores aplicados por cidade; cidade cujo nível seguinte não esteja na tabela lê a sua; ícones resolvidos uma vez; cidade não lida mantém os custos anteriores. Validado ao vivo: 14 528 valores iguais aos lidos cidade a cidade, 0 diferentes) — ~260 pedidos e
       40+ min de 3 em 3 dias. O custo base é por tipo+nível; só os redutores são por cidade.
       Ler cada tipo uma vez (~10× menos pedidos). O `save_building_costs` apaga tudo antes:
       cidade que falhe fica 3 dias sem custos.
-- [ ] **P13.26 Pedidos repetidos no farm** **[C]** — `getShipCapacity` a cada passagem (só muda
+- [x] **P13.26 Pedidos repetidos no farm** **[C]** ✅ 2026-11-15 (`_ship_capacity` com cache de 6h; `_pick_origin` uma vez por raid; resultado do recurso do `_confirm_inactive` memoizado; re-espionagem antecipada sem espiões desiste dessa vaga em vez de manter o farm "devido") — `getShipCapacity` a cada passagem (só muda
       com pesquisa); `_pick_origin` chamado duas vezes por raid; falha do `_confirm_inactive` não
       memoizada; janela de re-espionagem antecipada sem origem mantém `has_due_farm` verdadeiro 5 min.
 - [x] **P13.27 Regra do `actionRequest` é supérflua** **[V]** ✅ 2026-11-15 (as 8 escritas em
@@ -1194,15 +1194,15 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       corpo. Código morto a sair no mesmo passo: os dois ramos idênticos de
       `_next_round_needs_spy`, `respy_every`, `raids_since_spy`, imports não usados. Fazer **depois**
       de A, com os testes como rede.
-- [ ] **P13.29 `total_loot` é fictício** **[D]** — soma o armazém espiado, só no caminho SPYING
+- [x] **P13.29 `total_loot` é fictício** **[D]** ✅ 2026-11-15 (`farm_list`/`farm_get` calculam `total_loot` e `loot_returns` a partir do `loot_log` — por id, e por nome+jogador exactos nas linhas antigas sem id; a coluna deixou de ser escrita) — soma o armazém espiado, só no caminho SPYING
       (Tróia 3: 8,3M em 5 raids com tecto ~207k). Derivar do `loot_log` por `cityId`.
-- [ ] **P13.30 Definições duplicadas bot ↔ Flask** **[C]** — ~10 pares GET/POST copiados, com os
+- [~] **P13.30 Definições duplicadas bot ↔ Flask** **[C]** *registo feito 2026-11-15* (`bot/settings_registry.py`, montado nos dois containers: consolidação, vinho, compra de vinho e treino de espiões declarados uma vez; gravar passou a fundir — o que o formulário não envia mantém-se; os quatro ficheiros entram na validação. **Falta:** passar farm/espionagem/world scan/fila/alertas para o registo e dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap`) — ~10 pares GET/POST copiados, com os
       defaults repetidos no bot. Já divergiram: guardar a consolidação pela UI apaga
       `skipResources`/`respectDestCap`; `lootCapPerRaid`, `spyFreshnessHours` e
       `earlyReportMaxAgeMins` não têm UI; `lootCapPerRaid` nem está no schema (dá aviso falso de
       typo); vinho/consolidação/fila não são validados. Um registo único de definições (schema +
       defaults + limites) montado nos dois containers.
-- [ ] **P13.31 Restos de legado** **[C]** — `load_all_data` ainda lê `building_queue.json` (de
+- [~] **P13.31 Restos de legado** **[C]** *parte feita 2026-11-15* (`runNow` recusado com 409 enquanto há tropas fora; o contador "raids" só conta pilhagens. **Falta:** os recursos de legado — `building_queue.json`, `player_marks.json`, `history.jsonl`, snapshot duplicado) — `load_all_data` ainda lê `building_queue.json` (de
       Maio); marcas com fallback para `player_marks.json` (Junho); `history.jsonl`; snapshot do
       império em ficheiros **e** em `empire_meta`. `/api/farm/update` com `runNow` força IDLE mesmo
       com tropas fora. Contador "raids" do resumo conta bloqueios e deploys.
@@ -1219,7 +1219,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
 
 **F.1 — Mundo, alvos e combate** (`mundo/*`, `dispatch/*`, `CombatPage`, `types.ts`)
 
-- [ ] **P13.33 A lista de alvos mostra "porto limpo" quando não sabe** **[C]** — dois erros que se
+- [x] **P13.33 A lista de alvos mostra "porto limpo" quando não sabe** **[C]** ✅ 2026-11-15 (`/api/espionage/missions` devolve `garrisonOk`/`enemyShips`/`enemyTroops` por missão, decididos no backend com as regras do bot; a UI deixou de classificar unidades — `NAVAL_KEYWORDS` apagado — e um scout falhado aparece como "—" + aviso, não como porto limpo) — dois erros que se
       somam, ambos em `InactivosTab.tsx`:
   - `NAVAL_KEYWORDS` (linha 19) é uma lista em **inglês** (`ship`, `galley`, `trireme`, `ram`,
     `mortar`, `catapult`…); o servidor é português e o bot usa `_NAVAL_UNIT_NAMES`. Quase nenhum
@@ -1257,7 +1257,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       da reserva, sair do campo dos espiões, gravar frota) envia o **rascunho** do exército, e o
       backend substitui `army` em todos os POST → números a meio ficam gravados. Usar `apiAction`
       em todo o lado; o backend só mexe em `army` se a chave vier.
-- [ ] **P13.38 Estados de erro que não saem** **[C]** — `MundoPage.fetchScan` (105-116) e o
+- [x] **P13.38 Estados de erro que não saem** **[C]** ✅ 2026-11-15 (`App` e `MundoPage` limpam o erro no sucesso seguinte; o `App` só mostra o ecrã de erro sem dados nenhuns e volta a tentar sozinho; o acompanhamento do scan deixou de usar o estado antigo e também corre com a página já aberta) — `MundoPage.fetchScan` (105-116) e o
       `App.tsx` nunca limpam `error` após um sucesso: uma falha passageira (restart do Flask,
       ficheiro a meio — P13.14) deixa o ecrã de erro até recarregar a página. A barra de progresso
       do scan só aparece se a página for aberta a meio (linhas 130-137: closure sempre `running`).
@@ -1353,8 +1353,9 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
   - Agendar "às HH:MM" sem hora envia **já** (igual ao despacho de ataques, P13.41).
 - [~] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** —
       *feito 2026-11-14:* remover e reordenar enviam o **id** do item (o API devolve os ids);
-      item que já saiu da fila → 409 com aviso e a lista é actualizada. *Falta:* a lista
-      refrescar sozinha com o SSE, o "+" rápido do `BuildingsPage` e o modelo em bloco. remover e
+      item que já saiu da fila → 409 com aviso e a lista é actualizada. *Feito 2026-11-15:* a lista
+      relê-se a cada actualização do império e de 30 em 30s; o "+" rápido é visível sem hover e
+      diz o que enfileirou; aplicar um modelo actualiza a fila. *Falta só:* o modelo num único pedido. remover e
       reordenar enviam um índice; a lista só é lida ao abrir o separador. Se o bot tirar o item
       da cabeça entretanto, o clique remove ou move **outro edifício**. Enviar a identidade do
       item e recusar com 409 se não bater (resolve-se com o P13.12). O "+" rápido em
@@ -1371,7 +1372,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       142-161, `SettingsPage` 190, 307, 580, 755, 885). O feedback da consolidação aparece
       sempre a verde, mesmo quando é um erro. Um erro qualquer ao gravar notificações é mostrado
       como "webhook do Discord inválido". Os cartões descartam o valor que o servidor limitou.
-- [ ] **P13.50 Sessão expirada não é tratada em lado nenhum** **[C]** — o `AuthGate` verifica uma
+- [x] **P13.50 Sessão expirada não é tratada em lado nenhum** **[C]** ✅ 2026-11-15 (interceptor único no `fetch` — `installAuthInterceptor`: qualquer 401 da API devolve ao ecrã de login; o `AuthGate` já não deixa entrar quando não consegue ler o estado, mostra "sem ligação" e tenta de novo; `ErrorBoundary` à volta da app e de cada página) — o `AuthGate` verifica uma
       vez ao abrir e, se esse pedido falhar, **deixa entrar** (`.catch(() => setPhase('ok'))`; a
       API continua protegida, o resultado é uma app cheia de pedidos a falhar). Um 401 a meio:
       o `App` mostra o ecrã de erro permanente com o texto `auth_required`; `TransportTab` guarda
@@ -1418,7 +1419,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
     linhas substituídas de cada vez). `/api/movements` é pedido por dois componentes. Nenhum
     pára com o separador escondido. O SSE não cobre as filas em SQLite nem o `bot.log`.
   - Sem `React.lazy`: o chart.js (207 KB) carrega no arranque para uma página que só o Histórico usa.
-- [ ] **P13.56 A app fica em branco com uma resposta inesperada** **[C]** — `HomePage`,
+- [~] **P13.56 A app fica em branco com uma resposta inesperada** **[C]** *parte feita 2026-11-15* (`ErrorBoundary` por página; Movimentos só aceita uma lista, actualiza a cada 60s e o erro tem botão de repetir; Histórico ignora respostas atrasadas e destrói o gráfico ao sair; o log não se apaga numa falha passageira. **Falta:** os mesmos cuidados no `HomePage`) — `HomePage`,
       `MovementsPage` e `HistoryPage` guardam o JSON directamente no estado; um 401 ou um corpo
       de erro chega a `.filter`/`.map`/`.length` e rebenta, sem `ErrorBoundary` (mesmo problema
       do P13.50). `MovementsPage` fica preso no erro (o botão Actualizar nem é desenhado) e a
@@ -1539,7 +1540,7 @@ Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira 
       "limpa" (0 agentes perdidos) espera 20-40 min × nº da tentativa em vez de 5-15 min (o
       risco de descoberta tem de baixar); cada ronda saltada seguida duplica a espera
       (intervalo, 2×, 4×… até 24h; coluna `scout_fail_rounds`, v20) e um scout bom repõe a zero.
-- [ ] **P13.64** Usar `lostAgents`/`sentAgents` dos relatórios.
+- [x] **P13.64** Usar `lostAgents`/`sentAgents` dos relatórios. ✅ 2026-11-15 — `_apply_agent_losses` reduz o `numAgents` da missão aos sobreviventes; `_alert_agent_losses` avisa uma vez por relatório (incluindo o de regresso, que nenhum colector lia), com os números do jogo.
 
 ### J — Quem faz o quê: Fable ou Opus
 

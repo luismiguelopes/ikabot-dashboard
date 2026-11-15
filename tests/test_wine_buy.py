@@ -22,7 +22,20 @@ def _offer(seller, city, amount, price):
             "position": "0", "type": "1", "resource": "1"}
 
 
-def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, ships=100, reserve_all=False):
+class _Session:
+    """Answers the purchase POST with the game's feedback (10 = done by default)."""
+    def __init__(self, answer):
+        self.answer = answer
+
+    def post(self, *a, **k):
+        return self.answer
+
+
+_OK = json.dumps([["provideFeedback", [{"type": 10, "text": "ok"}]]])
+
+
+def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, ships=100,
+         reserve_all=False, answer=_OK, gold_after=None):
     import queue_processor as qp
     import farm_manager as fm
     import empire_utils
@@ -35,10 +48,19 @@ def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, shi
     # call time, so injecting them into sys.modules is enough.
     market = types.ModuleType("ikabot.helpers.market")
     market.getCommercialCities = lambda s: [{"id": 1, "name": "C1", "pos": 0, "rango": 5}]
-    market.getGold = lambda s, c: (gold, 0)
+    golds = [gold]
+    def fake_gold(s, c):
+        g = golds[0]
+        if gold_after is not None:
+            golds[0] = gold_after          # later reads see the post-purchase balance
+        return (g, 0)
+    market.getGold = fake_gold
     buyres = types.ModuleType("ikabot.function.buyResources")
     buyres.getOffers = lambda s, c: list(offers)
-    buyres.buy = lambda session, city, offer, amt, ships_av, cap: calls.append((offer["precio"], amt))
+    def fake_buy(session, city, offer, amt, ships_av, cap):
+        calls.append((offer["precio"], amt))
+        session.post(params={})          # the stock buy() ends with a POST and drops its answer
+    buyres.buy = fake_buy
     monkeypatch.setitem(sys.modules, "ikabot.helpers.market", market)
     monkeypatch.setitem(sys.modules, "ikabot.function.buyResources", buyres)
 
@@ -63,7 +85,7 @@ def _run(monkeypatch, tmp_path, resources, offers, settings, gold=1_000_000, shi
     monkeypatch.setattr(tm, "_set_market_resource", lambda s, c, r: None)
     monkeypatch.setattr(tm.time, "sleep", lambda *a, **k: None)
 
-    tm.process_wine_buyer(session=object(), in_active_hours=True)
+    tm.process_wine_buyer(session=_Session(answer), in_active_hours=True)
     status = json.loads((tmp_path / "status.json").read_text())
     return calls, status
 
@@ -166,3 +188,28 @@ def test_critical_bypasses_ship_reserve(monkeypatch, tmp_path):
     assert status["critical"] is True
     assert status["bought"] == 300 * 72 - 300 * 3    # filled to target despite the reserve
     assert len(calls) == 1
+
+
+# ── P13.21: a purchase only counts when the game confirms it ─────────────────────
+
+def test_refused_purchase_is_not_counted(monkeypatch, tmp_path):
+    resources = {"A": _city(300, 0)}
+    offers = [_offer("Seller", "A", 50000, 8)]
+    refused = json.dumps([["provideFeedback", [{"type": 11, "text": "A oferta já não existe"}]]])
+    calls, status = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False}, answer=refused)
+    assert len(calls) == 1                           # it was attempted…
+    assert status["bought"] == 0 and status["spent"] == 0 and status["buys"] == []
+    assert status["failedBuys"] == 1 and "não confirmada" in status["note"]
+
+
+def test_unreadable_answer_is_settled_by_the_gold(monkeypatch, tmp_path):
+    resources = {"A": _city(300, 0)}                 # deficit 21600 @8 = 172800 gold
+    offers = [_offer("Seller", "A", 50000, 8)]
+    # gold went down by the cost → it happened
+    calls, status = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False},
+                         answer="<html>", gold=1_000_000, gold_after=1_000_000 - 172800)
+    assert status["bought"] == 21600 and status["failedBuys"] == 0
+    # gold did not move → it did not
+    calls, status = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False},
+                         answer="<html>", gold=1_000_000, gold_after=1_000_000)
+    assert status["bought"] == 0 and status["failedBuys"] == 1

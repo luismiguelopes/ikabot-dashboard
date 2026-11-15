@@ -303,6 +303,55 @@ def _write_scan_status(status, phase, progress, total, message=""):
         pass
 
 
+def _read_json(name, default):
+    try:
+        with open(os.path.join(LOGS_DIR, name)) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _carry_over_failed_cities(failed_ids, own_cities_list, resources_data, empire_data,
+                              building_names):
+    """A city whose requests failed this cycle used to vanish from own_cities / resources /
+    empire: wine, consolidation, spy origins and safehousePosition then saw one city fewer
+    until the next good cycle. Keep its previous data instead, marked as old (own_cities entry
+    gets stale/staleSince; the returned {name: staleSince} goes into statusSummary).
+    Mutates the three collections in place. Only ids still in this cycle's city list are
+    carried, so an abandoned city does not linger."""
+    if not failed_ids:
+        return {}
+    prev_cities = {str(c.get("cityId")): c for c in _read_json("own_cities.json", [])
+                   if isinstance(c, dict)}
+    prev_resources = _read_json("resources.json", {})
+    prev_empire = _read_json("empire.json", {})
+    prev_at = 0
+    try:
+        prev_at = int(os.path.getmtime(os.path.join(LOGS_DIR, "resources.json")))
+    except OSError:
+        pass
+    stale = {}
+    for cid in failed_ids:
+        prev = prev_cities.get(str(cid))
+        if not prev:
+            logger.warning("[empire] cidade %s falhou e não há dados anteriores para manter", cid)
+            continue
+        name = prev.get("name", "")
+        entry = dict(prev)
+        entry["stale"] = True
+        entry["staleSince"] = int(prev.get("staleSince") or prev_at or time.time())
+        own_cities_list.append(entry)
+        if name in prev_resources and name not in resources_data:
+            resources_data[name] = prev_resources[name]
+        if name in prev_empire and name not in empire_data:
+            empire_data[name] = prev_empire[name]
+            building_names.update(k for k in prev_empire[name] if not k.startswith("_"))
+        stale[name] = entry["staleSince"]
+        logger.warning("[empire] %s: leitura falhou neste ciclo — a manter os dados anteriores "
+                       "(de %s)", name, time.strftime('%d/%m %H:%M', time.localtime(entry["staleSince"])))
+    return stale
+
+
 def collect_city_data(session, ids, cities):
     """Per-city data collection loop. Returns (status_summary, formatted_empire, resources_data)
     and writes own_cities.json."""
@@ -324,6 +373,7 @@ def collect_city_data(session, ids, cities):
     resources_data = {}
     building_names = set()
     own_cities_list = []
+    failed_ids = []
 
     for id in random.sample(ids, len(ids)):
         time.sleep(random.randint(2, 7))
@@ -339,6 +389,7 @@ def collect_city_data(session, ids, cities):
             json_data = json.loads(raw, strict=False)[0][1]["headerData"]
         except Exception:
             logger.error("city %s failed after 3 attempts — skipping", id, exc_info=True)
+            failed_ids.append(id)
             continue
 
         if json_data["relatedCity"]["owncity"] != 1:
@@ -435,6 +486,9 @@ def collect_city_data(session, ids, cities):
         # patch safehousePosition into own_cities_list entry added just above
         own_cities_list[-1]["safehousePosition"] = safehouse_slot
 
+    stale = _carry_over_failed_cities(failed_ids, own_cities_list, resources_data,
+                                      empire_data, building_names)
+
     status_summary = {
         "ships": {
             "available": int(available_ships),
@@ -454,6 +508,9 @@ def collect_city_data(session, ids, cities):
         },
         "wine_consumption": int(total_wine_consumption),
     }
+    if stale:
+        # {city name: when its data was last really read} — the totals above do not include it
+        status_summary["staleCities"] = stale
 
     formatted_empire = {}
     for city_name, buildings in empire_data.items():

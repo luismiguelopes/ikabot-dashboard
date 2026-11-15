@@ -204,7 +204,13 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   const fetchQueue = () =>
     fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
 
-  useEffect(() => { fetchQueue() }, [])
+  // The queue was read once, on opening the tab, while the bot keeps starting and removing
+  // items: re-read it whenever the empire data refreshes and every 30s.
+  useEffect(() => { fetchQueue() }, [data?.lastUpdatedTs])
+  useEffect(() => {
+    const id = setInterval(fetchQueue, 30000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     fetch('/api/building-costs')
@@ -408,7 +414,7 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
       </div>
 
       {activeTab === 'template' && (
-        <ConstructionTemplate data={data} queue={queue} costsData={costsData} />
+        <ConstructionTemplate data={data} queue={queue} costsData={costsData} onApplied={fetchQueue} />
       )}
 
 

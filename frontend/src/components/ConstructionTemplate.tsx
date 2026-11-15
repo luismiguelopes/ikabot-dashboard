@@ -25,7 +25,8 @@ interface PreviewRow {
   status: RowStatus
 }
 
-export function ConstructionTemplate({ data, queue, costsData }: {
+export function ConstructionTemplate({ data, queue, costsData, onApplied }: {
+  onApplied?: () => void
   data: ApiData | null
   queue: BuildingQueue | null
   costsData: BuildingCostsData | null
@@ -114,6 +115,7 @@ export function ConstructionTemplate({ data, queue, costsData }: {
     }
     setApplying(false)
     setDone(true)
+    onApplied?.()          // the queue shown next to the template was left as it was
   }
 
   const toAdd = preview?.filter(r => r.status === 'add').length ?? 0

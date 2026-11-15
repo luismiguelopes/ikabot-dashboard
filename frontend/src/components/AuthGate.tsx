@@ -1,6 +1,7 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, type ReactNode } from 'react'
+import { AUTH_EXPIRED_EVENT } from '../api'
 
-type Phase = 'loading' | 'need' | 'ok'
+type Phase = 'loading' | 'offline' | 'need' | 'ok'
 
 /** "Terminar sessão" — renders only when the dashboard has auth enabled. */
 export function LogoutButton() {
@@ -34,11 +35,28 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [err, setErr] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
+  // If the status cannot be read the dashboard is unreachable — say so and keep trying. It
+  // used to let the user in, into an app where every request then failed.
+  const check = useCallback(() => {
     fetch('/api/auth-status')
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json() })
       .then(d => setPhase(!d.enabled || d.authed ? 'ok' : 'need'))
-      .catch(() => setPhase('ok'))
+      .catch(() => setPhase(p => (p === 'ok' ? 'ok' : 'offline')))
+  }, [])
+
+  useEffect(() => { check() }, [check])
+
+  useEffect(() => {
+    if (phase !== 'offline') return
+    const id = setInterval(check, 4000)
+    return () => clearInterval(id)
+  }, [phase, check])
+
+  // The session expired while the app was open (any API call answered 401) → back to login.
+  useEffect(() => {
+    const onExpired = () => { setPw(''); setErr(false); setPhase('need') }
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired)
   }, [])
 
   async function submit(e: React.FormEvent) {
@@ -57,10 +75,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (phase === 'ok') return <>{children}</>
 
-  if (phase === 'loading') {
+  if (phase === 'loading' || phase === 'offline') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-slate-50">
         <i className="fa-solid fa-spinner fa-spin text-2xl text-slate-300" />
+        {phase === 'offline' && (
+          <p className="text-sm text-slate-500">Sem ligação ao painel — a tentar de novo…</p>
+        )}
       </div>
     )
   }

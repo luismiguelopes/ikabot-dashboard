@@ -91,11 +91,27 @@ def test_apply_ship_reserve_caps_and_floors(monkeypatch, tmp_path):
     assert fm.apply_ship_reserve(3, "test", now) == 0
 
 
-def test_multiple_due_targets_sum(monkeypatch, tmp_path):
+def test_reserve_is_bounded_by_free_attack_slots(monkeypatch, tmp_path):
+    """P13.19: only as many raids as there are free slots can leave. One raid is out, so one
+    slot is free → reserve the largest single need, not the sum of everything waiting."""
     now = int(time.time())
     _setup(monkeypatch, tmp_path, [
         {"enabled": True, "state": "IDLE", "next_run_at": now - 10, "last_transporters": 3},
         {"enabled": True, "state": "IDLE", "next_run_at": now + 20 * 60, "last_transporters": 2},
         {"enabled": True, "state": "ATTACKING", "next_run_at": now, "last_transporters": 9},
     ])
-    assert fm.farm_ship_reserve(now) == 5   # 3 + 2, ATTACKING skipped
+    assert fm.farm_ship_reserve(now) == 3
+
+
+def test_queue_of_overdue_targets_does_not_reserve_the_whole_fleet(monkeypatch, tmp_path):
+    now = int(time.time())
+    waiting = [{"enabled": True, "state": "IDLE", "next_run_at": now - 3600 * i,
+                "last_transporters": 400 + i} for i in range(1, 9)]
+    _setup(monkeypatch, tmp_path, waiting)
+    assert fm.farm_ship_reserve(now) == 408 + 407          # the two largest, not all eight
+    # both slots busy → nothing more can leave; only queued waves still hold ships
+    busy = waiting + [{"enabled": True, "state": "ATTACKING", "next_run_at": now,
+                       "last_transporters": 9}] * fm._MAX_CONCURRENT_FARM
+    _setup(monkeypatch, tmp_path, busy,
+           queue=[{"missionType": "army", "transporters": 50, "dispatchAfter": now}])
+    assert fm.farm_ship_reserve(now) == 50

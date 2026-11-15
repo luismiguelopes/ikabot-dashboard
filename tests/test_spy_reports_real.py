@@ -9,6 +9,7 @@ recall report.
 """
 import os
 import sys
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -190,3 +191,37 @@ def test_old_reports_keep_their_own_age_when_read_today():
         assert r["reportedAt"] < r["readAt"]
     newest = max(reports, key=int)
     assert reports[newest]["reportedAt"] == max(stamps)
+
+
+# ── P13.64: agents lost are announced with the game's own numbers ────────────────
+
+def test_agent_losses_are_announced_once_and_not_retroactively(monkeypatch):
+    notes = []
+    stub = types.ModuleType("telegram_notifier")
+    stub.notify_spy_agents_lost = lambda city, player, lost, sent, subject="": notes.append((city, lost, sent))
+    monkeypatch.setitem(sys.modules, "telegram_notifier", stub)
+    monkeypatch.setattr(em, "_save_report_state", lambda: None)
+    reports = _reports()
+    lossy = [k for k, r in reports.items() if r["lostAgents"]]
+    assert len(lossy) == 1                                  # the "report back" one: 1 of 4
+
+    # first look ever: only sets the mark
+    monkeypatch.setattr(em, "_report_state", {"max": 0, "at": 0, "loaded": True, "lossMax": None})
+    em._alert_agent_losses(reports)
+    assert notes == [] and em._report_state["lossMax"] == max(int(k) for k in reports)
+
+    # the lossy report is newer than the mark → announced, once
+    monkeypatch.setattr(em, "_report_state",
+                        {"max": 0, "at": 0, "loaded": True, "lossMax": int(lossy[0]) - 1})
+    em._alert_agent_losses(reports)
+    em._alert_agent_losses(reports)
+    assert notes == [(reports[lossy[0]]["targetCityName"], 1, 4)]
+
+
+def test_partial_loss_shrinks_the_mission_to_the_survivors():
+    m = {"targetCityName": "Alvo", "numAgents": 4}
+    assert em._apply_agent_losses(m, {"lostAgents": 1, "sentAgents": 4}) == 1
+    assert m["numAgents"] == 3 and m["lostAgents"] == 1
+    assert em._apply_agent_losses(m, {"lostAgents": 0, "sentAgents": 3}) == 0
+    assert em._apply_agent_losses(m, {"lostAgents": None, "sentAgents": None}) == 0
+    assert m["numAgents"] == 3

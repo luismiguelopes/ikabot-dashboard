@@ -16,13 +16,6 @@ import type { CitySpyCounts, FarmTarget, LootStat, SpyMission } from './types'
 // (mirrors the farm's _SWEEP_REUSE_MAX_AGE). Fleet targets are always re-scouted regardless.
 const SAFE_SWEEP_VALID_MIN = 24 * 60
 
-const NAVAL_KEYWORDS = ['navio', 'ship', 'steam giant', 'galley', 'trireme', 'balloon', 'ram', 'mortar', 'catapult', 'flamethrower']
-
-function isNavalUnit(name: string): boolean {
-  const n = name.toLowerCase()
-  return NAVAL_KEYWORDS.some(k => n.includes(k))
-}
-
 // ── EnrichedPlayer ────────────────────────────────────────────────────────────
 
 interface EnrichedPlayer extends WorldScanPlayer {
@@ -311,15 +304,11 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (mission?.state === 'DONE' && mission.result) {
         const res = mission.result.resources
         if (res) totalResources = Object.values(res).reduce((s, v) => s + (v || 0), 0)
-        if (mission.garrisonResult && !mission.garrisonResult.error) {
-          hasTroops = false
-          hasShips = false
-          for (const [name, count] of Object.entries(mission.garrisonResult.troops || {})) {
-            if ((count as number) > 0) {
-              if (isNavalUnit(name)) hasShips = true
-              else hasTroops = true
-            }
-          }
+        // The backend says whether the garrison leg really completed and what it saw. A failed
+        // scout leaves both unknown (—) instead of reading as "no troops, no ships".
+        if (mission.garrisonOk) {
+          hasTroops = (mission.enemyTroops ?? 0) > 0
+          hasShips = (mission.enemyShips ?? 0) > 0
         }
       }
 
@@ -330,7 +319,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         else if (mission.state === 'DONE') {
           const hasResources = !!(mission.result?.resources && Object.keys(mission.result.resources).length > 0)
           if (!mission.result || !hasResources) priority = 1
-          else if (mission.garrisonResult && !mission.garrisonResult.error) {
+          else if (mission.garrisonOk) {
             priority = (totalResources || 0) >= minLootTotal ? (hasShips ? 5 : 6) : 4
           } else {
             priority = 3
@@ -708,7 +697,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                             )}
 
                             {/* Garrison */}
-                            {p.mission.garrisonResult && !p.mission.garrisonResult.error && (
+                            {p.mission.garrisonResult && !p.mission.garrisonOk && !p.mission.garrisonResult.error && (
+                              <p className="text-xs text-amber-600 italic px-1">
+                                <i className="fa-solid fa-triangle-exclamation mr-1" />{t('spy_garrison_failed')}
+                              </p>
+                            )}
+                            {p.mission.garrisonResult && p.mission.garrisonOk && (
                               <div className="bg-white rounded-lg border border-amber-200 px-4 py-3">
                                 <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
                                   <i className="fa-solid fa-shield-halved" />

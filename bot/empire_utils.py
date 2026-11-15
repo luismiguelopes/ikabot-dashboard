@@ -671,14 +671,21 @@ _CONFIG_SCHEMAS = {
     "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
                                 "processingEnabled": bool},
     "world_scan_settings.json": {"enabled": bool, "radius": int},
-    "spy_build_settings.json": {"enabled": bool, "dryRun": bool, "targetPerCity": int,
-                                "goldFloor": int, "crystalFloor": int, "maxPerPass": int,
-                                "intervalMinutes": int, "maxCountsAgeMinutes": int},
     "telegram_settings.json": {"botToken": str, "chatId": str, "discordWebhook": str,
                                "telegramMinLevel": str, "discordMinLevel": str,
                                "telegramMuted": list, "discordMuted": list,
                                "digest": str, "digestHour": int},
 }
+
+
+# Files declared in the shared registry are validated from it (wine, wine buyer and
+# consolidation used to have no validation at all).
+try:
+    import settings_registry as _settings_registry
+    for _name, _spec in _settings_registry.SPECS.items():
+        _CONFIG_SCHEMAS[_spec["file"]] = _settings_registry.schema(_name)
+except Exception:      # the registry is a plain module; never let its absence stop the bot
+    pass
 
 
 def _type_ok(value, expected):

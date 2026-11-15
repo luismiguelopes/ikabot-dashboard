@@ -39,3 +39,27 @@ export async function apiAction(
     return null
   }
 }
+
+
+// ── Expired session ───────────────────────────────────────────────────────────
+// The app has ~100 plain fetch() calls and none of them handled a 401: when the session
+// expired mid-use every page filled with failing requests (or crashed on the error body).
+// One interceptor on fetch itself covers them all: any API call answered 401 announces it,
+// and the AuthGate puts the login screen back.
+export const AUTH_EXPIRED_EVENT = 'ikabot:auth-expired'
+
+let _fetchPatched = false
+export function installAuthInterceptor() {
+  if (_fetchPatched) return
+  _fetchPatched = true
+  const original = window.fetch.bind(window)
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const res = await original(input, init)
+    if (res.status === 401) {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
+      if (url.includes('/api/') && !url.includes('/api/login') && !url.includes('/api/auth-status'))
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+    }
+    return res
+  }
+}

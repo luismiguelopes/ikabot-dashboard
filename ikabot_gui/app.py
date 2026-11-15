@@ -11,6 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import settings_registry   # shared with the bot (mounted next to this file) — P13.30
 try:
     import db_manager as _db
 except Exception:
@@ -979,9 +980,35 @@ def api_espionage_spy_counts():
     return jsonify({"counts": by_city, "lastUpdated": 0})
 
 
+def _garrison_view(mission):
+    """What the garrison leg of a mission really established — decided HERE, once, with the
+    bot's own rules, so the browser does not classify units itself (it did, with an English
+    keyword list on a Portuguese server: nearly no ship matched and the land Catapulta did).
+      garrisonOk   the garrison report completed (not failed / rejected / missing);
+      enemyShips   ships in port — the report's own "Frotas em" section when present, else by
+                   unit name; None when the garrison is not known;
+      enemyTroops  land units; None when not known.
+    A failed scout (success:false with an empty troops dict) is NOT "no troops, no ships"."""
+    g = mission.get("garrisonResult")
+    known = (isinstance(g, dict) and g.get("success", True) is not False
+             and isinstance(g.get("troops"), dict) and g.get("error") is None)
+    if not known:
+        return {"garrisonOk": False, "enemyShips": None, "enemyTroops": None}
+    troops = g["troops"]
+    total = sum(int(v or 0) for v in troops.values())
+    fleet = g.get("fleet")
+    if isinstance(fleet, dict):
+        ships = sum(int(v or 0) for v in fleet.values())
+        land = sum(int(v or 0) for k, v in troops.items() if k not in fleet)
+    else:                                  # report stored before the fleet section was kept
+        ships = _seed_garrison_fleet_count(troops)
+        land = total - ships
+    return {"garrisonOk": True, "enemyShips": ships, "enemyTroops": land}
+
+
 @app.route("/api/espionage/missions")
 def api_espionage_missions():
-    return jsonify({"missions": _spy_missions()})
+    return jsonify({"missions": [dict(m, **_garrison_view(m)) for m in _spy_missions()]})
 
 
 @app.route("/api/own-cities")
@@ -1143,15 +1170,6 @@ def api_attack_log():
 CONSOLIDATE_SETTINGS_PATH = os.path.join(LOGS_DIR, "consolidate_settings.json")
 CONSOLIDATE_STATE_PATH    = os.path.join(LOGS_DIR, "consolidate_state.json")
 
-_DEFAULT_CONSOLIDATE_SETTINGS = {
-    "enabled":       False,
-    "destCityId":    "",
-    "destCityName":  "",
-    "intervalHours": 6,
-    "minSendTotal":  1000,
-    "shipType":      "transporters",  # transporters | freighters | both
-    "ignoreCityIds": [],              # source cities never drained by consolidation
-}
 
 
 @app.route("/api/transport/queue")
@@ -1243,13 +1261,7 @@ def api_transport_queue_cancel():
 
 @app.route("/api/transport/consolidate")
 def api_consolidate_get():
-    try:
-        with open(CONSOLIDATE_SETTINGS_PATH) as f:
-            settings = json.load(f)
-        for k, v in _DEFAULT_CONSOLIDATE_SETTINGS.items():
-            settings.setdefault(k, v)
-    except (FileNotFoundError, json.JSONDecodeError):
-        settings = dict(_DEFAULT_CONSOLIDATE_SETTINGS)
+    settings = settings_registry.load("consolidate", CONSOLIDATE_SETTINGS_PATH)
     state = {"lastRun": 0, "lastSent": {}}
     try:
         with open(CONSOLIDATE_STATE_PATH) as f:
@@ -1264,19 +1276,12 @@ def api_consolidate_get():
 @app.route("/api/transport/consolidate", methods=["POST"])
 def api_consolidate_post():
     data = request.get_json(silent=True) or {}
-    settings = dict(_DEFAULT_CONSOLIDATE_SETTINGS)
-    settings["enabled"]       = bool(data.get("enabled", False))
-    settings["destCityId"]    = str(data.get("destCityId", ""))
-    settings["destCityName"]  = str(data.get("destCityName", ""))
-    settings["intervalHours"] = max(1, min(48, int(data.get("intervalHours", 6))))
-    settings["minSendTotal"]  = max(0, int(data.get("minSendTotal", 1000)))
-    ship_type = data.get("shipType", "transporters")
-    settings["shipType"] = ship_type if ship_type in ("transporters", "freighters", "both") else "transporters"
-    settings["ignoreCityIds"] = [str(c) for c in (data.get("ignoreCityIds") or [])]
-    if settings["enabled"] and not settings["destCityId"]:
+    current = settings_registry.load("consolidate", CONSOLIDATE_SETTINGS_PATH)
+    enabled = bool(data.get("enabled", current["enabled"]))
+    if enabled and not str(data.get("destCityId", current["destCityId"]) or ""):
         return jsonify({"error": "Cidade de destino obrigatória"}), 400
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(CONSOLIDATE_SETTINGS_PATH, settings, indent=2)
+    # Merge: keys the form does not send (skipResources, respectDestCap…) keep their value.
+    settings = settings_registry.update("consolidate", data, CONSOLIDATE_SETTINGS_PATH)
     return jsonify({"status": "ok", "settings": settings})
 
 
@@ -1546,6 +1551,13 @@ def api_farm_update():
     if "disperseMin" in data:    fields["disperse_min"] = max(1, min(1440, int(data["disperseMin"])))
     # Manual reset back to IDLE/now so the next cycle re-runs immediately
     if data.get("runNow"):
+        # Never while a raid is out: forcing IDLE made the farm forget troops that were still
+        # sailing — it could launch a second wave on the same target and the real return was
+        # then read against the wrong round.
+        cur = _db.farm_get(tid) or {}
+        if cur.get("state") == "ATTACKING":
+            return jsonify({"error": "Há tropas a caminho ou a regressar deste alvo — "
+                                     "o farm relança sozinho quando chegarem."}), 409
         fields["state"] = "IDLE"
         fields["next_run_at"] = 0
     try:
@@ -1749,75 +1761,34 @@ def api_loot_stats():
 
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
-_DEFAULT_WINE_SETTINGS = {"enabled": True, "thresholdHours": 12, "targetHours": 48,
-                          "donorReserveHours": 96,
-                          # P11.10: always keep N trade ships free for wine (out of farm reach)
-                          "reserveShipsFromFarm": True, "reserveShips": 5}
 
 
 @app.route("/api/transport/wine")
 def api_wine_get():
-    try:
-        with open(WINE_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_WINE_SETTINGS.items():
-            s.setdefault(k, v)
-    except (FileNotFoundError, json.JSONDecodeError):
-        s = dict(_DEFAULT_WINE_SETTINGS)
-    return jsonify(s)
+    return jsonify(settings_registry.load("wine", WINE_SETTINGS_PATH))
 
 
 @app.route("/api/transport/wine", methods=["POST"])
 def api_wine_post():
     data = request.get_json(silent=True) or {}
-    s = dict(_DEFAULT_WINE_SETTINGS)
-    s["enabled"]        = bool(data.get("enabled", False))
-    s["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
-    s["targetHours"]    = max(s["thresholdHours"], min(336, int(data.get("targetHours", 48))))
-    s["donorReserveHours"] = max(s["targetHours"], min(720, int(data.get("donorReserveHours", 96))))
-    s["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
-    s["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 5))))
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(WINE_SETTINGS_PATH, s, indent=2)
+    s = settings_registry.update("wine", data, WINE_SETTINGS_PATH)
     return jsonify({"status": "ok", "settings": s})
 
 
 # ── Wine market buyer (F10) ───────────────────────────────────────────────────
 WINE_BUY_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_buy_settings.json")
 WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
-_DEFAULT_WINE_BUY_SETTINGS = {"enabled": False, "dryRun": True, "targetHours": 72,
-                              "refillBelowHours": 48, "criticalHours": 6,
-                              "maxPricePerUnit": 15, "goldFloor": 100000,
-                              "maxSpendPerCycle": 200000, "ignoreCityIds": []}
 
 
 @app.route("/api/transport/wine-buy")
 def api_wine_buy_get():
-    try:
-        with open(WINE_BUY_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_WINE_BUY_SETTINGS.items():
-            s.setdefault(k, v)
-    except (FileNotFoundError, json.JSONDecodeError):
-        s = dict(_DEFAULT_WINE_BUY_SETTINGS)
-    return jsonify(s)
+    return jsonify(settings_registry.load("wine_buy", WINE_BUY_SETTINGS_PATH))
 
 
 @app.route("/api/transport/wine-buy", methods=["POST"])
 def api_wine_buy_post():
     data = request.get_json(silent=True) or {}
-    s = dict(_DEFAULT_WINE_BUY_SETTINGS)
-    s["enabled"]          = bool(data.get("enabled", False))
-    s["dryRun"]           = bool(data.get("dryRun", True))
-    s["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
-    s["refillBelowHours"] = max(1, min(s["targetHours"], int(data.get("refillBelowHours", 48))))
-    s["criticalHours"]    = max(1, min(s["refillBelowHours"], int(data.get("criticalHours", 6))))
-    s["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
-    s["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
-    s["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
-    s["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(WINE_BUY_SETTINGS_PATH, s, indent=2)
+    s = settings_registry.update("wine_buy", data, WINE_BUY_SETTINGS_PATH)
     return jsonify({"status": "ok", "settings": s})
 
 
@@ -1840,45 +1811,22 @@ def api_wine_buy_preview():
 # ── Autonomous spy training (F14) ─────────────────────────────────────────────
 SPY_BUILD_SETTINGS_PATH = os.path.join(LOGS_DIR, "spy_build_settings.json")
 SPY_BUILD_STATUS_PATH   = os.path.join(LOGS_DIR, "spy_build_status.json")
-_DEFAULT_SPY_BUILD_SETTINGS = {"enabled": True, "dryRun": True, "targetPerCity": 0,
-                               "goldFloor": 200000, "crystalFloor": 0, "maxPerPass": 60,
-                               "intervalMinutes": 60, "maxCountsAgeMinutes": 30}
+
+
+def _spy_build_view(s):
+    return {k: s[k] for k in settings_registry.defaults("spy_build")}
 
 
 @app.route("/api/espionage/spy-build")
 def api_spy_build_get():
-    s = dict(_DEFAULT_SPY_BUILD_SETTINGS)
-    try:
-        with open(SPY_BUILD_SETTINGS_PATH) as f:
-            saved = json.load(f)
-        s.update({k: saved[k] for k in s if k in saved})
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    return jsonify(s)
+    return jsonify(_spy_build_view(settings_registry.load("spy_build", SPY_BUILD_SETTINGS_PATH)))
 
 
 @app.route("/api/espionage/spy-build", methods=["POST"])
 def api_spy_build_post():
     data = request.get_json(silent=True) or {}
-
-    def _int(key, lo, hi):
-        try:
-            return max(lo, min(hi, int(data.get(key, _DEFAULT_SPY_BUILD_SETTINGS[key]))))
-        except (TypeError, ValueError):
-            return _DEFAULT_SPY_BUILD_SETTINGS[key]
-    s = {
-        "enabled":             bool(data.get("enabled", True)),
-        "dryRun":              bool(data.get("dryRun", True)),
-        "targetPerCity":       _int("targetPerCity", 0, 1000),
-        "goldFloor":           _int("goldFloor", 0, 10**10),
-        "crystalFloor":        _int("crystalFloor", 0, 10**8),
-        "maxPerPass":          _int("maxPerPass", 1, 1000),
-        "intervalMinutes":     _int("intervalMinutes", 15, 24 * 60),
-        "maxCountsAgeMinutes": _int("maxCountsAgeMinutes", 5, 240),
-    }
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(SPY_BUILD_SETTINGS_PATH, s, indent=2)
-    return jsonify({"status": "ok", "settings": s})
+    s = settings_registry.update("spy_build", data, SPY_BUILD_SETTINGS_PATH)
+    return jsonify({"status": "ok", "settings": _spy_build_view(s)})
 
 
 @app.route("/api/espionage/spy-build/status")

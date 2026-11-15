@@ -26,6 +26,7 @@ import random
 import time
 
 from empire_utils import LOGS_DIR, logger
+import settings_registry
 from empire_utils import atomic_write_json
 
 SPY_BUILD_SETTINGS_PATH = os.path.join(LOGS_DIR, "spy_build_settings.json")
@@ -34,33 +35,18 @@ _SPY_COUNTS_PATH        = os.path.join(LOGS_DIR, "spy_counts.json")
 _OWN_CITIES_PATH        = os.path.join(LOGS_DIR, "own_cities.json")
 _STATUS_SUMMARY_PATH    = os.path.join(LOGS_DIR, "statusSummary.json")
 
-DEFAULT_SPY_BUILD_SETTINGS = {
-    "enabled":         True,     # on, but…
-    "dryRun":          True,     # …only plans until a supervised live order validates it
-    "targetPerCity":   0,        # 0 = fill to the safehouse capacity; N = keep N per city
-    "goldFloor":       200000,   # never let gold drop below this
-    "crystalFloor":    0,        # per city, on top of building-queue reservations. 0 on purpose:
-                                 # consolidation leaves a 5000 crystal buffer in every city
-                                 # precisely so spies can be trained from it
-    "maxPerPass":      60,       # spies ordered per pass, all cities together
-    "intervalMinutes": 60,       # min gap between passes (a human doesn't train every cycle)
-    "maxCountsAgeMinutes": 30,   # never plan from a stale safehouse read
-}
+# Declared once in settings_registry (shared with the dashboard) — P13.30. On by default but
+# dry-run; goldFloor is never crossed; crystalFloor is 0 on purpose (consolidation leaves a
+# 5000 crystal buffer in every city precisely so spies can be trained from it).
+DEFAULT_SPY_BUILD_SETTINGS = settings_registry.defaults("spy_build")
 GOLD_PER_SPY    = 150
 CRYSTAL_PER_SPY = 40
 
 
 
 def load_settings():
-    s = dict(DEFAULT_SPY_BUILD_SETTINGS)
-    try:
-        with open(SPY_BUILD_SETTINGS_PATH) as f:
-            d = json.load(f)
-        if isinstance(d, dict):
-            s.update({k: d[k] for k in DEFAULT_SPY_BUILD_SETTINGS if k in d})
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    return s
+    s = settings_registry.load("spy_build", SPY_BUILD_SETTINGS_PATH)
+    return {k: s[k] for k in DEFAULT_SPY_BUILD_SETTINGS}
 
 
 def _load_json(path, default):

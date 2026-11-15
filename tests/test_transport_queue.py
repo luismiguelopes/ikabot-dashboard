@@ -463,3 +463,48 @@ def test_consolidation_respects_interval(monkeypatch, tmp_path):
         json.dump({"lastRun": int(time.time()) - 60, "lastSent": {}}, f)
     # lastRun 1 min ago < 6h interval → returns before touching the session
     tm.process_consolidation(session=None, in_active_hours=True)
+
+
+# ── P13.22 ───────────────────────────────────────────────────────────────────────
+
+def test_consolidation_with_surplus_but_no_ships_retries_soon(monkeypatch, tmp_path):
+    """The round used to be stamped as done even when nothing left for lack of ships, and
+    the next look was a whole interval (6h) later."""
+    import ikabot.helpers.naval as naval
+    real_setattr = monkeypatch.setattr
+
+    def patched(target, name, value=None, **kw):
+        if target is naval and name == "getAvailableShips":
+            value = lambda s: 0                      # every trade ship is out
+        return real_setattr(target, name, value, **kw)
+    monkeypatch.setattr = patched
+    calls = _run_consolidation(monkeypatch, tmp_path, "transporters")
+    assert calls == []
+    state = json.loads((tmp_path / "st.json").read_text())
+    next_look = state["lastRun"] + 6 * 3600 - int(tm.time.time())
+    assert abs(next_look - tm._CONSOLIDATE_RETRY_SECS) <= 5
+
+
+def test_consolidation_that_sent_waits_the_full_interval(monkeypatch, tmp_path):
+    calls = _run_consolidation(monkeypatch, tmp_path, "transporters")
+    assert calls
+    state = json.loads((tmp_path / "st.json").read_text())
+    assert abs(state["lastRun"] - int(tm.time.time())) <= 5
+
+
+def test_transport_dropped_after_three_failures_is_notified(monkeypatch):
+    import db_manager, empire_utils, sys, types
+    notes = []
+    stub = types.ModuleType("telegram_notifier")
+    stub.notify_queue_item_dropped = lambda kind, what, why: notes.append((kind, what, why))
+    monkeypatch.setitem(sys.modules, "telegram_notifier", stub)
+    item = {"id": 5, "originCityName": "Src", "destCityName": "Dest", "retries": 2, "dispatchAfter": 0}
+    removed = []
+    monkeypatch.setattr(tm, "_transport_queue_items", lambda: [item])
+    monkeypatch.setattr(tm, "_dispatch_scheduled_transport", lambda s, it: (False, "sem navios"))
+    monkeypatch.setattr(db_manager, "queue_remove", lambda q, ids: removed.extend(ids))
+    monkeypatch.setattr(db_manager, "queue_add", lambda q, it: None)
+    monkeypatch.setattr(empire_utils, "is_paused", lambda: False)
+    tm.process_transport_queue(session=None, in_active_hours=True)
+    assert removed == [5]
+    assert notes == [("transport", "Src → Dest", "falhou 3 vezes: sem navios")]

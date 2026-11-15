@@ -17,6 +17,7 @@ import random
 import time
 
 from empire_utils import LOGS_DIR, logger
+import settings_registry
 from empire_utils import atomic_write_json
 
 TRANSPORT_QUEUE            = "transport"
@@ -27,37 +28,17 @@ CONSOLIDATE_STATE_PATH     = os.path.join(LOGS_DIR, "consolidate_state.json")
 # resources.json uses english display keys, in the canonical 5-resource order
 _RESOURCES_ENG = ["Wood", "Wine", "Marble", "Crystal", "Sulfur"]
 
-_DEFAULT_CONSOLIDATE_SETTINGS = {
-    "enabled":       False,
-    "destCityId":    "",
-    "destCityName":  "",
-    "intervalHours": 6,
-    "minSendTotal":  1000,
-    "shipType":      "transporters",  # transporters | freighters | both
-    "ignoreCityIds": [],              # source cities never drained by consolidation
-    "skipResources": [],              # resource names never sent, e.g. ["Wine"]
-    "respectDestCap": True,           # never overflow the destination warehouse
-}
+# Declared once in settings_registry (shared with the dashboard) — P13.30.
+_DEFAULT_CONSOLIDATE_SETTINGS = settings_registry.defaults("consolidate")
 
 _WINE_CRITICAL_SECS = 6 * 3600   # below this runway, wine beats the farm reserve
 
 WINE_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_settings.json")
-_DEFAULT_WINE_SETTINGS = {
-    "enabled":           True,  # on by default: a wine-out costs population, so the safe
-                                # default is to balance. A saved setting still overrides this.
-    "thresholdHours":    12,   # act when a city's wine runway drops below this
-    "targetHours":       48,   # top the city up to this many hours of consumption
-    "donorReserveHours": 96,   # non-producing city lends only what exceeds this runway
-    # P11.10: hold trade ships for wine against the farm. The farm recycles transporters
-    # non-stop (same-island raids re-arm them the moment they dock), so without a floor an
-    # urgent wine transport / the balancer can hit "no free ships" repeatedly while the farm
-    # holds them all (DeathCrow 2026-11-04: ~2h runway, 3 failed wine transports). Mirror of
-    # the farm's own apply_ship_reserve, but in wine's favour. A PERMANENT floor (not gated on
-    # runway): the farm always leaves this many trade ships free, so wine/urgent logistics
-    # always has a pool; the farm still uses everything above the floor.
-    "reserveShipsFromFarm": True,   # master switch
-    "reserveShips":         5,      # trade ships ALWAYS kept free for wine (out of farm reach)
-}
+# P11.10: the wine settings include a floor of trade ships held back from the farm. The farm
+# recycles transporters non-stop (same-island raids re-arm them the moment they dock), so
+# without it an urgent wine transport can hit "no free ships" repeatedly (DeathCrow
+# 2026-11-04: ~2h runway, 3 failed wine transports).
+_DEFAULT_WINE_SETTINGS = settings_registry.defaults("wine")
 
 
 # ── Manual transport queue ────────────────────────────────────────────────────
@@ -218,6 +199,11 @@ def process_transport_queue(session, in_active_hours=True):
                 queue_remove(TRANSPORT_QUEUE, [item.get("id")])
                 logger.warning("[transport] falhou %d vezes (%s) → removido da fila",
                                retries, error)
+                try:
+                    from telegram_notifier import notify_queue_item_dropped
+                    notify_queue_item_dropped("transport", "%s → %s" % (item.get("originCityName", "?"), item.get("destCityName", "?")), "falhou %d vezes: %s" % (retries, error))
+                except Exception:
+                    pass
             else:
                 retry_mins = random.randint(10, 25)
                 queue_add(TRANSPORT_QUEUE, dict(item, retries=retries,
@@ -229,14 +215,7 @@ def process_transport_queue(session, in_active_hours=True):
 # ── Consolidation mode ────────────────────────────────────────────────────────
 
 def get_consolidate_settings():
-    try:
-        with open(CONSOLIDATE_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_CONSOLIDATE_SETTINGS.items():
-            s.setdefault(k, v)
-        return s
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(_DEFAULT_CONSOLIDATE_SETTINGS)
+    return settings_registry.load("consolidate", CONSOLIDATE_SETTINGS_PATH)
 
 
 def _load_consolidate_state():
@@ -327,6 +306,9 @@ def _spread_resource(caps, total):
             alloc[i] += add
             rem -= add
     return alloc
+
+
+_CONSOLIDATE_RETRY_SECS = 30 * 60   # retry when a round had surplus but could send nothing
 
 
 def process_consolidation(session, in_active_hours=True):
@@ -536,6 +518,13 @@ def process_consolidation(session, in_active_hours=True):
                 min(cap_ships, avail["freighters"]))
 
     state["lastRun"]  = now
+    if eligible and not sent_summary:
+        # There WAS surplus to move but nothing left (no free ships, every dispatch refused).
+        # Marking the round as done made it wait the whole interval (6h) again; look again
+        # in half an hour instead.
+        state["lastRun"] = now - interval_secs + min(interval_secs, _CONSOLIDATE_RETRY_SECS)
+        logger.info("[consolidate] havia excedente mas nada saiu (sem navios?) — nova "
+                    "tentativa em %d min", min(interval_secs, _CONSOLIDATE_RETRY_SECS) // 60)
     state["lastSent"] = sent_summary
     _save_consolidate_state(state)
     if sent_summary:
@@ -550,28 +539,11 @@ def process_consolidation(session, in_active_hours=True):
 # ── Wine balancer (F9) ────────────────────────────────────────────────────────
 
 def get_wine_settings():
-    try:
-        with open(WINE_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_WINE_SETTINGS.items():
-            s.setdefault(k, v)
-        return s
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(_DEFAULT_WINE_SETTINGS)
+    return settings_registry.load("wine", WINE_SETTINGS_PATH)
 
 
 def save_wine_settings(data):
-    settings = dict(_DEFAULT_WINE_SETTINGS)
-    settings["enabled"]        = bool(data.get("enabled", False))
-    settings["thresholdHours"] = max(1, min(168, int(data.get("thresholdHours", 12))))
-    settings["targetHours"]    = max(settings["thresholdHours"], min(336, int(data.get("targetHours", 48))))
-    settings["donorReserveHours"] = max(settings["targetHours"],
-                                        min(720, int(data.get("donorReserveHours", 96))))
-    settings["reserveShipsFromFarm"] = bool(data.get("reserveShipsFromFarm", True))
-    settings["reserveShips"] = max(0, min(100, int(data.get("reserveShips", 5))))
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    atomic_write_json(WINE_SETTINGS_PATH, settings, indent=2)
-    return settings
+    return settings_registry.update("wine", data, WINE_SETTINGS_PATH)
 
 
 def wine_ship_reserve():
@@ -644,8 +616,10 @@ def process_wine_balancer(session, in_active_hours=True):
         prod     = int(d.get("wineProductionPerHour", 0) or 0)
         stock    = int(d.get("Wine", 0) or 0)
         runs_out = d.get("wineRunsOutIn", -1)
-        if runs_out != -1 and 0 < runs_out < threshold and cons > 0:
-            # still draining, runway below threshold
+        if runs_out != -1 and 0 <= runs_out < threshold and cons > 0:
+            # still draining, runway below threshold. 0 counts: a city that is already dry
+            # while the game still reports its tavern consumption fell between this branch
+            # (0 < runs_out) and the "emptied consumer" one (consumption 0) and got no wine.
             deficit = max(0, cons * target_h - stock)
             if deficit > 0:
                 needy.append((name, runs_out, deficit))
@@ -748,46 +722,15 @@ def process_wine_balancer(session, in_active_hours=True):
 # this buyer refills the empire's total, the balancer spreads it to every city.
 WINE_BUY_SETTINGS_PATH = os.path.join(LOGS_DIR, "wine_buy_settings.json")
 WINE_BUY_STATUS_PATH   = os.path.join(LOGS_DIR, "wine_buy_status.json")
-_DEFAULT_WINE_BUY_SETTINGS = {
-    "enabled":          False,   # opt-in: this is the only feature that spends gold
-    "dryRun":           True,    # start safe: log the plan, buy nothing
-    "targetHours":      72,      # fill a city up to this many hours of wine
-    "refillBelowHours": 48,      # deadband: only start buying once a city drops below this,
-                                 # then fill to targetHours in one batch (=targetHours -> no
-                                 # deadband, tops up every cycle). Avoids constant tiny buys.
-    "criticalHours":    6,       # a city below this many hours is a wine emergency: the buyer
-                                 # then bypasses the farm ship reserve (like the balancer).
-    "maxPricePerUnit":  15,      # never buy above this gold/unit (offers are player-priced)
-    "goldFloor":        100000,  # never let gold drop below this
-    "maxSpendPerCycle": 200000,  # cap gold spent per run
-    "ignoreCityIds":    [],
-}
+_DEFAULT_WINE_BUY_SETTINGS = settings_registry.defaults("wine_buy")
 
 
 def get_wine_buy_settings():
-    settings = dict(_DEFAULT_WINE_BUY_SETTINGS)
-    try:
-        with open(WINE_BUY_SETTINGS_PATH) as f:
-            settings.update(json.load(f))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    return settings
+    return settings_registry.load("wine_buy", WINE_BUY_SETTINGS_PATH)
 
 
 def save_wine_buy_settings(data):
-    settings = dict(_DEFAULT_WINE_BUY_SETTINGS)
-    settings["enabled"]          = bool(data.get("enabled", False))
-    settings["dryRun"]           = bool(data.get("dryRun", True))
-    settings["targetHours"]      = max(1, min(336, int(data.get("targetHours", 72))))
-    settings["refillBelowHours"] = max(1, min(settings["targetHours"], int(data.get("refillBelowHours", 48))))
-    settings["criticalHours"]    = max(1, min(settings["refillBelowHours"], int(data.get("criticalHours", 6))))
-    settings["maxPricePerUnit"]  = max(1, min(10000, int(data.get("maxPricePerUnit", 15))))
-    settings["goldFloor"]        = max(0, int(data.get("goldFloor", 100000)))
-    settings["maxSpendPerCycle"] = max(0, int(data.get("maxSpendPerCycle", 200000)))
-    settings["ignoreCityIds"]    = [str(c) for c in (data.get("ignoreCityIds") or [])]
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    atomic_write_json(WINE_BUY_SETTINGS_PATH, settings, indent=2)
-    return settings
+    return settings_registry.update("wine_buy", data, WINE_BUY_SETTINGS_PATH)
 
 
 def _wine_buy_deficit(resources, own, settings):
@@ -855,6 +798,55 @@ def _set_market_resource(session, city, resource_index):
 
 
 _WINE_RESOURCE_INDEX = 1  # materials_names = [Wood, Wine, Marble, Crystal, Sulfur]
+
+
+class _RecordingSession:
+    """Pass-through session that keeps the last POST response. The stock buy() throws the
+    game's answer away, so this is the only way to see whether a purchase went through."""
+
+    def __init__(self, session):
+        self._session = session
+        self.last_post = None
+
+    def post(self, *args, **kwargs):
+        self.last_post = self._session.post(*args, **kwargs)
+        return self.last_post
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+
+def _post_feedback(resp):
+    """(type, text) of the provideFeedback entry in a game AJAX response, or (None, "")."""
+    try:
+        for entry in json.loads(resp, strict=False):
+            if isinstance(entry, list) and entry and entry[0] == "provideFeedback":
+                fbs = entry[1] if isinstance(entry[1], list) else [entry[1]]
+                for fb in fbs:
+                    if isinstance(fb, dict):
+                        return int(fb.get("type", 0) or 0), str(fb.get("text", ""))
+    except Exception:
+        pass
+    return None, ""
+
+
+def _purchase_went_through(recorder, get_gold, gold_before, cost):
+    """Did the purchase just attempted actually happen? (ok, why, gold_now)
+    The game's feedback decides when there is one (10 = done, 11 = refused, with its text).
+    With no readable feedback, look at the gold: a real purchase takes `cost` out at once."""
+    ftype, text = _post_feedback(recorder.last_post)
+    if ftype == 10:
+        return True, text, gold_before - cost
+    if ftype == 11:
+        return False, text or "recusada pelo jogo", gold_before
+    try:
+        time.sleep(random.randint(2, 5))
+        gold_now = get_gold()
+    except Exception:
+        return False, "sem confirmação do jogo (resposta ilegível e ouro por ler)", gold_before
+    if gold_before - gold_now >= cost * 0.9:
+        return True, "confirmada pelo ouro", gold_now
+    return False, "o ouro não baixou — a oferta deve ter desaparecido", gold_now
 
 
 def process_wine_buyer(session, in_active_hours=True, force_preview=False):
@@ -939,7 +931,8 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
 
     max_price = int(settings["maxPricePerUnit"])
     remaining = deficit
-    spent = bought = 0
+    spent = bought = failed = 0
+    gold_now = gold
     cheapest = None
     buys = []
     first = True
@@ -980,10 +973,20 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
                 if not first:
                     time.sleep(random.randint(8, 20))
                 first = False
+                recorder = _RecordingSession(session)
                 try:
-                    buy(session, city, offer, amt, ships, ship_cap)
+                    buy(recorder, city, offer, amt, ships, ship_cap)
                 except Exception:
                     logger.error("[wine-buy] compra recusada/erro", exc_info=True)
+                    continue
+                # buy() returns nothing: "bought", the status and the alert used to count the
+                # purchase even when the offer had gone. Only count what the game confirms.
+                ok, why, gold_now = _purchase_went_through(
+                    recorder, lambda: getGold(session, city)[0], gold_now, cost)
+                if not ok:
+                    failed += 1
+                    logger.warning("[wine-buy] compra NÃO confirmada: %d vinho @%d a %s (%s) — %s",
+                                   amt, price, offer["jugadorAComprar"], offer["ciudadDestino"], why)
                     continue
                 ships -= ships_to_use
                 logger.info("[wine-buy] comprei %d vinho @%d a %s (%s) → %s (%d ouro)",
@@ -998,10 +1001,13 @@ def process_wine_buyer(session, in_active_hours=True, force_preview=False):
     note = "plano (dry-run)" if dry else "compra executada"
     if bought == 0:
         note = "sem ofertas dentro do tecto de preço" if cheapest is None else "nada comprado"
+    if failed:
+        note += " (%d compra(s) não confirmada(s) pelo jogo)" % failed
     _write_wine_buy_status({"dryRun": dry, "deficit": deficit, "bought": bought,
                             "spent": spent, "avgPrice": avg, "cheapest": cheapest,
                             "gold": gold, "goldFloor": gold_floor, "note": note,
-                            "critical": critical, "buys": buys[:20], "topCities": detail[:8]})
+                            "critical": critical, "buys": buys[:20], "topCities": detail[:8],
+                            "failedBuys": failed})
     logger.info("[wine-buy] %s: %d vinho por %d ouro (défice %d, preço médio %s)",
                 "dry-run" if dry else "comprado", bought, spent, deficit, avg)
     try:

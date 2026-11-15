@@ -116,3 +116,84 @@ def test_scan_radius_reads_setting_with_env_fallback(monkeypatch, tmp_path):
     assert sc._scan_radius() == 10                          # junk → env default
     settings.write_text("not json")
     assert sc._scan_radius() == 10
+
+
+# ── P13.16: a running scan is laid over the previous one; failed islands are retried ──
+
+def _scan_env(tmp_path, monkeypatch, queue, prev_players, prev_islands, results):
+    """results: {island_id: (island_entry, players) | None | [first, second, ...]}"""
+    monkeypatch.setattr(sc, "LOGS_DIR", str(tmp_path))
+    monkeypatch.setattr(sc, "SCAN_CHECKPOINT_PATH", str(tmp_path / "checkpoint.json"))
+    monkeypatch.setattr(sc.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_write_scan_status", lambda *a, **k: None)
+    monkeypatch.setattr(db_manager, "save_scan_timestamp", lambda ts: None, raising=False)
+    (tmp_path / "world_scan_prev.json").write_text(json.dumps(
+        {"players": prev_players, "islands": prev_islands}))
+    cp = {"startedAt": 1, "ownCities": [{"name": "Home", "x": 1, "y": 1}],
+          "islandsQueue": queue, "totalIslands": len(queue), "radius": 5,
+          "players": [], "islands": []}
+    (tmp_path / "checkpoint.json").write_text(json.dumps(cp))
+    calls = []
+
+    def fake_one(session, island_id, x, y, own, resource_type=0):
+        calls.append(str(island_id))
+        r = results[str(island_id)]
+        if isinstance(r, list):
+            r = r.pop(0)
+        return r
+    monkeypatch.setattr(sc, "_scan_one_island", fake_one)
+    return calls
+
+
+def _isl(i):
+    return {"id": i, "x": 1, "y": 2, "name": "I%s" % i, "resource_type": 1, "players": 3}
+
+
+def _entry(i, city):
+    return ({"islandId": str(i), "islandName": "I%s" % i},
+            [{"islandId": str(i), "cityId": city, "state": "inactive"}])
+
+
+def _published(tmp_path):
+    return json.loads((tmp_path / "world_scan.json").read_text())
+
+
+def test_running_scan_keeps_previous_entries_of_islands_not_yet_read(tmp_path, monkeypatch):
+    prev_players = [{"islandId": "1", "cityId": "old1"}, {"islandId": "2", "cityId": "old2"}]
+    prev_islands = [{"islandId": "1"}, {"islandId": "2"}]
+    _scan_env(tmp_path, monkeypatch, [_isl(1), _isl(2)], prev_players, prev_islands,
+              {"1": _entry(1, "new1"), "2": _entry(2, "new2")})
+
+    assert sc.scan_next_island(None) is True
+    mid = _published(tmp_path)
+    assert mid["scanInProgress"] is True
+    assert sorted(p["cityId"] for p in mid["players"]) == ["new1", "old2"]   # nothing vanished
+
+    assert sc.scan_next_island(None) is False
+    end = _published(tmp_path)
+    assert end["scanInProgress"] is False
+    assert sorted(p["cityId"] for p in end["players"]) == ["new1", "new2"]
+
+
+def test_failed_island_is_retried_then_keeps_its_previous_entries(tmp_path, monkeypatch):
+    prev_players = [{"islandId": "1", "cityId": "old1"}, {"islandId": "9", "cityId": "gone"}]
+    calls = _scan_env(tmp_path, monkeypatch, [_isl(1), _isl(2)], prev_players,
+                      [{"islandId": "1"}, {"islandId": "9"}],
+                      {"1": [None, None], "2": _entry(2, "new2")})
+    while sc.scan_next_island(None):
+        pass
+    assert calls == ["1", "2", "1"]                       # went back to the end of the queue once
+    end = _published(tmp_path)
+    assert end["failedIslands"] == ["1"]
+    # island 1 keeps what we knew; island 9 (no longer in range) is dropped
+    assert sorted(p["cityId"] for p in end["players"]) == ["new2", "old1"]
+    assert sorted(i["islandId"] for i in end["islands"]) == ["1", "2"]
+
+
+def test_island_that_recovers_on_retry_is_not_marked_failed(tmp_path, monkeypatch):
+    _scan_env(tmp_path, monkeypatch, [_isl(1)], [{"islandId": "1", "cityId": "old1"}], [],
+              {"1": [None, _entry(1, "new1")]})
+    while sc.scan_next_island(None):
+        pass
+    end = _published(tmp_path)
+    assert end["failedIslands"] == [] and [p["cityId"] for p in end["players"]] == ["new1"]

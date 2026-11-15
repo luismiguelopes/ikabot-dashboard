@@ -101,6 +101,7 @@ def _common_patches(monkeypatch, tmp_path, missions=None):
     # No real anti-detection sleeps in tests; live-check memo must not leak between tests
     monkeypatch.setattr(fm.time, "sleep", lambda *a, **k: None)
     fm._inactive_memo.clear()
+    fm._ship_cap_cache.clear()
     # capture queue_add into a list
     added = []
     monkeypatch.setattr(db_manager, "queue_add", lambda q, item: added.append((q, item)) or "id")
@@ -2389,3 +2390,80 @@ def test_scheduler_and_body_agree_on_a_drained_safe_target(monkeypatch, tmp_path
     fm.process_farm_targets(session=object(), in_active_hours=True)
     assert db_manager.farm_get("100")["state"] == "SPYING"
     assert [q for q, _ in added] == ["spy_dispatch"]
+
+
+# ── P13.26: requests the farm repeated for nothing ───────────────────────────────
+
+def test_ship_capacity_is_asked_once_not_every_pass(monkeypatch):
+    import ikabot.helpers.pedirInfo as pedir
+    asked = []
+    monkeypatch.setattr(pedir, "getShipCapacity", lambda s: (asked.append(1) or 5000, 25000),
+                        raising=False)
+    fm._ship_cap_cache.clear()
+    assert [fm._ship_capacity(None) for _ in range(5)] == [5000] * 5
+    assert len(asked) == 1
+    # a failed read keeps the last known value instead of falling back to the 500 default
+    fm._ship_cap_cache["at"] = 0
+    monkeypatch.setattr(pedir, "getShipCapacity", lambda s: 1 / 0, raising=False)
+    assert fm._ship_capacity(None) == 5000
+
+
+def test_failed_live_inactivity_check_is_remembered(monkeypatch):
+    fm._inactive_memo.clear()
+    monkeypatch.setattr(fm.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(fm, "_scan_says_inactive", lambda tid: None)
+    calls = []
+
+    class _S:
+        def get(self, url):
+            calls.append(url)
+            raise RuntimeError("island view down")
+    t = {"target_city_id": "100", "island_id": "7", "target_city_name": "Alvo"}
+    assert fm._confirm_inactive(_S(), t) is None
+    assert fm._confirm_inactive(_S(), t) is None
+    assert len(calls) == 1                      # the second call did not repeat the request
+
+
+def test_early_respy_without_spies_does_not_keep_the_farm_due(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 8})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now + 120,
+                                   "last_attack_at": now - 3600, "is_fleet_target": 1,
+                                   "swept_at": now, "last_spy_at": now - 3600})
+    _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    monkeypatch.setattr(fm, "_raid_in_flight", lambda t: True)
+    monkeypatch.setattr(fm, "_pick_spy_origin", lambda *a, **k: None)      # nobody has a spy
+    import espionage_manager as em
+    monkeypatch.setattr(em, "reexecute_stationed_spy", lambda *a, **k: False)
+    assert fm.has_due_farm() is True
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["respy_launched_at"] == -1
+    assert fm.has_due_farm() is False           # used to stay True for the whole lead window
+
+
+# ── P13.29: total_loot is what came home, not what was scouted ───────────────────
+
+def test_total_loot_comes_from_the_loot_log(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Castle-V", "targetPlayer": "Dono"})
+    db_manager.farm_add({"targetCityId": "200", "targetCityName": "Castle-VII", "targetPlayer": "Dono"})
+    db_manager.farm_update("100", {"total_loot": 8_300_000})          # the old fictitious sum
+    base = {"toCity": "Home"}
+    # by id (new rows) — the name on the row is irrelevant
+    db_manager.log_loot(dict(base, ts=now - 30, returnKey="a", fromCity="Renamed", fromCityId="100",
+                             fromPlayer="Dono", resources=[100000, 7000, 0, 0, 0]))
+    # legacy row without id — exact name + player
+    db_manager.log_loot(dict(base, ts=now - 20, returnKey="b", fromCity="Castle-V", fromPlayer="Dono",
+                             resources=[0, 0, 50000, 0, 0]))
+    # a sibling whose name merely CONTAINS the other must not be counted for it
+    db_manager.log_loot(dict(base, ts=now - 10, returnKey="c", fromCity="Castle-VII", fromPlayer="Dono",
+                             resources=[0, 0, 0, 0, 900]))
+    v, vii = db_manager.farm_get("100"), db_manager.farm_get("200")
+    assert (v["total_loot"], v["loot_returns"]) == (157000, 2)
+    assert (vii["total_loot"], vii["loot_returns"]) == (900, 1)
+    assert {t["target_city_id"]: t["total_loot"] for t in db_manager.farm_list()} == \
+        {"100": 157000, "200": 900}

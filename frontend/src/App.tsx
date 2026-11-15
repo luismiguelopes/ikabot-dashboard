@@ -6,6 +6,7 @@ import type { ApiData, AlertThresholds, CityResources } from './types'
 import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
 import { ToastHost } from './components/ui/Toast'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { setApiLang } from './api'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
@@ -185,10 +186,18 @@ export default function App() {
       .then(r => r.json())
       .then((d: ApiData & { error?: string }) => {
         if (d.error) setError(d.error)
-        else setData(d)
+        else { setData(d); setError(null) }   // a later success clears an earlier failure
       })
       .catch(e => setError(e.message))
   }, [])
+
+  // While there is nothing to show yet, keep trying: a passing failure (dashboard restarting)
+  // used to leave the error screen up until the page was reloaded by hand.
+  useEffect(() => {
+    if (!error || data) return
+    const id = setInterval(fetchData, 5000)
+    return () => clearInterval(id)
+  }, [error, data, fetchData])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -248,7 +257,8 @@ export default function App() {
       .catch(() => {})
   }, [data])
 
-  if (error) return (
+  // Only when there is no data at all: a refresh that fails keeps showing what we have.
+  if (error && !data) return (
     <LangContext.Provider value={lang}>
       <ErrorScreen message={error} />
     </LangContext.Provider>
@@ -299,18 +309,20 @@ export default function App() {
             {incomingAttacks.count > 0 && <IncomingAttackBanner count={incomingAttacks.count} eta={incomingAttacks.eta} />}
             {paused && <PausedBanner />}
             <SubsystemHealthBanner />
-            {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
-            {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
-            {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
-            {page === 'movements'    && <MovementsPage />}
-            {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
-            {page === 'history'      && <HistoryPage data={data} />}
-            {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
-            {page === 'construction' && <BuildingQueueTab data={data} />}
-            {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
-            {page === 'combate'      && <CombatPage />}
-            {page === 'logs'         && <LogsPage />}
-            {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
+            <ErrorBoundary key={page} label={page}>
+              {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
+              {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
+              {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
+              {page === 'movements'    && <MovementsPage />}
+              {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
+              {page === 'history'      && <HistoryPage data={data} />}
+              {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
+              {page === 'construction' && <BuildingQueueTab data={data} />}
+              {page === 'mundo'        && <MundoPage onSelectIsland={handleSelectIsland} />}
+              {page === 'combate'      && <CombatPage />}
+              {page === 'logs'         && <LogsPage />}
+              {page === 'settings'     && <SettingsPage thresholds={thresholds} onSaveThresholds={saveThresholds} toggleLang={toggleLang} defaultTab={defaultTab} onSaveDefaultTab={saveDefaultTab} notifEnabled={notifEnabled} onToggleNotif={setNotifEnabled} />}
+            </ErrorBoundary>
           </main>
         </div>
       </div>

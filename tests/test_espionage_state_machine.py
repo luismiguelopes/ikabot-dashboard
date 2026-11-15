@@ -987,3 +987,40 @@ def test_real_tab_paginator_is_recognised():
     html = open(path, encoding="utf-8").read()
     assert em._has_next_reports_page(html, 0) is True
     assert em._has_next_reports_page(html, 10) is False
+
+
+# ── P13.17: a bad item cannot wedge the dispatch queue ───────────────────────────
+
+def test_malformed_dispatch_item_is_removed_and_the_rest_still_runs(monkeypatch):
+    import db_manager
+    _patch(monkeypatch, [])
+    good = {"id": 2, "originCityId": "1", "targetCityId": "100", "islandId": "",
+            "targetPlayerName": "Dono", "targetCityName": "Alvo", "islandX": 1, "islandY": 2,
+            "numAgents": 1}
+    bad = {"id": 1, "targetCityId": "200", "targetCityName": "Sem origem"}   # no originCityId
+    queue = [bad, good]
+    removed, sent = [], []
+    monkeypatch.setattr(em, "_dispatch_queue_items", lambda: list(queue))
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: {})
+    monkeypatch.setattr(em, "_load_spy_counts", lambda: {"byCityId": {"1": {"inDefense": 5}}})
+    monkeypatch.setattr(db_manager, "queue_remove", lambda q, ids: removed.extend(ids))
+    monkeypatch.setattr(em, "_dispatch_spy",
+                        lambda session, **kw: (sent.append(kw["target_city_id"]) or True, "ok"))
+
+    em.process_dispatch_queue(session=None)
+
+    assert removed == [1, 2]            # each one removed as it was handled, bad one included
+    assert sent == ["100"]              # the item behind the bad one was still dispatched
+    assert not hasattr(em, "force_warehouse_mission")
+
+
+def test_add_column_only_tolerates_a_duplicate():
+    import sqlite3
+    import pytest
+    import db_manager
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (a INTEGER)")
+    db_manager._add_column(conn, "ALTER TABLE t ADD COLUMN b INTEGER")
+    db_manager._add_column(conn, "ALTER TABLE t ADD COLUMN b INTEGER")      # already there: fine
+    with pytest.raises(sqlite3.OperationalError):
+        db_manager._add_column(conn, "ALTER TABLE missing ADD COLUMN b INTEGER")
