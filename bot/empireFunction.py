@@ -14,7 +14,7 @@ if _here not in sys.path:
 
 from empire_utils import (
     LOGS_DIR, LAST_ALIVE_JSON_PATH, UPDATE_INTERVAL,
-    SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END, SCAN_NIGHT_INTERVAL,
+    SCAN_NIGHT_INTERVAL,
     FORCE_EMPIRE_FLAG, FORCE_MOVEMENTS_FLAG, WINE_CRITICAL_NOTIFY_SECS, lm, logger,
     health_guard, throttle_session, record_success, record_failure,
     validate_configs, migrate_legacy_configs, record_startup_downtime,
@@ -25,6 +25,7 @@ from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_start_scan, collect_shallow_scan
 from queue_processor import (
     has_building_queue, run_building_pass, building_pass_due, smart_sleep,
+    _in_active_hours, _get_active_hours,
 )
 
 from ikabot.helpers.pedirInfo import getIdsOfCities
@@ -118,9 +119,8 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     pass
                 ids = None
 
-            in_scan_hours = (
-                SCAN_ACTIVE_HOURS_START == 0 and SCAN_ACTIVE_HOURS_END == 24
-            ) or (SCAN_ACTIVE_HOURS_START <= time.localtime().tm_hour < SCAN_ACTIVE_HOURS_END)
+            # One active window for everything (dashboard setting, else env) — P13.32.
+            in_scan_hours = _in_active_hours()
 
             if in_scan_hours:
                 effective_interval = UPDATE_INTERVAL + next_full_jitter
@@ -158,7 +158,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             if not in_scan_hours:
                 _night_mins = round(effective_interval / 60)
                 logger.info(lm("scan_outside_hours",
-                               start=SCAN_ACTIVE_HOURS_START, end=SCAN_ACTIVE_HOURS_END,
+                               start=_get_active_hours()[0], end=_get_active_hours()[1],
                                mins=_night_mins))
 
             logger.debug(lm("cycle_start", ts=time.strftime('%H:%M:%S')))

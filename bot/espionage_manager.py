@@ -86,12 +86,11 @@ def _is_farm_target(city_id):
         return False
 
 
-PLAYER_MARKS_JSON_PATH = os.path.join(LOGS_DIR, "player_marks.json")
 WORLD_SCAN_JSON_PATH   = os.path.join(LOGS_DIR, "world_scan.json")
 
 
 def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
-    """Mark a city as 'ignorar' in player_marks.json (and db if available).
+    """Mark a city as 'ignorar' (database).
     Looks up playerId from world_scan.json using city_id."""
     try:
         player_id = None
@@ -121,25 +120,10 @@ def _auto_mark_ignored(city_id, player_name, island_x, island_y, note):
                         "permanente" if res["permanent"] else f"reavalia em {expiry_days}d")
             return
         except Exception:
-            pass
-        # JSON fallback (db unavailable): keep a running strike count too.
-        marks = {}
-        if os.path.exists(PLAYER_MARKS_JSON_PATH):
-            with open(PLAYER_MARKS_JSON_PATH) as f:
-                marks = json.load(f)
-        existing = marks.get(mark_key, {})
-        count = int(existing.get("ignoreCount", 0)) + 1
-        permanent = count >= max(1, permanent_after)
-        marks[mark_key] = {
-            "status": "ignorar", "note": note,
-            "updatedAt": now, "actions": existing.get("actions", []),
-            "ignoreCount": count,
-            "expiresAt": None if permanent else now + max(1, expiry_days) * 86400,
-        }
-        os.makedirs(LOGS_DIR, exist_ok=True)
-        atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
-        logger.info("[espionage] auto-ignorar %s (%s) — %s [strike %d/%d]",
-                    player_name, city_id, note, count, permanent_after)
+            # The database is the only store for marks (the JSON fallback wrote to a file the
+            # bot never read back, so the two drifted apart).
+            logger.error("[espionage] auto-ignorar %s (%s) não ficou gravado", player_name,
+                         city_id, exc_info=True)
     except Exception:
         logger.warning("[espionage] _auto_mark_ignored falhou", exc_info=True)
 

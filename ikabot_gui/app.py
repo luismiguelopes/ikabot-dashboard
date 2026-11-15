@@ -24,18 +24,15 @@ EMPIRE_JSON_PATH        = os.path.join(LOGS_DIR, "empire.json")
 STATUS_SUMMARY_JSON_PATH = os.path.join(LOGS_DIR, "statusSummary.json")
 RESOURCES_JSON_PATH     = os.path.join(LOGS_DIR, "resources.json")
 MOVEMENTS_JSON_PATH     = os.path.join(LOGS_DIR, "movements.json")
-HISTORY_JSONL_PATH      = os.path.join(LOGS_DIR, "history.jsonl")
 BUILDING_COSTS_JSON_PATH = os.path.join(LOGS_DIR, "building_costs.json")
 FORCE_COSTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_costs_update")
 WORLD_SCAN_JSON_PATH    = os.path.join(LOGS_DIR, "world_scan.json")
 WORLD_SCAN_PREV_PATH    = os.path.join(LOGS_DIR, "world_scan_prev.json")
 WORLD_SCAN_STATUS_PATH  = os.path.join(LOGS_DIR, "world_scan_status.json")
-PLAYER_MARKS_JSON_PATH  = os.path.join(LOGS_DIR, "player_marks.json")
 FORCE_WORLD_SCAN_FLAG       = os.path.join(LOGS_DIR, ".force_world_scan")
 FORCE_MOVEMENTS_FLAG_PATH   = os.path.join(LOGS_DIR, ".force_movements_update")
 FORCE_EMPIRE_FLAG_PATH      = os.path.join(LOGS_DIR, ".force_empire_update")
 FORCE_QUEUE_FLAG_PATH       = os.path.join(LOGS_DIR, ".force_queue_check")
-BUILDING_QUEUE_JSON_PATH    = os.path.join(LOGS_DIR, "building_queue.json")
 QUEUE_SENTINEL_PATH         = os.path.join(LOGS_DIR, ".queue_updated")
 TELEGRAM_SETTINGS_PATH      = os.path.join(LOGS_DIR, "telegram_settings.json")
 DB_PATH                     = os.path.join(LOGS_DIR, "ikabot.db")
@@ -144,24 +141,24 @@ def load_all_data():
 
     # Patch empire_data with inProgress so queue constructions are visible immediately
     now_ts = time.time()
-    if os.path.exists(BUILDING_QUEUE_JSON_PATH):
-        try:
-            with open(BUILDING_QUEUE_JSON_PATH) as f:
-                queue_data = json.load(f)
-            for city_name, ip in queue_data.get("inProgress", {}).items():
-                eta = ip.get("eta", 0)
-                building = ip.get("building", "")
-                from_level = ip.get("fromLevel", 0)
-                if not building or eta <= now_ts or city_name not in empire_data:
-                    continue
-                city_entry = empire_data[city_name]
-                current = str(city_entry.get(building, ""))
-                if not current.endswith("+"):
-                    city_entry[building] = "{}+".format(from_level)
-                if not city_entry.get("_constructionEnds"):
-                    city_entry["_constructionEnds"] = eta
-        except Exception:
-            pass
+    # From the live queue (database). This used to read building_queue.json — a file last
+    # written in May — so the patch had been doing nothing for months.
+    try:
+        queue_data = _load_building_queue()
+        for city_name, ip in queue_data.get("inProgress", {}).items():
+            eta = ip.get("eta", 0)
+            building = ip.get("building", "")
+            from_level = ip.get("fromLevel", 0)
+            if not building or eta <= now_ts or city_name not in empire_data:
+                continue
+            city_entry = empire_data[city_name]
+            current = str(city_entry.get(building, ""))
+            if not current.endswith("+"):
+                city_entry[building] = "{}+".format(from_level)
+            if not city_entry.get("_constructionEnds"):
+                city_entry["_constructionEnds"] = eta
+    except Exception:
+        pass
 
     # Adjust wineRunsOutIn using exact written_at (not fragile mtime)
     elapsed = int(now_ts - written_at)
@@ -410,7 +407,7 @@ def api_history():
         except Exception:
             return jsonify([])
 
-    # Empire-wide: try SQLite first, fall back to JSONL
+    # Empire-wide (database only)
     if os.path.exists(DB_PATH):
         try:
             with _db_connect() as conn:
@@ -434,20 +431,7 @@ def api_history():
         except Exception:
             pass
 
-    # JSONL fallback
-    if not os.path.exists(HISTORY_JSONL_PATH):
-        return jsonify([])
-    with open(HISTORY_JSONL_PATH) as f:
-        lines = f.readlines()
-    entries = []
-    for line in lines[-limit:]:
-        line = line.strip()
-        if line:
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-    return jsonify(entries)
+    return jsonify([])
 
 
 @app.route("/api/history/cities")
@@ -524,20 +508,12 @@ def api_world_scan():
         return jsonify({"error": "world_scan.json não encontrado. Aguarda o primeiro scan semanal ou força um."}), 404
     with open(WORLD_SCAN_JSON_PATH) as f:
         scan = json.load(f)
-    # Merge marks from DB and JSON — JSON wins on conflict (bot writes there)
+    # Marks live in the database only (the legacy player_marks.json was merged into it and
+    # retired — see db_manager._migrate_marks).
     marks = {}
     if _db:
         try:
             marks = _db.get_all_marks()
-        except Exception:
-            pass
-    if os.path.exists(PLAYER_MARKS_JSON_PATH):
-        try:
-            with open(PLAYER_MARKS_JSON_PATH) as f:
-                json_marks = json.load(f)
-            for k, v in json_marks.items():
-                if k not in marks or v.get("updatedAt", 0) > marks[k].get("updatedAt", 0):
-                    marks[k] = v
         except Exception:
             pass
     # Build set of player IDs that were already inactive in the previous scan
@@ -622,37 +598,9 @@ def api_world_scan_mark():
             _db.save_mark(mark_key, player_id, island_x, island_y, status, note,
                           expires_at=None, ignore_count=0)
             return jsonify({"ok": True})
-        except Exception:
-            pass
-    # JSON fallback
-    marks = {}
-    if os.path.exists(PLAYER_MARKS_JSON_PATH):
-        with open(PLAYER_MARKS_JSON_PATH) as f:
-            marks = json.load(f)
-    existing = marks.get(mark_key, {})
-    now = int(time.time())
-    entry = {
-        "status": status, "note": note,
-        "updatedAt": now, "actions": existing.get("actions", []),
-    }
-    if status == "ignorar":
-        esp = dict(_DEFAULT_ESPIONAGE_SETTINGS)
-        try:
-            with open(ESPIONAGE_SETTINGS_PATH) as f:
-                esp.update(json.load(f))
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        count = int(existing.get("ignoreCount", 0)) + 1
-        permanent = count >= max(1, int(esp.get("ignorePermanentAfter", 4)))
-        entry["ignoreCount"] = count
-        entry["expiresAt"] = None if permanent else now + max(1, int(esp.get("ignoreExpiryDays", 60))) * 86400
-    else:
-        entry["ignoreCount"] = 0
-        entry["expiresAt"] = None
-    marks[mark_key] = entry
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
-    return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": "A marca não ficou gravada: %s" % e}), 500
+    return jsonify({"error": "Base de dados indisponível"}), 503
 
 
 @app.route("/api/world-scan/action", methods=["POST"])
@@ -669,21 +617,9 @@ def api_world_scan_action():
         try:
             _db.append_action(mark_key, player_id, island_x, island_y, text)
             return jsonify({"ok": True})
-        except Exception:
-            pass
-    # JSON fallback
-    marks = {}
-    if os.path.exists(PLAYER_MARKS_JSON_PATH):
-        with open(PLAYER_MARKS_JSON_PATH) as f:
-            marks = json.load(f)
-    entry = marks.setdefault(mark_key, {
-        "status": "novo", "note": "", "updatedAt": int(time.time()), "actions": []
-    })
-    entry.setdefault("actions", []).append({"ts": int(time.time()), "text": text})
-    entry["updatedAt"] = int(time.time())
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(PLAYER_MARKS_JSON_PATH, marks, indent=2)
-    return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"error": "A nota não ficou gravada: %s" % e}), 500
+    return jsonify({"error": "Base de dados indisponível"}), 503
 
 
 def _load_building_queue():
@@ -1533,29 +1469,12 @@ def _unignore_farm_target(city_id):
                 db_marks = _db.get_all_marks()
             except Exception:
                 pass
-        json_marks = {}
-        if os.path.exists(PLAYER_MARKS_JSON_PATH):
-            with open(PLAYER_MARKS_JSON_PATH) as f:
-                json_marks = json.load(f)
-
-        json_changed = False
         for k in keys:
-            in_db   = db_marks.get(k, {}).get("status") == "ignorar"
-            in_json = json_marks.get(k, {}).get("status") == "ignorar"
-            if not (in_db or in_json):
-                continue
-            if _db:
+            if db_marks.get(k, {}).get("status") == "ignorar" and _db:
                 try:
                     _db.save_mark(k, pid, ix, iy, "novo", "")
                 except Exception:
                     pass
-            if in_json:
-                json_marks[k]["status"] = "novo"
-                json_marks[k]["note"] = ""
-                json_marks[k]["updatedAt"] = int(time.time())
-                json_changed = True
-        if json_changed:
-            _atomic_write_json(PLAYER_MARKS_JSON_PATH, json_marks, indent=2)
     except Exception:
         pass
 
@@ -2171,8 +2090,23 @@ def api_logs():
     if not os.path.exists(BOT_LOG_PATH):
         return jsonify({"lines": [], "note": "bot.log ainda não existe — aguarda o bot arrancar"})
     try:
-        with open(BOT_LOG_PATH, encoding="utf-8", errors="replace") as f:
-            content = f.read().splitlines()
+        # Read only the tail: the page polls every 5s and the whole file (up to ~1 MB) was
+        # read and split each time. DEBUG lines are filtered out below, so take a generous
+        # window (they outnumber the rest about 10 to 1) and widen it if that is not enough.
+        size = os.path.getsize(BOT_LOG_PATH)
+        want_debug = request.args.get("debug") in ("1", "true")
+        window = n * (300 if want_debug else 3000)
+        while True:
+            with open(BOT_LOG_PATH, "rb") as f:
+                f.seek(max(0, size - window))
+                raw = f.read()
+            content = raw.decode("utf-8", errors="replace").splitlines()
+            if size > window:
+                content = content[1:]          # the first line is cut mid-way
+            kept = sum(1 for ln in content if want_debug or " DEBUG " not in ln)
+            if kept >= n or window >= size:
+                break
+            window *= 4
         # bot.log records DEBUG (routine chatter); the dashboard shows INFO+ unless
         # explicitly asked for the full stream with ?debug=1.
         if request.args.get("debug") not in ("1", "true"):
@@ -2303,10 +2237,10 @@ def _offline_watch_loop():
 
 if __name__ == "__main__":
     # debug=False: the Werkzeug debugger is an RCE if the port is ever exposed.
-    # use_reloader keeps the convenient auto-reload on file changes.
-    # WERKZEUG_RUN_MAIN guard: the reloader parent process also imports this module —
-    # only the worker child may start the watcher thread (avoids double notifications).
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        import threading
-        threading.Thread(target=_offline_watch_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=True, threaded=True)
+    # No auto-reload: it restarted the dashboard on a half-written edit, or onto code whose
+    # new module was not mounted yet (down for a minute on 2026-11-15), and it was never
+    # reliable through the bind mount anyway. A change to this file needs a container
+    # restart — which is already the deploy rule.
+    import threading
+    threading.Thread(target=_offline_watch_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)

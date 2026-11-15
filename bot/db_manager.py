@@ -1061,41 +1061,70 @@ def get_history_cities():
 # ── Player marks ──────────────────────────────────────────────────────────────
 
 def _migrate_marks():
+    """One-time merge of the legacy player_marks.json into the database, then retire the file.
+
+    The file was not dead: the first migration only ran while the marks table was empty, and
+    marks written to the file afterwards (the old fallback path, until June) never reached the
+    database — 126 ignored cities lived only there, and the dashboard still merged the file
+    over the database on every read, so it and the bot disagreed about what was ignored.
+    Merge rule = what the dashboard was already showing: a mark only in the file is added; a
+    mark in both takes the newer of the two. Then the file is renamed `.migrated` and nothing
+    reads it again."""
     marks_path = os.path.join(_LOGS_DIR, "player_marks.json")
     if not os.path.exists(marks_path):
-        return
-    conn = _connect()
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM marks").fetchone()[0]
-    finally:
-        conn.close()
-    if count > 0:
         return
     try:
         with open(marks_path) as f:
             marks = json.load(f)
-        conn = _connect()
-        try:
-            with conn:
-                for mk, entry in marks.items():
+    except (OSError, ValueError):
+        return
+    if not isinstance(marks, dict):
+        return
+    added = updated = 0
+    conn = _connect()
+    try:
+        with conn:
+            existing = {r["mark_key"]: int(r["updated_at"] or 0)
+                        for r in conn.execute("SELECT mark_key, updated_at FROM marks")}
+            for mk, entry in marks.items():
+                if not isinstance(entry, dict):
+                    continue
+                status = entry.get("status", "novo")
+                stamp = int(entry.get("updatedAt") or 0)
+                strikes = int(entry.get("ignoreCount") or (1 if status == "ignorar" else 0))
+                if mk not in existing:
                     parts = mk.rsplit("_", 2)
-                    pid = parts[0] if len(parts) >= 3 else mk
-                    ix = parts[1] if len(parts) >= 3 else ""
-                    iy = parts[2] if len(parts) >= 3 else ""
+                    pid, ix, iy = (parts if len(parts) == 3 else (mk, "", ""))
                     conn.execute("""
-                        INSERT OR IGNORE INTO marks
-                        (mark_key, player_id, island_x, island_y, status, note, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (mk, pid, ix, iy,
-                          entry.get("status", "novo"),
-                          entry.get("note", ""),
-                          entry.get("updatedAt", int(time.time()))))
+                        INSERT INTO marks (mark_key, player_id, island_x, island_y, status, note,
+                                           updated_at, expires_at, ignore_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (mk, pid, ix, iy, status, entry.get("note", ""),
+                          stamp or int(time.time()), entry.get("expiresAt"), strikes))
                     for action in entry.get("actions", []):
-                        conn.execute("""
-                            INSERT INTO mark_actions (mark_key, ts, text) VALUES (?, ?, ?)
-                        """, (mk, action.get("ts", 0), action.get("text", "")))
-        finally:
-            conn.close()
+                        conn.execute("INSERT INTO mark_actions (mark_key, ts, text) VALUES (?, ?, ?)",
+                                     (mk, action.get("ts", 0), action.get("text", "")))
+                    added += 1
+                elif stamp > existing[mk]:
+                    conn.execute("""
+                        UPDATE marks SET status = ?, note = ?, updated_at = ?, expires_at = ?,
+                                         ignore_count = MAX(COALESCE(ignore_count, 0), ?)
+                        WHERE mark_key = ?
+                    """, (status, entry.get("note", ""), stamp, entry.get("expiresAt"), strikes, mk))
+                    updated += 1
+    except sqlite3.Error:
+        return                      # leave the file in place; try again on the next start
+    finally:
+        conn.close()
+    try:
+        os.replace(marks_path, marks_path + ".migrated")
+    except OSError:
+        pass
+    try:
+        import logging
+        logging.getLogger("ikabot").info(
+            "[db] player_marks.json fundido na base de dados (%d marcas novas, %d actualizadas) "
+            "e retirado", added, updated)
     except Exception:
         pass
 
@@ -1374,22 +1403,16 @@ def save_scan_timestamp(ts):
 # ── Building queue ────────────────────────────────────────────────────────────
 
 def _migrate_queue():
+    """Retire the legacy building_queue.json (the queue has lived in the database since May).
+    It is no longer imported: "the tables are empty" is not a sign that the migration never
+    ran — an emptied queue looks the same — and importing then would bring a months-old
+    queue back to life."""
     queue_path = os.path.join(_LOGS_DIR, "building_queue.json")
     if not os.path.exists(queue_path):
         return
-    conn = _connect()
     try:
-        item_count = conn.execute("SELECT COUNT(*) FROM queue_items").fetchone()[0]
-        state_count = conn.execute("SELECT COUNT(*) FROM queue_state").fetchone()[0]
-    finally:
-        conn.close()
-    if item_count > 0 or state_count > 0:
-        return
-    try:
-        with open(queue_path) as f:
-            data = json.load(f)
-        _write_queue_to_db(data)
-    except Exception:
+        os.replace(queue_path, queue_path + ".migrated")
+    except OSError:
         pass
 
 

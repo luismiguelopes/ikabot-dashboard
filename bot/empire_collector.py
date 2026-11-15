@@ -14,25 +14,13 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-from empire_utils import (LOGS_DIR, MAX_HISTORY_LINES, EMPIRE_SCAN_STATUS_PATH, lm, logger,
+from empire_utils import (LOGS_DIR, EMPIRE_SCAN_STATUS_PATH, lm, logger,
                           with_retry, save_capture)
 from empire_utils import atomic_write_json
 
 from ikabot.config import materials_names_english, materials_names_tec
 from ikabot.helpers.getJson import getCity
 from ikabot.config import actionRequest
-
-
-def _trim_history(path):
-    """Keep only the last MAX_HISTORY_LINES lines in history.jsonl."""
-    try:
-        with open(path, "r") as f:
-            lines = f.readlines()
-        if len(lines) > MAX_HISTORY_LINES:
-            with open(path, "w") as f:
-                f.writelines(lines[-MAX_HISTORY_LINES:])
-    except Exception:
-        pass
 
 
 ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
@@ -683,12 +671,9 @@ def finalize_empire_cycle(session, ids, status_summary, formatted_empire, resour
         save_empire_snapshot(ts, formatted_empire, resources_data, status_summary)
         insert_history(ts, status_summary, resources_data)
     except Exception:
-        logger.error("[db] insert_history error", exc_info=True)
-        history_path = os.path.join(LOGS_DIR, "history.jsonl")
-        history_entry = {"timestamp": ts, **status_summary}
-        with open(history_path, "a") as f:
-            f.write(json.dumps(history_entry) + "\n")
-        _trim_history(history_path)
+        # History lives in the database only (the history.jsonl fallback was last written
+        # in May and nothing read it back once the database worked).
+        logger.error("[db] snapshot/histórico do império não ficou gravado", exc_info=True)
 
     _write_scan_status("done", "cities", 0, 0, "")
 

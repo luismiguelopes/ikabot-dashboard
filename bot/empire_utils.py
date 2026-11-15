@@ -112,8 +112,15 @@ def _parse_active_hours(value):
     return 0, 24
 
 
-ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(os.getenv("QUEUE_ACTIVE_HOURS"))
-SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END = _parse_active_hours(os.getenv("SCAN_ACTIVE_HOURS", ""))
+# ONE active window for everything the bot does in the game (P13.32). There used to be two:
+# QUEUE_ACTIVE_HOURS (plus the "active hours" set in the dashboard) decided when the bot slept
+# and when it built, while SCAN_ACTIVE_HOURS alone decided when it spied, raided, farmed and
+# shipped. With SCAN_ACTIVE_HOURS left empty — as it was — those ran around the clock while the
+# dashboard said 7–23. The window is now: the dashboard setting (queue_settings.json), else
+# QUEUE_ACTIVE_HOURS, else SCAN_ACTIVE_HOURS (kept as a fallback name), else always.
+ACTIVE_HOURS_START, ACTIVE_HOURS_END = _parse_active_hours(
+    os.getenv("QUEUE_ACTIVE_HOURS") or os.getenv("SCAN_ACTIVE_HOURS") or "")
+SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END = ACTIVE_HOURS_START, ACTIVE_HOURS_END   # alias
 SCAN_NIGHT_INTERVAL = _parse_duration(os.getenv("SCAN_NIGHT_INTERVAL", "4h"), 4 * 3600)
 WINE_CRITICAL_NOTIFY_SECS = _parse_duration(os.getenv("WINE_CRITICAL_NOTIFY_HOURS", "2h"), 7200)
 
@@ -367,8 +374,8 @@ _LM = {
         "pt": "[build] Transporte enviado — a actualizar movimentos para rastreio de ETA.",
     },
     "scan_outside_hours": {
-        "en": "[sleep] Outside scan hours ({start}h–{end}h). Sleeping {mins} min (night interval).",
-        "pt": "[sleep] Fora das horas de scan ({start}h–{end}h). A dormir {mins} min (intervalo nocturno).",
+        "en": "[sleep] Outside active hours ({start}h–{end}h). Sleeping {mins} min (night interval).",
+        "pt": "[sleep] Fora das horas activas ({start}h–{end}h). A dormir {mins} min (intervalo nocturno).",
     },
 }
 

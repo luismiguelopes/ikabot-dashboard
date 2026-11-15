@@ -17,7 +17,6 @@ if _here not in sys.path:
 from empire_utils import (
     LOGS_DIR, QUEUE_JSON_PATH, QUEUE_SETTINGS_PATH, UPDATE_INTERVAL,
     ACTIVE_HOURS_START, ACTIVE_HOURS_END,
-    SCAN_ACTIVE_HOURS_START, SCAN_ACTIVE_HOURS_END,
     FORCE_EMPIRE_FLAG, FORCE_QUEUE_FLAG, FORCE_MOVEMENTS_FLAG,
     FORCE_IMPORT_REPORTS_FLAG, FORCE_MILITARY_FLAG, FORCE_COSTS_FLAG, FORCE_WINE_BUY_FLAG, lm, logger,
 )
@@ -311,10 +310,10 @@ def _in_active_hours():
 
 
 def _in_scan_hours():
-    """Return True if current local hour is within the scan active hours window."""
-    if SCAN_ACTIVE_HOURS_START == 0 and SCAN_ACTIVE_HOURS_END == 24:
-        return True
-    return SCAN_ACTIVE_HOURS_START <= time.localtime().tm_hour < SCAN_ACTIVE_HOURS_END
+    """Same window as _in_active_hours (P13.32): the two used to be configured separately and
+    this one — which gates spies, raids, the farm, transports and scans — was unset, so those
+    ran at any hour while the building queue kept to the dashboard's active hours."""
+    return _in_active_hours()
 
 
 def _secs_until_active():

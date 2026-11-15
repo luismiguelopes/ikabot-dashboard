@@ -249,3 +249,32 @@ def test_smart_sleep_retries_waiting_cities_and_force_flag(monkeypatch, tmp_path
     monkeypatch.setattr(qp, "FORCE_QUEUE_FLAG", str(flag))
     assert qp.smart_sleep(clock["t"], 0, session=None) == "force_queue"
     assert not flag.exists()
+
+
+# ── P13.32: one active window for everything ─────────────────────────────────────
+
+def test_actions_follow_the_same_window_as_the_dashboard_setting(monkeypatch):
+    """Spies, raids, the farm, transports and scans were gated by SCAN_ACTIVE_HOURS alone —
+    unset, so they ran at any hour while the dashboard's active hours said 7–23."""
+    hour = {"h": 3}
+
+    class _T:
+        tm_hour = property(lambda self: hour["h"])
+    monkeypatch.setattr(qp.time, "localtime", lambda *a: _T())
+    monkeypatch.setattr(qp, "_load_queue_settings", lambda: {"activeHours": {"start": 7, "end": 23}})
+    assert qp._in_active_hours() is False and qp._in_scan_hours() is False     # 03:00
+    hour["h"] = 12
+    assert qp._in_active_hours() is True and qp._in_scan_hours() is True
+    hour["h"] = 23
+    assert qp._in_scan_hours() is False
+    # no dashboard setting → the env window (0–24 when unset) applies to both
+    monkeypatch.setattr(qp, "_load_queue_settings", lambda: {})
+    monkeypatch.setattr(qp, "ACTIVE_HOURS_START", 0)
+    monkeypatch.setattr(qp, "ACTIVE_HOURS_END", 24)
+    assert qp._in_scan_hours() is True
+
+
+def test_env_scan_hours_is_only_a_fallback_name():
+    assert eu._parse_active_hours("8-22") == (8, 22)
+    assert (eu.SCAN_ACTIVE_HOURS_START, eu.SCAN_ACTIVE_HOURS_END) == \
+        (eu.ACTIVE_HOURS_START, eu.ACTIVE_HOURS_END)

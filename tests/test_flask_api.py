@@ -33,7 +33,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(flask_app, "_db", db_manager)
     monkeypatch.setattr(flask_app, "LOGS_DIR", str(tmp_path))
     for const in ("ALERT_THRESHOLDS_PATH", "ESPIONAGE_SETTINGS_PATH",
-                  "WORLD_SCAN_JSON_PATH", "WORLD_SCAN_SETTINGS_PATH", "PLAYER_MARKS_JSON_PATH",
+                  "WORLD_SCAN_JSON_PATH", "WORLD_SCAN_SETTINGS_PATH",
                   "TRAVEL_CALIBRATION_PATH", "SPY_MISSIONS_PATH"):
         monkeypatch.setattr(flask_app, const,
                             str(tmp_path / os.path.basename(getattr(flask_app, const))))
@@ -685,3 +685,72 @@ def test_farm_settings_save_only_touches_the_keys_sent(monkeypatch, tmp_path):
     assert c.post("/api/farm/army", json={"army": {"303": "x"}}).status_code == 400
     saved = json.load(open(flask_app.FARM_SETTINGS_PATH))
     assert saved["army"] == {"303": 200}
+
+
+# ── P13.31: legacy files are merged once and retired ─────────────────────────────
+
+def test_legacy_marks_file_is_merged_into_the_database_and_retired(monkeypatch, tmp_path):
+    """player_marks.json was not dead: marks written to it after the first migration never
+    reached the database, and the dashboard still merged the file over the database."""
+    db_manager.DB_PATH = str(tmp_path / "test.db")
+    db_manager._LOGS_DIR = str(tmp_path)
+    db_manager._DB_INIT_DONE = False
+    db_manager.save_mark("1_10_20", "1", "10", "20", "novo", "")            # in both, file newer
+    db_manager.save_mark("2_10_20", "2", "10", "20", "alvo", "na base")     # in both, db newer
+    future, past = int(time.time()) + 100, 1000
+    legacy = {
+        "1_10_20": {"status": "ignorar", "note": "ficheiro", "updatedAt": future},
+        "2_10_20": {"status": "ignorar", "note": "velho", "updatedAt": past},
+        "3_30_40": {"status": "ignorar", "note": "só no ficheiro", "updatedAt": past,
+                    "actions": [{"ts": 5, "text": "nota"}]},
+    }
+    path = tmp_path / "player_marks.json"
+    path.write_text(json.dumps(legacy))
+    db_manager._migrate_marks()
+    marks = db_manager.get_all_marks()
+    assert marks["1_10_20"]["status"] == "ignorar"               # newer file entry wins
+    assert marks["2_10_20"]["status"] == "alvo"                  # newer database entry stays
+    assert marks["3_30_40"]["status"] == "ignorar" and marks["3_30_40"]["ignoreCount"] == 1
+    assert marks["3_30_40"]["actions"] == [{"ts": 5, "text": "nota"}]
+    assert not path.exists() and (tmp_path / "player_marks.json.migrated").exists()
+    db_manager._migrate_marks()                                   # nothing left to do
+    assert len(db_manager.get_all_marks()) == 3
+
+
+def test_stale_queue_file_is_retired_not_reimported(monkeypatch, tmp_path):
+    db_manager.DB_PATH = str(tmp_path / "test.db")
+    db_manager._LOGS_DIR = str(tmp_path)
+    db_manager._DB_INIT_DONE = False
+    db_manager.init_db()
+    (tmp_path / "building_queue.json").write_text(json.dumps(
+        {"enabled": True, "queues": {"Polis": [{"building": "Museu", "targetLevel": 17}]}}))
+    data = db_manager.load_queue()
+    data["enabled"] = True
+    db_manager.save_queue(data)                                   # the tables are in use
+    db_manager._migrate_queue()
+    assert not (tmp_path / "building_queue.json").exists()
+    assert db_manager.load_queue().get("queues", {}).get("Polis") in (None, [])
+
+
+def test_marks_need_the_database(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "_db", None)
+    r = c.post("/api/world-scan/mark", json={"playerId": "1", "islandX": 1, "islandY": 2,
+                                             "status": "visto"})
+    assert r.status_code == 503                                   # no silent JSON write
+    assert not (tmp_path / "player_marks.json").exists()
+
+
+def test_logs_endpoint_reads_the_tail(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    log = tmp_path / "bot.log"
+    lines = []
+    for i in range(5000):
+        lines.append("2026-11-15 10:00:00 %s [x] linha %d" % ("DEBUG" if i % 10 else "INFO", i))
+    log.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(flask_app, "BOT_LOG_PATH", str(log))
+    got = c.get("/api/logs?lines=50").get_json()["lines"]
+    assert len(got) == 50 and got[-1].endswith("linha 4990") and all(" INFO " in g for g in got)
+    dbg = c.get("/api/logs?lines=30&debug=1").get_json()["lines"]
+    assert len(dbg) == 30 and dbg[-1].endswith("linha 4999")
+    assert len(c.get("/api/logs?lines=2000").get_json()["lines"]) == 500      # all the INFO there is
