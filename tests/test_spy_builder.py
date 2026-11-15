@@ -130,7 +130,7 @@ def test_stale_counts_disabled_or_inactive_hours_do_nothing(monkeypatch, tmp_pat
     assert not (tmp_path / "spy_build_status.json").exists()
 
 
-def test_feedback_parses_success_and_refreshes_token(monkeypatch):
+def test_feedback_parses_success_and_leaves_the_token_placeholder_alone(monkeypatch):
     cfg = types.ModuleType("ikabot.config")
     cfg.actionRequest = "old"
     ika = types.ModuleType("ikabot")
@@ -139,7 +139,9 @@ def test_feedback_parses_success_and_refreshes_token(monkeypatch):
     monkeypatch.setitem(sys.modules, "ikabot.config", cfg)
     ok, text = sb._feedback([["updateGlobalData", {"actionRequest": "new"}],
                              ["provideFeedback", [{"type": 10, "text": "Treino iniciado"}]]])
-    assert ok and text == "Treino iniciado" and cfg.actionRequest == "new"
+    # P13.27: the stock session substitutes the token itself; overwriting the placeholder
+    # only left a possibly stale token in hand-built GET urls.
+    assert ok and text == "Treino iniciado" and cfg.actionRequest == "old"
     ok, text = sb._feedback([["provideFeedback", [{"type": 11, "text": "Sem recursos"}]]])
     assert not ok and text == "Sem recursos"
 

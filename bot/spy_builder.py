@@ -150,16 +150,11 @@ def _crystal_reserved():
 
 
 def _feedback(resp_data):
-    """(ok, text) from a game AJAX response; refreshes the CSRF token on the way."""
-    import ikabot.config as ikabot_config
+    """(ok, text) from a game AJAX response."""
     ok, texts = False, []
     for entry in resp_data:
         if not isinstance(entry, list) or not entry:
             continue
-        if entry[0] == "updateGlobalData" and isinstance(entry[1], dict):
-            tok = entry[1].get("actionRequest")
-            if tok:
-                ikabot_config.actionRequest = tok
         if entry[0] == "provideFeedback":
             for fb in (entry[1] if isinstance(entry[1], list) else [entry[1]]):
                 if isinstance(fb, dict):

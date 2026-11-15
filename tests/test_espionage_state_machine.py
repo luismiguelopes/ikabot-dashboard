@@ -917,3 +917,73 @@ def test_low_loot_on_enabled_farm_target_is_left_to_the_farm(monkeypatch):
     monkeypatch.setattr(em, "_auto_mark_ignored", boom)
     em.collect_mission_results(session=object())
     assert h["missions"][0]["state"] == "DONE"
+
+
+# ── P13.62: the reports tab is paged (10 per page) ───────────────────────────────
+
+def _tab_page(ids, next_offset=None):
+    rows = "".join('<tr id="message%d" class="espionageReports"></tr>'
+                   '<tr id="tbl_mail%d" class="report"></tr>' % (i, i) for i in ids)
+    pager = ""
+    if next_offset is not None:
+        pager = ('<tr class="pgnt"><td class="paginator"><a class="paginator_link" '
+                 'onclick=\'x\'\n href="?view=safehouse&offset=%d&cityId=1&position=8'
+                 '&activeTab=tabReports&sortBy=date&order=desc" title="próximos 10..."></a>'
+                 '</td></tr>' % next_offset)
+    return rows + pager
+
+
+def _paged_tab(monkeypatch, pages):
+    """pages: {offset: html}. Returns the list of offsets actually requested."""
+    asked = []
+
+    def fake_page(session, origin, position, offset=0):
+        asked.append(offset)
+        return pages.get(offset, "")
+    monkeypatch.setattr(em, "_fetch_reports_page", fake_page)
+    monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)
+    return asked
+
+
+def test_reports_first_page_is_enough_when_baseline_is_on_it(monkeypatch):
+    asked = _paged_tab(monkeypatch, {0: _tab_page(range(120, 110, -1), next_offset=10),
+                                     10: _tab_page(range(110, 100, -1))})
+    html = em._fetch_reports_html(None, "1", 8, baseline=115)
+    assert asked == [0]
+    assert sorted(em.split_report_chunks(html)) == [str(i) for i in range(111, 121)]
+
+
+def test_reports_pages_back_until_the_baseline_is_reached(monkeypatch):
+    """Ten newer reports pushed this leg's own report (id 109) to page 2: keep reading."""
+    asked = _paged_tab(monkeypatch, {0: _tab_page(range(120, 110, -1), next_offset=10),
+                                     10: _tab_page(range(110, 100, -1), next_offset=20),
+                                     20: _tab_page(range(100, 90, -1))})
+    html = em._fetch_reports_html(None, "1", 8, baseline=105)
+    assert asked == [0, 10]
+    assert "109" in em.split_report_chunks(html)
+
+
+def test_reports_paging_is_capped_and_needs_a_next_link(monkeypatch):
+    pages = {o: _tab_page(range(500 - o, 490 - o, -1), next_offset=o + 10) for o in range(0, 100, 10)}
+    asked = _paged_tab(monkeypatch, pages)
+    em._fetch_reports_html(None, "1", 8, baseline=1)
+    assert asked == [0, 10, 20][:em._REPORT_MAX_PAGES]
+    # no "next" link → never ask for a page that does not exist
+    asked = _paged_tab(monkeypatch, {0: _tab_page(range(120, 110, -1))})
+    em._fetch_reports_html(None, "1", 8, baseline=1)
+    assert asked == [0]
+
+
+def test_reports_without_baseline_read_one_page(monkeypatch):
+    asked = _paged_tab(monkeypatch, {0: _tab_page(range(120, 110, -1), next_offset=10)})
+    em._fetch_reports_html(None, "1", 8)
+    assert asked == [0]
+
+
+def test_real_tab_paginator_is_recognised():
+    """The live capture's paginator markup (offset=10 link) is what the pager looks for."""
+    import os
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "spy_reports_paginator.html")
+    html = open(path, encoding="utf-8").read()
+    assert em._has_next_reports_page(html, 0) is True
+    assert em._has_next_reports_page(html, 10) is False

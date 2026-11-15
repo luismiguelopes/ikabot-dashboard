@@ -259,6 +259,16 @@ def _run_migrations(conn):
             if "duplicate column" not in str(exc).lower():
                 raise
         conn.execute("INSERT INTO schema_version (version) VALUES (19)")
+    if current < 20:
+        # v20 = scout_fail_rounds: consecutive farm rounds skipped because the scout kept
+        # failing. Each one doubles the wait before the next attempt (capped), so a target
+        # where the mission always fails stops costing three attempts every interval.
+        try:
+            conn.execute("ALTER TABLE farm_targets ADD COLUMN scout_fail_rounds INTEGER DEFAULT 0")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        conn.execute("INSERT INTO schema_version (version) VALUES (20)")
     conn.commit()
 
 
@@ -660,6 +670,7 @@ _FARM_UPDATE_COLS = {
     "last_enemy_ships", "fleet_lead_min", "respy_launched_at",
     "is_fleet_target", "disperse_min", "enemy_return_at", "last_troop_journey",
     "mode", "low_raids", "scout_fail_count", "force_fresh_spy", "swept_at", "clean_sweeps",
+    "scout_fail_rounds",
 }
 
 

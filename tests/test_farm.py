@@ -596,7 +596,7 @@ def test_attacking_waits_while_raid_in_flight(monkeypatch, tmp_path):
 
 
 def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
-    """A spy-based attack resets raids_since_spy to 1 and records intel for direct raids."""
+    """A spy-based attack records the intel the following direct raids run on."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
@@ -609,7 +609,6 @@ def test_spying_success_sets_respy_baseline(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
     t = db_manager.farm_get("100")
     assert t["state"] == "ATTACKING"
-    assert t["raids_since_spy"] == 1
     assert t["last_enemy_ships"] == 0
     assert t["last_transporters"] >= 1
 
@@ -650,8 +649,7 @@ def test_first_contact_always_full_scout(monkeypatch, tmp_path):
 
 
 def test_safe_target_attacks_directly(monkeypatch, tmp_path):
-    """A safe target (is_fleet_target=0, already scouted, rss below respy_every) raids directly
-    without spending a scout, advancing raids_since_spy."""
+    """A safe target (is_fleet_target=0, already swept) raids directly without spending a scout."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Seguro", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
@@ -667,7 +665,6 @@ def test_safe_target_attacks_directly(monkeypatch, tmp_path):
     assert added[0][1]["missionType"] == "army"
     t = db_manager.farm_get("100")
     assert t["state"] == "ATTACKING"
-    assert t["raids_since_spy"] == 2                       # advanced toward the next periodic scout
     assert t["total_raids"] == 1
 
 
@@ -1230,7 +1227,7 @@ def test_raid_that_never_left_is_not_a_bounce(monkeypatch, tmp_path):
     t = db_manager.farm_get("100")
     assert t["state"] == "IDLE" and t["next_action"] == "attack"
     assert not t["is_fleet_target"]                       # NOT reclassified as a fleet target
-    assert t["total_raids"] == 2 and t["raids_since_spy"] == 1   # phantom raid un-counted
+    assert t["total_raids"] == 2                           # phantom raid un-counted
 
 
 def test_dispatch_logged_for_another_target_does_not_count(monkeypatch, tmp_path):
@@ -1554,6 +1551,58 @@ def test_failed_scout_at_cap_backs_off_and_forces_fresh(monkeypatch, tmp_path):
     assert t["next_run_at"] > int(time.time()) + 3600     # full interval, not minutes
 
 
+def _clean_failed_mission():
+    return [{"state": "FAILED", "targetCityId": "100", "dispatchedAt": 1000,
+             "error": "Missão falhada no jogo — 0/1 agentes perdidos, espião continua estacionado",
+             "result": {"failed": True, "lostAgents": 0, "sentAgents": 1}}]
+
+
+def test_clean_failure_waits_for_the_risk_to_decay(monkeypatch, tmp_path):
+    """P13.63: a mission that failed with every agent still parked is not re-run minutes later
+    (same raised discovery risk) — the wait is longer and grows with each failure."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 3})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1, "scout_fail_count": 1})
+    added = _common_patches(monkeypatch, tmp_path, missions=_clean_failed_mission())
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert added == []
+    t = db_manager.farm_get("100")
+    assert t["state"] == "IDLE" and t["scout_fail_count"] == 2 and t["force_fresh_spy"] == 0
+    lo, hi = fm._CLEAN_FAIL_RETRY_RANGE
+    wait = t["next_run_at"] - int(time.time())
+    assert lo * 60 * 2 - 5 <= wait <= hi * 60 * 2 + 5
+
+
+def test_skipped_scout_rounds_back_off_exponentially(monkeypatch, tmp_path):
+    """P13.63: every consecutive round skipped for failed scouts doubles the wait (capped),
+    instead of three more attempts every interval forever (Tróia 3)."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 3})
+    expected = {0: 3, 1: 6, 2: 12, 3: 24, 6: 24}      # rounds already skipped → hours to wait
+    for done, hours in expected.items():
+        db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
+                                       "is_fleet_target": 1, "scout_fail_rounds": done,
+                                       "scout_fail_count": fm._MAX_SCOUT_FAILS - 1})
+        _common_patches(monkeypatch, tmp_path, missions=_clean_failed_mission())
+        fm.process_farm_targets(session=object(), in_active_hours=True)
+        t = db_manager.farm_get("100")
+        assert t["scout_fail_rounds"] == done + 1 and t["scout_fail_count"] == 0
+        assert abs((t["next_run_at"] - int(time.time())) - hours * 3600) <= 5
+
+
+def test_scout_round_backoff_bounds():
+    assert fm._scout_round_backoff({"scout_fail_rounds": 0}, 8 * 3600) == (1, 8 * 3600)
+    assert fm._scout_round_backoff({"scout_fail_rounds": 1}, 8 * 3600) == (2, 16 * 3600)
+    assert fm._scout_round_backoff({"scout_fail_rounds": 2}, 8 * 3600) == (3, 24 * 3600)
+    # an interval longer than the cap is never shortened
+    assert fm._scout_round_backoff({"scout_fail_rounds": 5}, 48 * 3600) == (6, 48 * 3600)
+
+
 def test_force_fresh_spy_dispatches_new_not_stationed(monkeypatch, tmp_path):
     """With force_fresh_spy set (parked spies proven dead), a due target dispatches FRESH spies
     instead of re-arming the stationed ones, and clears the flag. Mirror of
@@ -1598,7 +1647,7 @@ def test_spying_target_does_not_block_ready_raid(monkeypatch, tmp_path):
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
     import espionage_manager as em
-    monkeypatch.setattr(em, "latest_failed_after", lambda *a, **k: False, raising=False)
+    monkeypatch.setattr(em, "latest_failure_after", lambda *a, **k: None, raising=False)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
@@ -2287,3 +2336,56 @@ def test_missing_resources_is_not_drained(monkeypatch, tmp_path):
 def test_real_low_reading_still_drains(monkeypatch, tmp_path):
     t, ignored = _spying_with_result(monkeypatch, tmp_path, {"resources": {"wood": 1000}, "success": True})
     assert t["enabled"] is False and len(ignored) == 1
+
+
+# ── P13.28: one definition of the idle decision ──────────────────────────────────
+
+def _safe(**kw):
+    t = {"swept_at": 1, "is_fleet_target": 0, "last_enemy_ships": 0, "min_loot": 50000,
+         "last_spy_at": int(time.time()), "mode": "farm"}
+    t.update(kw)
+    return t
+
+
+def test_idle_decision_table():
+    now = int(time.time())
+    assert fm.idle_decision(_safe(), now, 90000, None) == ("raid", "safe")
+    assert fm.idle_decision(_safe(), now, 90000, 80000) == ("raid", "safe")
+    assert fm.idle_decision(_safe(swept_at=0), now, 90000, None) == ("scout", "first")
+    assert fm.idle_decision(_safe(is_fleet_target=1), now, 90000, None) == ("scout", "fleet")
+    assert fm.idle_decision(_safe(last_enemy_ships=2), now, 90000, None) == ("scout", "fleet")
+    assert fm.idle_decision(_safe(), now, 40000, None) == ("scout", "drained")       # estimate
+    assert fm.idle_decision(_safe(), now, 90000, 5000) == ("scout", "drained")       # last return
+    assert fm.idle_decision(_safe(), now, 90000, 0) == ("scout", "drained")
+    old = now - 10 * 86400
+    assert fm.idle_decision(_safe(last_spy_at=old), now, 90000, None) == ("scout", "stale")
+    # first contact and fleet outrank drainage; drainage outranks staleness
+    assert fm.idle_decision(_safe(swept_at=0, is_fleet_target=1), now, 0, 0) == ("scout", "first")
+    assert fm.idle_decision(_safe(is_fleet_target=1), now, 0, 0) == ("scout", "fleet")
+    assert fm.idle_decision(_safe(last_spy_at=old), now, 0, None) == ("scout", "drained")
+
+
+def test_idle_decision_loop_mode_never_scouts_for_drainage_or_age():
+    now = int(time.time())
+    loop = _safe(mode="loop", last_spy_at=now - 10 * 86400)
+    assert fm.idle_decision(loop, now, 0, 100) == ("raid", "safe")
+    assert fm.idle_decision(_safe(mode="loop", is_fleet_target=1), now, 90000, None) == ("scout", "fleet")
+    assert fm.idle_decision(_safe(mode="loop", swept_at=0), now, 90000, None) == ("scout", "first")
+
+
+def test_scheduler_and_body_agree_on_a_drained_safe_target(monkeypatch, tmp_path):
+    """The scheduler used to mirror the body by hand and missed drainage: a drained safe target
+    was counted as a would-be raid (waits for an attack slot) while the body would scout it."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
+                         "islandId": "7", "minLoot": 30000, "intervalHours": 8})
+    db_manager.farm_update("100", {"swept_at": now, "last_spy_at": now, "last_loot": 5000,
+                                   "next_run_at": 0, "is_fleet_target": 0})
+    added = _common_patches(monkeypatch, tmp_path)
+    t = db_manager.farm_get("100")
+    assert fm._idle_needs_attack_slot(t, now) is False        # a scout, not a raid
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+    assert [q for q, _ in added] == ["spy_dispatch"]

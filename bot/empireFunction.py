@@ -23,7 +23,9 @@ from empire_utils import atomic_write_json
 from empire_collector import collect_city_data, finalize_empire_cycle, refresh_movements
 from costs_collector import should_update_building_costs, collect_building_costs
 from scan_collector import should_start_scan, collect_shallow_scan
-from queue_processor import has_building_queue, process_building_queue, smart_sleep
+from queue_processor import (
+    has_building_queue, run_building_pass, building_pass_due, smart_sleep,
+)
 
 from ikabot.helpers.pedirInfo import getIdsOfCities
 
@@ -76,6 +78,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
     last_full_cycle_time = 0
     next_full_jitter = 0
     cycle_count = 0
+    wake_reason = None
 
     try:
         from telegram_notifier import notify_started
@@ -134,9 +137,11 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     except Exception:
                         pass
                     refresh_movements(session, ids[0])
-                if ids and has_building_queue():
+                # Only when the wake is about construction: most wakes are for a farm or spy
+                # ETA, and the pass opens every city with queued items.
+                if ids and building_pass_due(wake_reason):
                     logger.debug(lm("queue_wake", ts=time.strftime('%H:%M:%S')))
-                    if process_building_queue(session, ids, cities):
+                    if run_building_pass(session, ids, cities):
                         logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
                 if in_scan_hours:
@@ -146,7 +151,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                     with health_guard("attack"):
                         from attack_manager import process_attack_queue
                         process_attack_queue(session, in_active_hours=True)
-                smart_sleep(last_full_cycle_time, next_full_jitter, session)
+                wake_reason = smart_sleep(last_full_cycle_time, next_full_jitter, session)
                 continue
 
             # ── Full empire data cycle ───────────────────────────────────────
@@ -184,7 +189,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
             # ── Building queue (before scans — never blocked by long scans) ──
             with health_guard("building"):
                 if has_building_queue():
-                    if process_building_queue(session, ids, cities):
+                    if run_building_pass(session, ids, cities):
                         logger.info(lm("queue_movements_refresh"))
                         refresh_movements(session, ids[0])
 
@@ -231,7 +236,7 @@ def empireFunction(session, event, stdin_fd, predetermined_input):
                         from scan_collector import process_watchlist
                         process_watchlist(session, in_active_hours=True)
 
-            smart_sleep(last_full_cycle_time, next_full_jitter, session)
+            wake_reason = smart_sleep(last_full_cycle_time, next_full_jitter, session)
 
         except (SystemExit, KeyboardInterrupt) as exc:
             # Fatal: the game session gave up (re-login/network exhausted → sys.exit) or a

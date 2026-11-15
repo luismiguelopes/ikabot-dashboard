@@ -971,8 +971,12 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       confirmado) em vez de esperar 2h. O erro só diz "possivelmente capturado" quando o jogo
       diz que se perderam todos os agentes. Um relatório que ainda não apareceu é reconsultado
       com recuo (30s → 10 min) — antes era a cada ~20s: **186 pedidos numa hora** por duas
-      missões presas, visto no primeiro dia do contador. Ainda por fazer: converter `dateText`
-      (relógio do servidor, +1h) em epoch e passar o `reportedAt` a usar essa hora.
+      missões presas, visto no primeiro dia do contador. **Hora real (2026-11-15):**
+      `espionage_parsers.report_epoch` converte o `dateText` (relógio do servidor, hora alemã =
+      Lisboa +1h todo o ano; `GAME_SERVER_TZ` para mudar) e o `reportedAt` passa a ser a hora
+      do relatório; a hora da leitura fica em `readAt`. Data ilegível ou no futuro → cai na hora
+      da leitura. O farm usa `max(reportedAt, executedAt)` para uma diferença de relógios com o
+      servidor nunca esconder um relatório fresco.
   - `espionage_parsers._parse_reports_from_html` grava `reportedAt = int(time.time())`: é a hora
     da **leitura**, não a do relatório. Todos os relatórios na aba parecem acabados de chegar.
   - `collect_mission_results` / `collect_garrison_results` percorrem os 20 mais recentes e ficam
@@ -1152,7 +1156,10 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       E a sessão stock chama `__token()` antes de **cada POST**, que faz um GET da página
       principal por dentro (fora do nosso throttle, colado ao POST). Pôr um contador por hora e
       por tipo no log/dashboard antes de optimizar o resto — e medir este par GET+POST **[V]**.
-- [ ] **P13.24 Cada wake por ETA varre a fila de construção** **[C]** — quando o `smart_sleep`
+- [x] **P13.24 Cada wake por ETA varre a fila de construção** **[C]** ✅ 2026-11-15
+      (`smart_sleep` devolve o motivo do acordar; `building_pass_due` só deixa correr a passagem
+      quando a fila foi mexida no dashboard, uma construção acabou desde a última passagem,
+      chegou um transporte, foi pedido à mão, ou há cidade à espera de recursos há 30 min) — quando o `smart_sleep`
       acorda por causa do farm ou de um espião, o loop principal faz uma passagem "só fila" que
       abre a vista de cada cidade com itens (15-30s entre elas), mesmo sem nada de construção
       devido. Só processar a fila quando o ETA é dela.
@@ -1163,14 +1170,25 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
 - [ ] **P13.26 Pedidos repetidos no farm** **[C]** — `getShipCapacity` a cada passagem (só muda
       com pesquisa); `_pick_origin` chamado duas vezes por raid; falha do `_confirm_inactive` não
       memoizada; janela de re-espionagem antecipada sem origem mantém `has_due_farm` verdadeiro 5 min.
-- [ ] **P13.27 Regra do `actionRequest` é supérflua** **[V]** — a sessão stock substitui sempre o
+- [x] **P13.27 Regra do `actionRequest` é supérflua** **[V]** ✅ 2026-11-15 (as 8 escritas em
+      `ikabot_config.actionRequest` saíram; fica sempre o placeholder `REQUESTID`, que a sessão
+      stock troca nos POST e que o jogo ignora nos GET de vistas — é o que os colectores do
+      império e dos custos sempre enviaram. Risco latente removido: um módulo stock importado
+      depois de uma escrita ficava com um token antigo colado nos URL dos seus POST) — a sessão stock substitui sempre o
       token nos `params` e no URL; o nosso "actualizar `ikabot_config.actionRequest`" só tem
       efeito nos GET construídos por string, onde deixa um token possivelmente antigo que a stock
       já não troca. Simplificar para o placeholder em todo o lado (testar num GET de safehouse).
 
 ### E — Estrutura e manutenção
 
-- [ ] **P13.28 `process_farm_targets`: 1010 linhas, 15 closures** **[C]** — a condição "alvo
+- [x] **P13.28 `process_farm_targets`: 1010 linhas, 15 closures** **[C]** ✅ 2026-11-15
+      (`idle_decision(t, now, est, recent) → (acção, motivo)` é a única definição de "ataque
+      directo ou espiar", usada pelo corpo e pelo agendador — que antes não via a drenagem;
+      `_next_round_needs_spy` com um só ramo; `raids_since_spy` deixou de ser escrito; imports
+      mortos fora. **Não feito de propósito:** partir os ramos SPYING/ATTACKING em funções —
+      não têm lógica duplicada e mexer-lhes só por tamanho é risco sem ganho. A coluna
+      `respy_every` e o campo no `InactivosTab` (linha ~791) já não fazem nada: remover o campo
+      no bloco "Ver o farm" do Opus) — a condição "alvo
       seguro" está escrita 3× no ramo IDLE e espelhada à mão em `_idle_needs_attack_slot` e
       `has_due_farm`. Extrair `decide(target, ctx) → acção` pura, usada pelo agendador e pelo
       corpo. Código morto a sair no mesmo passo: os dois ramos idênticos de
@@ -1513,8 +1531,14 @@ Os passos 2-4 são o que acaba com a série de ricochetes; estimativa grosseira 
    estado global nos testes), P13.60 (ESLint, `npm run build` no deploy), P13.29, P13.31.
 8. **Calculadoras e acabamentos** — P13.54, P13.58, P13.59.
 
-- [ ] **P13.62** Paginação da aba de relatórios (10 por página).
-- [ ] **P13.63** Recuo por alvo quando a missão falha sem perder agentes.
+- [x] **P13.62** Paginação da aba de relatórios (10 por página). ✅ 2026-11-15 — com id-base, o
+      colector lê a página seguinte (`offset=10`, mesmo link do paginador do jogo) enquanto
+      todos os relatórios vistos forem mais novos que o id-base; no máximo 3 páginas; no caso
+      normal continua a ser 1 pedido.
+- [x] **P13.63** Recuo por alvo quando a missão falha sem perder agentes. ✅ 2026-11-15 — falha
+      "limpa" (0 agentes perdidos) espera 20-40 min × nº da tentativa em vez de 5-15 min (o
+      risco de descoberta tem de baixar); cada ronda saltada seguida duplica a espera
+      (intervalo, 2×, 4×… até 24h; coluna `scout_fail_rounds`, v20) e um scout bom repõe a zero.
 - [ ] **P13.64** Usar `lostAgents`/`sentAgents` dos relatórios.
 
 ### J — Quem faz o quê: Fable ou Opus
@@ -1577,10 +1601,10 @@ com o farm, pára e passa para o Fable.
    `health.json` (uma falha no `smart_sleep` agora aparece lá).
 6. Dúvida sobre se algo muda um despacho ao jogo → não fazer, anotar no plano para o Fable.
 
-**Estado do lado do Fable (2026-11-14, fim do dia).** Feitos: P13.0, P13.1, P13.2, P13.3, P13.4,
-P13.5, P13.6, P13.7 (bot), P13.8, P13.9, P13.10, P13.11, P13.12, P13.13, P13.14, P13.23,
-P13.44 (1), P13.61. **Restam para o Fable:** P13.62 (paginação dos relatórios), P13.1-resto
-(`dateText` → hora real), P13.24 (wake sem varrer a fila de construção), P13.27
-(`actionRequest`), P13.63 (recuo por alvo) e, por último, P13.28 (`decide()` do farm). Nenhum
-bloqueia o Opus: os blocos da tabela J podem arrancar já, e P13.33/P13.47 ficaram
-desbloqueados (o API já dá `garrisonResult.fleet` e ids na fila).
+**Estado do lado do Fable (2026-11-15).** **Tudo feito** — a tabela do Fable acima está
+fechada: aos itens de 14/11 juntaram-se P13.63, P13.62, P13.1-resto (hora real do relatório),
+P13.24, P13.27 e P13.28. O que resta do P13 é a tabela do Opus, sem dependências pendentes
+(P13.33 e P13.47 estão desbloqueados: o API já dá `garrisonResult.fleet` e ids na fila).
+Achado lateral corrigido: `_auto_mark_ignored` rebentava com `NameError` no caminho de recurso
+em JSON (`atomic_write_json` não importado) — apanhado com `pyflakes`, que vale a pena correr
+no P13.45/P13.60.

@@ -55,14 +55,6 @@ def _fetch_city_spy_counts(session, city_id, city_name, position):
         logger.error("[espionage] GET safehouse %s falhou: %s", city_name, e)
         return None, ""
 
-    # Refresh CSRF token
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
-
     # changeView[1][1] contains the full safehouse building HTML with spy stats
     html_content = ""
     for entry in resp_data:

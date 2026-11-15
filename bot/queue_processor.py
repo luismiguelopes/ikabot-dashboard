@@ -112,6 +112,67 @@ def has_building_queue(data=None):
     return False
 
 
+# ── When does a queue-only wake need the building pass? (P13.24) ───────────────
+# The pass opens the city view of every city with queued items (15-30s apart). It used to run
+# on EVERY wake of the main loop — and most wakes are for a farm or spy ETA, with nothing to
+# do for construction. Now it runs only when something of its own happened.
+_BUILD_RETRY_SECS = 1800      # cities waiting on resources/citizens are re-checked this often
+_build_pass = {"at": 0, "sig": None}
+
+
+def _queue_signature(data):
+    """What is queued, per city, in order — changes when the dashboard edits the queue."""
+    return json.dumps({
+        "enabled": bool(data.get("enabled", True)),
+        "queues": {city: [[it.get("id"), it.get("building"), it.get("targetLevel")] for it in items]
+                   for city, items in sorted((data.get("queues") or {}).items()) if items},
+    }, sort_keys=True)
+
+
+def _waiting_cities(data):
+    """Cities with queued items and nothing under construction (waiting for resources,
+    citizens or a transport) — the only ones a periodic retry can help."""
+    in_progress = data.get("inProgress") or {}
+    return [c for c, items in (data.get("queues") or {}).items() if items and c not in in_progress]
+
+
+def building_pass_due(reason=None, data=None, now=None):
+    """True if a queue-only wake should run the building pass:
+      • the dashboard asked for it, or changed the queue since the last pass;
+      • a tracked construction finished since the last pass (the next item can start);
+      • a transport for a queued city has arrived (the wake was for that);
+      • a city is waiting with nothing building and the retry interval has passed.
+    A wake for a farm/spy ETA with none of the above no longer touches the cities."""
+    if data is None:
+        data = _load_queue()
+    if not has_building_queue(data):
+        return False
+    if now is None:
+        now = time.time()
+    if reason in ("force_queue", "transport", "construction"):
+        return True
+    last = _build_pass["at"]
+    if _build_pass["sig"] != _queue_signature(data):
+        return True
+    for ip in (data.get("inProgress") or {}).values():
+        if last < ip.get("eta", 0) <= now:
+            return True
+    return bool(_waiting_cities(data)) and now - last >= _BUILD_RETRY_SECS
+
+
+def run_building_pass(session, ids, cities):
+    """process_building_queue + bookkeeping for building_pass_due. The time is noted BEFORE
+    the pass so a pass that raises is not retried on every wake."""
+    _build_pass["at"] = time.time()
+    try:
+        return process_building_queue(session, ids, cities)
+    finally:
+        try:
+            _build_pass["sig"] = _queue_signature(_load_queue())
+        except Exception:
+            pass
+
+
 def _run_step(subsystem, fn):
     """Run one smart_sleep work step. Returns True when it ran cleanly.
 
@@ -287,7 +348,9 @@ def _get_next_spy_eta():
 
 
 def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
-    """Sleep until the next full empire cycle, next construction ETA, or next transport arrival, whichever is soonest."""
+    """Sleep until the next full empire cycle, next construction ETA, or next transport arrival,
+    whichever is soonest. Returns why it ended: "full", "construction", "transport", "spy",
+    "farm", "retry", "hours" or "force_empire" / "force_queue" / "force_movements"."""
     next_full_at = last_full_cycle_time + UPDATE_INTERVAL + next_full_jitter
     q = _load_queue()  # single load — reused by all helpers below
     construction_eta = _get_next_construction_eta(q)
@@ -300,15 +363,18 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
     except Exception:
         pass
 
-    eta = None
-    if construction_eta:
-        eta = construction_eta
-    if transport_eta:
-        eta = min(eta, transport_eta) if eta else transport_eta
-    if spy_eta:
-        eta = min(eta, spy_eta) if eta else spy_eta
-    if farm_eta:
-        eta = min(eta, farm_eta) if eta else farm_eta
+    # A construction that finished since the last building pass (e.g. while that pass or a
+    # farm step was running) has no future ETA any more — wake for it right away.
+    if any(_build_pass["at"] < ip.get("eta", 0) <= time.time()
+           for ip in (q.get("inProgress") or {}).values()):
+        construction_eta = time.time()
+    candidates = [(construction_eta, "construction"), (transport_eta, "transport"),
+                  (spy_eta, "spy"), (farm_eta, "farm")]
+    candidates = [c for c in candidates if c[0]]
+    eta, eta_kind = min(candidates, key=lambda c: c[0]) if candidates else (None, None)
+    # Why the sleep will end — the main loop uses it to skip the building pass on a wake that
+    # is not about construction (P13.24).
+    reason = "full"
 
     if eta and _in_active_hours():
         # Wake just after the ETA. The events themselves (spy executeAfter, farm
@@ -318,18 +384,25 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         wake_for_queue = eta + random.randint(20, 70)
         sleep_secs = max(30, min(next_full_at, wake_for_queue) - time.time())
         if wake_for_queue < next_full_at:
+            reason = eta_kind
             eta_str = time.strftime('%H:%M:%S', time.localtime(eta))
             logger.debug(lm("queue_sleep_until", eta=eta_str, mins=round(sleep_secs / 60)))
     else:
         sleep_secs = max(60, next_full_at - time.time())
-        # Se há itens em queue mas sem ETA conhecido, acorda em 30 min para re-tentar
-        if has_building_queue(q) and _in_active_hours():
-            sleep_secs = min(sleep_secs, 1800)
+
+    # Cities waiting with nothing under construction have no ETA of their own: re-check them
+    # every _BUILD_RETRY_SECS (it used to be "on whatever wakes the loop next").
+    if has_building_queue(q) and _waiting_cities(q) and _in_active_hours():
+        retry_in = max(60, _build_pass["at"] + _BUILD_RETRY_SECS - time.time())
+        if retry_in < sleep_secs:
+            sleep_secs = retry_in
+            reason = "retry"
 
     if not _in_active_hours():
         secs_to_open = _secs_until_active()
         if 0 < secs_to_open < sleep_secs:
             sleep_secs = secs_to_open + random.randint(1, 5) * 60
+            reason = "hours"
             logger.info(lm("queue_sleep_until_hours", mins=round(sleep_secs / 60),
                            start=_get_active_hours()[0]))
 
@@ -355,15 +428,15 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         except Exception:
             pass
         if os.path.exists(FORCE_EMPIRE_FLAG):
-            break
+            return "force_empire"
         if os.path.exists(FORCE_QUEUE_FLAG):
             try:
                 os.remove(FORCE_QUEUE_FLAG)
             except Exception:
                 pass
-            break
+            return "force_queue"
         if os.path.exists(FORCE_MOVEMENTS_FLAG):
-            break
+            return "force_movements"
 
         # F6 attack watch: periodically refresh movements so incoming-attack alerts are
         # timely (opt-in via alert_settings.checkMinutes; refresh_movements keeps the
@@ -539,6 +612,7 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         if remaining <= 0:
             break
         time.sleep(min(60, remaining))
+    return reason
 
 
 # ── Cost helpers ──────────────────────────────────────────────────────────────

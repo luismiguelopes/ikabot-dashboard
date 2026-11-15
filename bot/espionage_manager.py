@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 
-from empire_utils import LOGS_DIR, logger, active_elapsed, save_capture
+from empire_utils import LOGS_DIR, logger, active_elapsed, save_capture, atomic_write_json
 from espionage_parsers import (
     _parse_safehouse_page, _parse_active_spy_missions, _parse_arrival_countdown,
     _parse_spy_session_id, _parse_reports_from_html, _parse_garrison_troops,
@@ -648,14 +648,6 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         resp = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
 
-        # Refresh CSRF token from response
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                new_token = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                if new_token:
-                    ikabot_config.actionRequest = new_token
-                break
-
         success = False
         for entry in resp_data:
             if isinstance(entry, list) and entry[0] == "provideFeedback":
@@ -779,13 +771,6 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
         logger.error("[espionage] GET spyMissions %s→%s falhou: %s", origin_city_id, target_city_id, e)
         return None, None
 
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
-
     html = ""
     for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "changeView":
@@ -857,13 +842,6 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
         resp = session.post(params=params)
         resp_data = json.loads(resp, strict=False)
 
-        for entry in resp_data:
-            if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                if tok:
-                    ikabot_config.actionRequest = tok
-                break
-
         global _last_execute_feedback
         _last_execute_feedback = ""
         saw_feedback = False
@@ -901,8 +879,8 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
 
 
 # ── Report baseline (P13.1): tie a report to the execution that produced it ───────
-# Every report in the reports tab is stamped reportedAt = parse time, and the collectors
-# used to take the NEWEST report of the target city that had a resources / troops table. So
+# Reports used to be stamped reportedAt = parse time (now the game's own date, with readAt
+# for the parse time), and the collectors used to take the NEWEST report of the target city that had a resources / troops table. So
 # when a new report was missing or had failed (no table), the PREVIOUS scout's report was
 # adopted as if it were fresh — an old "clean port" read as current, invisibly to every
 # freshness guard downstream. Report ids come from one game-wide increasing sequence, so the
@@ -1033,14 +1011,18 @@ def _is_new_report(report_id, baseline):
         return False
 
 
-def _fetch_reports_html(session, origin_city_id, position):
-    """GET the safehouse reports tab once and return its raw HTML (the full page content for
-    every report — warehouse, garrison AND movements — is present on the initial load). Empty
-    string on failure. Both the parsed-report path and the movements path build on this."""
+_REPORT_PAGE_SIZE = 10    # the game lists 10 reports per page of the tab
+_REPORT_MAX_PAGES = 3     # how far back a collector may page looking for its leg's report
+
+
+def _fetch_reports_page(session, origin_city_id, position, offset=0):
+    """GET one page of the safehouse reports tab and return its raw HTML (full content of
+    every report on that page — warehouse, garrison AND movements). Empty string on failure."""
     import ikabot.config as ikabot_config
+    paging = f"&offset={int(offset)}&sortBy=date&order=desc" if offset else ""
     url = (
         f"view=safehouse&activeTab=tabReports&cityId={origin_city_id}&position={position}"
-        f"&backgroundView=city&currentCityId={origin_city_id}"
+        f"{paging}&backgroundView=city&currentCityId={origin_city_id}"
         f"&templateView=safehouse&actionRequest={ikabot_config.actionRequest}&ajax=1"
     )
     try:
@@ -1049,13 +1031,6 @@ def _fetch_reports_html(session, origin_city_id, position):
     except Exception as e:
         logger.error("[espionage] GET reports tab falhou: %s", e)
         return ""
-
-    for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
 
     html = ""
     for entry in resp_data:
@@ -1067,17 +1042,59 @@ def _fetch_reports_html(session, origin_city_id, position):
 
     if not html:
         logger.warning("[espionage] reports tab: sem HTML no changeView")
-    else:
+    elif not offset:
         save_capture("spy_reports_tab.html", html)
     return html
 
 
-def _fetch_all_reports(session, origin_city_id, position):
+def _has_next_reports_page(html, offset):
+    """True if the page's paginator links to the page after `offset`."""
+    import re
+    wanted = int(offset) + _REPORT_PAGE_SIZE
+    for m in re.finditer(r'class="paginator_link"[^>]*?href="[^"]*?offset=(\d+)', html or "", re.S):
+        if int(m.group(1)) == wanted:
+            return True
+    return False
+
+
+def _fetch_reports_html(session, origin_city_id, position, baseline=None):
+    """HTML of the reports tab. The tab shows only 10 reports per page and a full scout
+    writes 4-5 of them, so with two scouts running a leg's report can be pushed off the first
+    page before it is collected. Given the leg's `baseline` (highest report id that existed
+    before it executed), keep reading older pages while EVERY report seen so far is newer
+    than it — i.e. until known territory is reached — up to _REPORT_MAX_PAGES. Without a
+    baseline only the first page is read (nothing tells us where to stop)."""
+    html = _fetch_reports_page(session, origin_city_id, position)
+    if not html or baseline is None:
+        return html
+    try:
+        floor = int(baseline)
+    except (TypeError, ValueError):
+        return html
+    page, offset, pages = html, 0, 1
+    while pages < _REPORT_MAX_PAGES:
+        ids = [int(r) for r in split_report_chunks(page).keys()]
+        if not ids or min(ids) <= floor or not _has_next_reports_page(page, offset):
+            break
+        offset += _REPORT_PAGE_SIZE
+        time.sleep(random.randint(3, 8))
+        page = _fetch_reports_page(session, origin_city_id, position, offset)
+        if not page:
+            break
+        logger.debug("[espionage] aba de relatórios: página %d lida (id-base %s ainda não "
+                     "alcançado)", pages + 1, baseline)
+        html += page
+        pages += 1
+    return html
+
+
+def _fetch_all_reports(session, origin_city_id, position, baseline=None):
     """
-    GET safehouse reports tab once and return all parsed report data {report_id: data}.
+    GET the safehouse reports tab and return all parsed report data {report_id: data}.
     The page HTML already contains full content for every report (read and unread alike).
+    `baseline` lets the fetch page back until that report id is reached.
     """
-    html = _fetch_reports_html(session, origin_city_id, position)
+    html = _fetch_reports_html(session, origin_city_id, position, baseline=baseline)
     if not html:
         return {}
     reports = _parse_reports_from_html(html)
@@ -1351,7 +1368,8 @@ def collect_mission_results(session):
             continue
 
         time.sleep(random.randint(5, 15))
-        reports = _fetch_all_reports(session, origin_id, position)
+        reports = _fetch_all_reports(session, origin_id, position,
+                                     baseline=m.get("reportBaselineId"))
 
         if not reports:
             _collect_later(missions, i, "collectAfter", now)
@@ -1372,7 +1390,7 @@ def collect_mission_results(session):
             logger.info("[espionage] armazém %s → %s", m["targetCityName"], missions[i]["error"])
             changed = True
             continue
-        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:_REPORT_PAGE_SIZE * _REPORT_MAX_PAGES]:
             report = reports[rid]
             if not _is_new_report(rid, baseline):
                 break   # sorted newest-first: everything from here on predates this execution
@@ -1555,7 +1573,8 @@ def collect_garrison_results(session):
             continue
 
         time.sleep(random.randint(5, 15))
-        reports = _fetch_all_reports(session, origin_id, position)
+        reports = _fetch_all_reports(session, origin_id, position,
+                                     baseline=m.get("garrisonBaselineId"))
 
         if not reports:
             _collect_later(missions, i, "garrisonCollectAfter", now)
@@ -1577,7 +1596,7 @@ def collect_garrison_results(session):
                         missions[i]["garrisonResult"]["error"])
             changed = True
             continue
-        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:20]:
+        for rid in sorted(reports.keys(), key=lambda x: int(x), reverse=True)[:_REPORT_PAGE_SIZE * _REPORT_MAX_PAGES]:
             report = reports[rid]
             if not _is_new_report(rid, baseline):
                 break   # older than this garrison execution → never adopt a previous scout's read
@@ -1720,7 +1739,8 @@ def collect_movements_results(session):
             continue
 
         time.sleep(random.randint(5, 15))
-        html = _fetch_reports_html(session, origin_id, position)
+        html = _fetch_reports_html(session, origin_id, position,
+                                   baseline=m.get("movementsBaselineId"))
 
         if not html:
             if active_elapsed(m.get("movementsExecutedAt", 0), now) > 7200:  # B7: discount downtime
@@ -1924,15 +1944,26 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
     return False
 
 
-def latest_failed_after(target_city_id, since):
-    """True if the newest spy mission for the target FAILED after `since` (spy detected
-    or gone) — the farm uses this to give up waiting and dispatch fresh spies."""
+def latest_failure_after(target_city_id, since):
+    """The newest FAILED spy mission for the target dispatched after `since`, or None."""
+    best = None
     for m in _load_missions().get("missions", []):
         if str(m.get("targetCityId", "")) != str(target_city_id):
             continue
         if m.get("state") == "FAILED" and m.get("dispatchedAt", 0) >= since - 120:
-            return True
-    return False
+            if best is None or m.get("dispatchedAt", 0) >= best.get("dispatchedAt", 0):
+                best = m
+    return best
+
+
+def failure_kept_agents(mission):
+    """True when the game reported the mission failed WITHOUT losing a single agent — the
+    spies are still parked at the target and it was the inspection itself that failed."""
+    res = (mission or {}).get("result")
+    if not isinstance(res, dict) or not res.get("failed"):
+        return False
+    lost, sent = res.get("lostAgents"), res.get("sentAgents")
+    return bool(sent) and lost == 0
 
 
 # States a spy mission passes through while still in flight — anything not terminal
@@ -2282,12 +2313,6 @@ def _process_recall_queue(session):
             resp = session.post(params=params)
             try:
                 parsed = json.loads(resp, strict=False)
-                for entry in parsed:
-                    if isinstance(entry, list) and entry[0] == "updateGlobalData":
-                        tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-                        if tok:
-                            ikabot_config.actionRequest = tok
-                        break
                 # provideFeedback type=10 → success; type=11 → spy already home; other → retry
                 for entry in parsed:
                     if isinstance(entry, list) and entry[0] == "provideFeedback":

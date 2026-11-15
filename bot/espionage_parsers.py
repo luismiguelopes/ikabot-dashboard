@@ -7,6 +7,7 @@ by espionage_manager so existing `from espionage_manager import _parse_x` call s
 parser tests keep working unchanged.
 """
 
+import os
 import time
 
 from empire_utils import logger
@@ -260,6 +261,32 @@ def _alt_to_resource_key(alt_text):
     return None
 
 
+# The game stamps each report with its server's wall clock (Gameforge servers run on German
+# time: one hour ahead of Lisbon all year, DST included). GAME_SERVER_TZ overrides it.
+_GAME_SERVER_TZ = os.environ.get("GAME_SERVER_TZ", "Europe/Berlin")
+_REPORT_DATE_MAX_SKEW = 600   # a date further in the future than this is not believable
+
+
+def report_epoch(date_text, now=None):
+    """Epoch of a report's own date ("14.11.2026 9:57:26", server clock), or None when it
+    cannot be read or is not believable (in the future) — callers then fall back to the time
+    the report was READ, which is all the bot had before."""
+    import re
+    from datetime import datetime
+    m = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?', date_text or "")
+    if not m:
+        return None
+    d, mo, y, h, mi, sec = (int(x) if x else 0 for x in m.groups())
+    try:
+        from zoneinfo import ZoneInfo
+        ts = int(datetime(y, mo, d, h, mi, sec, tzinfo=ZoneInfo(_GAME_SERVER_TZ)).timestamp())
+    except Exception:
+        return None
+    if ts > (now if now is not None else time.time()) + _REPORT_DATE_MAX_SKEW:
+        return None
+    return ts
+
+
 def split_report_chunks(html):
     """{report_id: html_chunk} for every report row pair in the safehouse reports tab."""
     import re
@@ -353,6 +380,8 @@ def _parse_reports_from_html(html):
                 return None
             return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', cm_.group(1))).strip()
 
+        date_text = _cell('date')
+        read_at = int(time.time())
         result_alt = re.search(r'class=["\']resultImage["\'].*?alt=["\']([^"\']*)["\']',
                                chunk, re.DOTALL | re.IGNORECASE)
         failed = bool((result_alt and re.search(r'falhad|failed', result_alt.group(1), re.IGNORECASE))
@@ -403,13 +432,16 @@ def _parse_reports_from_html(html):
             "success":        success,
             "failed":         failed,
             "subject":        _cell('subject'),
-            "dateText":       _cell('date'),        # server clock, as shown in the game
+            "dateText":       date_text,            # server clock, as shown in the game
             "lostAgents":     lost_agents,
             "sentAgents":     sent_agents,
             "resources":      resources if resources else None,
             "troops":         troops,
             "fleet":          fleet_units,
-            "reportedAt":     int(time.time()),
+            # When the game produced the report (its own date), not when we read it: a
+            # report re-read hours later must not look fresh to the freshness guards.
+            "reportedAt":     report_epoch(date_text, read_at) or read_at,
+            "readAt":         read_at,
         }
 
     logger.debug("[espionage] _parse_reports_from_html: %d relatório(s) encontrado(s)", len(results))

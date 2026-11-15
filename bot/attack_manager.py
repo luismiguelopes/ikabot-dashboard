@@ -234,13 +234,6 @@ def _parse_attack_feedback(resp, function, ikabot_config):
     resp_data = json.loads(resp, strict=False)
 
     for entry in resp_data:
-        if isinstance(entry, list) and entry[0] == "updateGlobalData":
-            tok = entry[1].get("actionRequest") if isinstance(entry[1], dict) else None
-            if tok:
-                ikabot_config.actionRequest = tok
-            break
-
-    for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "provideFeedback":
             fb_list = entry[1] if isinstance(entry[1], list) else [entry[1]]
             types = [fb.get("type") if isinstance(fb, dict) else fb for fb in fb_list]

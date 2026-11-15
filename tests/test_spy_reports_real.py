@@ -158,3 +158,35 @@ def test_failed_movements_leg_leaves_the_port_unconfirmed(monkeypatch):
     m = h["missions"][0]
     assert m["state"] == "DONE" and m.get("movementsResult") is None
     assert not m.get("fullSweepAt")
+
+
+# ── P13.1 (rest): reportedAt is the report's own date, not the time we read it ───
+
+def test_report_date_is_converted_from_the_server_clock():
+    """The server runs one hour ahead of Lisbon: 15.11.2026 0:14:07 there is 23:14:07 here
+    (seen live: executed 23:13:26 local, report dated 0:14:07)."""
+    import calendar
+    lisbon_2314 = calendar.timegm((2026, 11, 14, 23, 14, 7))        # Lisbon = UTC in winter
+    assert ep.report_epoch("15.11.2026 0:14:07", now=lisbon_2314 + 60) == lisbon_2314
+    # summer: both zones shift, still one hour apart (Lisbon = UTC+1, server = UTC+2)
+    assert ep.report_epoch("01.07.2026 12:00:00", now=2_000_000_000) == \
+        calendar.timegm((2026, 7, 1, 10, 0, 0))
+
+
+def test_unreadable_or_future_report_date_falls_back():
+    assert ep.report_epoch(None) is None
+    assert ep.report_epoch("ontem") is None
+    assert ep.report_epoch("15.11.2026 0:14:07", now=1_000_000_000) is None   # "in the future"
+
+
+def test_old_reports_keep_their_own_age_when_read_today():
+    """The fixture was captured on 14/11; read now, every report must carry its own date —
+    all different, all in the past — and the read time separately."""
+    reports = _reports()
+    stamps = {r["reportedAt"] for r in reports.values()}
+    assert len(stamps) == len(reports)
+    for r in reports.values():
+        assert r["reportedAt"] == ep.report_epoch(r["dateText"])
+        assert r["reportedAt"] < r["readAt"]
+    newest = max(reports, key=int)
+    assert reports[newest]["reportedAt"] == max(stamps)

@@ -47,6 +47,9 @@ _SEA_BATTLE_MARGIN_SECS = 20 * 60  # extra troop delay when the blockade must FI
                                    # ships (rounds are ~15 min) instead of scaring flee ones
 _MAX_SCOUT_FAILS = 3               # consecutive garrison scouts without fleet intel on a
                                    # fleet target before the farm skips the round outright
+_SCOUT_ROUND_BACKOFF_CAP = 24 * 3600   # ceiling for the doubling wait between failed scout rounds
+_CLEAN_FAIL_RETRY_RANGE = (20, 40)     # minutes × attempt before re-running a mission that failed
+                                       # with every agent still parked (discovery risk must decay)
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
                                   # ready on arrival (re-spy rounds skip the post-return wait)
 # ── P11.9 Parallel farming ──────────────────────────────────────────────────────
@@ -201,23 +204,66 @@ def _spy_stale(t, now):
     return last > 0 and now - last > window
 
 
+def _scout_round_backoff(t, interval):
+    """(rounds, wait) for a target whose scout round is being skipped: the wait doubles with
+    every consecutive skipped round (interval, 2×, 4×, … up to the cap, never below one
+    interval), so an unscoutable target stops burning attempts every interval."""
+    rounds = int(t.get("scout_fail_rounds", 0) or 0) + 1
+    wait = max(interval, min(interval * (2 ** (rounds - 1)), _SCOUT_ROUND_BACKOFF_CAP))
+    return rounds, wait
+
+
 def _next_round_needs_spy(t):
-    """True if the round after the current raid will re-scout: the periodic re-spy cadence
-    is due, the target currently shows a fleet, or it's a known fleet-target (its fleet
-    flees and returns, so we must always re-scout to know if the port is clean)."""
-    # Loop mode (F12) suppresses the PERIODIC re-spy cadence — it hammers on real-return intel
-    # alone — but a present/known fleet still forces a re-scout (blind troops bounce off warships).
+    """True if the round after the current raid must re-scout: the target currently shows a
+    fleet, or it is a known fleet target (its fleet flees and returns, so only a fresh scout
+    says whether the port is clean). Same answer in farm and loop mode.
+
+    Safe targets (inactive, no fleet) are never re-spied on a raid count: an inactive owner
+    neither produces — the warehouse only shrinks, so the running estimate cannot drift
+    optimistically (co-plunderers show up as a small real return, caught by the drainage
+    test) — nor gains a fleet or army (game rule); a reactivation is caught by the live
+    inactivity check before every raid."""
+    return (int(t.get("last_enemy_ships", 0) or 0) > 0
+            or int(t.get("is_fleet_target", 0) or 0) == 1)
+
+
+def _drain_inputs(t):
+    """(estimated warehouse, last real return or None) — the two drainage signals, read from
+    the loot log. Loop mode sizes its wave to the last real haul."""
+    est = _estimated_warehouse(t)
+    recent = _recent_return_loot(t)
     if str(t.get("mode", "farm")) == "loop":
-        return (int(t.get("last_enemy_ships", 0)) > 0
-                or int(t.get("is_fleet_target", 0)) == 1)
-    # Safe targets (inactive, no fleet) are NEVER re-spied on a raid-count cadence. An inactive
-    # owner neither produces resources — the warehouse only shrinks as we raid, never refills, so
-    # our running estimate can't drift optimistically (co-plunderers show up as a small real
-    # return, caught by the drainage test) — nor can gain a fleet/army (game rule). A reactivation
-    # is caught by the pre-attack live inactivity check (_confirm_inactive) before any raid. So the
-    # only re-spy triggers that remain are a present/known fleet. (respy_every is now unused here.)
-    return (int(t.get("last_enemy_ships", 0)) > 0
-            or int(t.get("is_fleet_target", 0)) == 1)
+        est = max(est, int(recent or 0))
+    return est, recent
+
+
+def idle_decision(t, now, est, recent):
+    """What a due IDLE target does next — the ONE definition, used by the scheduler
+    (has_due_farm / next_farm_eta) and by the body of process_farm_targets. Pure.
+
+    Returns (action, reason):
+      ("raid",  "safe")     direct raid, no scout — needs an attack slot;
+      ("scout", "first")    never passed a complete live sweep → full triple sweep;
+      ("scout", "fleet")    fleet target / ships seen → always re-scout before troops sail;
+      ("scout", "drained")  estimate or last real return below min_loot → check before the
+                            last wave goes round-trip for scraps (never in loop mode: its dry
+                            test is the run of low real returns);
+      ("scout", "stale")    intel looks fine but the last scout is too old (downtime).
+
+    A target is DRAINED when EITHER signal says so: the estimated warehouse (scouted loot
+    minus what came home since) is below min_loot, or the last real return itself was —
+    troops carry min(warehouse, capacity), so a tiny return proves it is near-empty now."""
+    if _never_swept(t):
+        return "scout", "first"
+    if _next_round_needs_spy(t):
+        return "scout", "fleet"
+    if str(t.get("mode", "farm")) != "loop":
+        min_loot = int(t.get("min_loot", 50000))
+        if est < min_loot or (recent is not None and recent < min_loot):
+            return "scout", "drained"
+    if _spy_stale(t, now):
+        return "scout", "stale"
+    return "raid", "safe"
 
 
 def _enabled_targets():
@@ -631,7 +677,7 @@ def _latest_done_report(missions, target_city_id, since):
         if m.get("state") != "DONE":
             continue
         # Only a mission a real spy ran counts as the farm's scout. An IMPORTED report is an
-        # old page re-read today (its reportedAt is the import time), so one "import reports"
+        # old page re-read today, so one "import reports"
         # click during a SPYING wait used to be evaluated as the fresh scout — a stale garrison
         # passed the gate, and a garrison-only import (no resources) read as "drained".
         if m.get("importedFromReport"):
@@ -639,7 +685,11 @@ def _latest_done_report(missions, target_city_id, since):
         if str(m.get("targetCityId", "")) != str(target_city_id):
             continue
         res = m.get("result") or {}
-        ts = res.get("reportedAt") or m.get("executedAt") or m.get("dispatchedAt") or 0
+        # reportedAt is the game's own date for the report (server clock); the execution
+        # time is ours. A report cannot predate the execution that produced it, so take the
+        # later of the two — a clock difference with the server must not hide a fresh report.
+        ts = (max(int(res.get("reportedAt") or 0), int(m.get("executedAt") or 0))
+              or m.get("dispatchedAt") or 0)
         if ts >= best_ts:
             best, best_ts = m, ts
     return best
@@ -890,19 +940,11 @@ def _never_swept(t):
 
 def _idle_needs_attack_slot(t, now):
     """P11.9: whether a due IDLE target's next move is a direct RAID (consumes an attack slot)
-    rather than a scout (spies, no slot). Mirrors the body's branching so the scheduler only
-    withholds a wake for a would-be raid when both slots are busy — a scout still wakes. First
-    contact, fleet targets, a re-spy round and a stale-scout refresh (P11.7) all scout; a
-    confirmed-safe target with fresh intel raids directly."""
-    if _never_swept(t):                            # first contact → full scout
-        return False
-    if int(t.get("is_fleet_target", 0)) == 1:      # fleet target → always re-scout first
-        return False
-    if _next_round_needs_spy(t):                   # re-spy round due → scout
-        return False
-    if _spy_stale(t, now):                          # freshness guard → re-scout, not a raid
-        return False
-    return True                                    # safe target → direct raid (needs a slot)
+    rather than a scout (spies, no slot) — so the scheduler only withholds a wake for a
+    would-be raid when both slots are busy. Asks idle_decision, the same function the body
+    runs, instead of mirroring its conditions by hand."""
+    est, recent = _drain_inputs(t)
+    return idle_decision(t, now, est, recent)[0] == "raid"
 
 
 def _farm_working_set(targets, now):
@@ -998,8 +1040,7 @@ def process_farm_targets(session, in_active_hours=True):
     from db_manager import farm_update, queue_add
     from espionage_manager import _load_missions, SPY_COUNTS_PATH, OWN_CITIES_PATH
     from attack_manager import (
-        _get_best_origin_city, _build_troop_units, _build_fleet_units,
-        _enemy_fleet_count, _classify_enemy_fleet, _calc_travel_secs,
+        _build_troop_units, _build_fleet_units, _classify_enemy_fleet, _calc_travel_secs,
         MILITARY_JSON_PATH,
     )
 
@@ -1035,7 +1076,6 @@ def process_farm_targets(session, in_active_hours=True):
         ships), so the troops get an extra battle margin before sailing."""
         name = t.get("target_city_name", t["target_city_id"])
         ix, iy = t.get("island_x", 0), t.get("island_y", 0)
-        required = set(farm_army) if farm_army else None
 
         refreshed = set()   # cities whose military counts were fetched live during this call
 
@@ -1493,28 +1533,11 @@ def process_farm_targets(session, in_active_hours=True):
             min_loot   = int(t.get("min_loot", 50000))
             first_scout = _never_swept(t)
 
-            # ── Direct raid on a safe target (no scout) ─────────────────────
-            # A target counts as DRAINED (→ re-scout, don't raid on stale intel) when EITHER
-            # signal says so: (a) the ESTIMATED warehouse — scouted last_loot minus loot already
-            # brought home since that scout — has dropped below min_loot (cumulative drainage,
-            # catches the wasteful LAST raid one step early); or (b) the last real return was
-            # itself below min_loot (troops carry min(warehouse, capacity), so a tiny return
-            # proves the warehouse is near-empty NOW even if the scout still reads 268k). Both
-            # are needed: the estimate misses a suddenly-small warehouse, the last return misses
-            # a steady drain that hasn't dipped below the bar yet. Together they stop the bot
-            # sending the whole army round-trip for scraps (F1 / the 5k-return-vs-268k-scout bug).
-            est = _estimated_warehouse(t)
-            recent = _recent_return_loot(t)
-            drained = est < min_loot or (recent is not None and recent < min_loot)
-            if str(t.get("mode", "farm")) == "loop":
-                # Loop mode never re-scouts for drainage (its dry test is the consecutive
-                # real-return count in the ATTACKING branch) → always raid directly. Size the
-                # wave to the last real haul so transporters match what's actually there.
-                drained = False
-                est = max(est, int(recent or 0))
-            if (not first_scout and not _next_round_needs_spy(t)
-                    and int(t.get("is_fleet_target", 0)) == 0
-                    and not drained and not _spy_stale(t, now)):
+            # Two regimes, decided in one place (idle_decision): a confirmed-safe target with
+            # fresh, undrained intel raids directly; everything else scouts first.
+            est, recent = _drain_inputs(t)
+            action, reason = idle_decision(t, now, est, recent)
+            if action == "raid":
                 # P11.9: a safe direct raid needs an attack slot. If one isn't free this cycle,
                 # hold the target (keep intel) instead of spending the pre-attack island fetch.
                 if not _can_launch_attack():
@@ -1544,7 +1567,6 @@ def process_farm_targets(session, in_active_hours=True):
                         farm_update(tid, {
                             "state": "ATTACKING", "attack_return_at": res["return_at"],
                             "last_attack_at": now, "last_transporters": res["transporters"],
-                            "raids_since_spy": int(t.get("raids_since_spy", 0)) + 1,
                             "total_raids": int(t.get("total_raids", 0)) + 1,
                             "enemy_return_at": res["enemy_return_at"],
                             "last_troop_journey": res["troop_journey"],
@@ -1558,19 +1580,15 @@ def process_farm_targets(session, in_active_hours=True):
                     logger.info("[farm] %s: sem tropas/navios livres na origem — nova tentativa ~%dmin",
                                 name, max(0, (eta - now) // 60))
                     continue
-            elif (not first_scout and not _next_round_needs_spy(t)
-                    and int(t.get("is_fleet_target", 0)) == 0
-                    and int(t.get("last_loot", 0)) >= min_loot and drained):
+            elif reason == "drained" and int(t.get("last_loot", 0)) >= min_loot:
                 # Scouted loot still looks rich but the target is drained — re-scout instead of
                 # sending a raid that would scrape the bottom (F1).
-                reason = ("último regresso real %d" % recent
-                          if recent is not None and recent < min_loot
-                          else "armazém estimado %d" % est)
+                why = ("último regresso real %d" % recent
+                       if recent is not None and recent < min_loot
+                       else "armazém estimado %d" % est)
                 logger.info("[farm] %s: %s < %d (drenado) — a re-espiar em vez de atacar "
-                            "a última vaga por migalhas", name, reason, min_loot)
-            elif (not first_scout and not _next_round_needs_spy(t)
-                    and int(t.get("is_fleet_target", 0)) == 0
-                    and not drained and _spy_stale(t, now)):
+                            "a última vaga por migalhas", name, why, min_loot)
+            elif reason == "stale":
                 # P11.7 freshness guard: intel still looks good but the last scout is too old
                 # (likely a long downtime) — re-scout once before the next direct raid instead
                 # of risking a whole wave on a warehouse a co-plunderer may have emptied offline.
@@ -1626,22 +1644,39 @@ def process_farm_targets(session, in_active_hours=True):
         if state == "SPYING":
             m = _latest_done_report(missions, tid, int(t.get("spy_dispatched_at", 0)) - 120)
             if not m:
-                from espionage_manager import latest_failed_after
-                if latest_failed_after(tid, int(t.get("spy_dispatched_at", 0))):
-                    # The (reused or fresh) spy was detected/gone. Count consecutive failures:
-                    # a target whose parked spies keep getting rejected (counter-espionage) must
-                    # not keep winning the queue head and re-arming them every few minutes — that
-                    # starves every other farm target (seen live: Jardim De Cima looped ~12h,
-                    # Valíria/Braavos never ran). Past the cap, back off a FULL interval so the
-                    # head advances, and force FRESH spies next time instead of the dead parked ones.
+                from espionage_manager import latest_failure_after, failure_kept_agents
+                failed = latest_failure_after(tid, int(t.get("spy_dispatched_at", 0)))
+                if failed:
+                    # The (reused or fresh) spy failed. Count consecutive failures: a target
+                    # whose scouts keep failing must not keep winning the queue head and
+                    # re-arming spies every few minutes — that starves every other farm target
+                    # (seen live: Jardim De Cima looped ~12h, Valíria/Braavos never ran). Past
+                    # the cap, skip the round — each consecutive skipped round waits twice as
+                    # long (Tróia 3: warehouse failed 3× a day, every day) — and send FRESH
+                    # spies next time instead of the parked ones.
+                    kept = failure_kept_agents(failed)
                     fails = int(t.get("scout_fail_count", 0) or 0) + 1
                     if fails >= _MAX_SCOUT_FAILS:
-                        farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                        rounds, wait = _scout_round_backoff(t, interval)
+                        farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
                                           "next_action": "spy", "scout_fail_count": 0,
-                                          "force_fresh_spy": 1})
-                        logger.warning("[farm] %s: espionagem falhou %dx seguidas (espiões "
-                                       "estacionados rejeitados / contra-espionagem) — a saltar a "
-                                       "ronda e a forçar espiões novos na próxima", name, fails)
+                                          "force_fresh_spy": 1, "scout_fail_rounds": rounds})
+                        logger.warning("[farm] %s: espionagem falhou %dx seguidas (%s) — ronda "
+                                       "saltada (%dª seguida), nova tentativa em %dh com espiões "
+                                       "novos", name, fails,
+                                       "missão falhada sem perder agentes" if kept else
+                                       "espiões rejeitados / contra-espionagem",
+                                       rounds, wait // 3600)
+                    elif kept:
+                        # Nobody was caught: the parked spies are fine, the inspection itself
+                        # failed. Re-running it minutes later meets the same raised discovery
+                        # risk — give it time to decay, longer after each failure.
+                        wait = random.randint(*_CLEAN_FAIL_RETRY_RANGE) * 60 * fails
+                        logger.info("[farm] %s: missão falhou sem perder agentes (%d/%d) — "
+                                    "nova tentativa em %dmin", name, fails, _MAX_SCOUT_FAILS,
+                                    wait // 60)
+                        farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
+                                          "next_action": "spy", "scout_fail_count": fails})
                     else:
                         wait = random.randint(5, 15) * 60
                         logger.info("[farm] %s: espião falhou (%d/%d) — nova espionagem em %dmin",
@@ -1677,11 +1712,13 @@ def process_farm_targets(session, in_active_hours=True):
             if not isinstance(resources, dict) or not resources or wres.get("success") is False:
                 tries = int(t.get("scout_fail_count", 0) or 0) + 1
                 if tries >= _MAX_SCOUT_FAILS:
-                    farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                    rounds, wait = _scout_round_backoff(t, interval)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
                                       "scout_fail_count": 0, "next_action": "spy",
-                                      "force_fresh_spy": 1})
-                    logger.warning("[farm] %s: relatório de armazém inutilizável %dx — a saltar a "
-                                   "ronda (o alvo NÃO é dado como drenado)", name, tries)
+                                      "force_fresh_spy": 1, "scout_fail_rounds": rounds})
+                    logger.warning("[farm] %s: relatório de armazém inutilizável %dx — ronda saltada "
+                                   "(%dª seguida, %dh; o alvo NÃO é dado como drenado)",
+                                   name, tries, rounds, wait // 3600)
                 else:
                     wait = random.randint(5, 15) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
@@ -1791,12 +1828,13 @@ def process_farm_targets(session, in_active_hours=True):
                 tries = int(t.get("scout_fail_count", 0)) + 1
                 why = ("guarnição rejeitada" if not garrison_known else "movimentos não corridos")
                 if tries >= _MAX_SCOUT_FAILS:
-                    farm_update(tid, {"state": "IDLE", "next_run_at": now + interval,
+                    rounds, wait = _scout_round_backoff(t, interval)
+                    farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
                                       "last_loot": loot, "scout_fail_count": 0,
-                                      "next_action": "spy"})
-                    logger.warning("[farm] %s: varrimento incompleto %dx (%s) — a saltar a ronda, "
-                                   "não arrisco tropas contra frota não confirmada",
-                                   name, tries, why)
+                                      "next_action": "spy", "scout_fail_rounds": rounds})
+                    logger.warning("[farm] %s: varrimento incompleto %dx (%s) — ronda saltada "
+                                   "(%dª seguida, %dh), não arrisco tropas contra frota não "
+                                   "confirmada", name, tries, why, rounds, wait // 3600)
                 else:
                     wait = random.randint(3, 8) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,
@@ -1806,8 +1844,8 @@ def process_farm_targets(session, in_active_hours=True):
                                 "antes de atacar", name, why, wait // 60)
                 continue
             # A clean scout clears the failure streak.
-            if int(t.get("scout_fail_count", 0)):
-                farm_update(tid, {"scout_fail_count": 0})
+            if int(t.get("scout_fail_count", 0)) or int(t.get("scout_fail_rounds", 0) or 0):
+                farm_update(tid, {"scout_fail_count": 0, "scout_fail_rounds": 0})
             # Seal the verified full sweep: only a completed garrison AND a completed movements
             # leg count. This is the ONLY writer of swept_at, and a direct raid requires it.
             if garrison_known and isinstance(m.get("movementsResult"), dict):
@@ -1884,7 +1922,7 @@ def process_farm_targets(session, in_active_hours=True):
             farm_update(tid, {
                 "state": "ATTACKING", "attack_return_at": res["return_at"], "last_attack_at": now,
                 "last_loot": loot, "last_enemy_ships": enemy_ships,
-                "last_transporters": res["transporters"], "raids_since_spy": 1,
+                "last_transporters": res["transporters"],
                 "total_raids": int(t.get("total_raids", 0)) + 1,
                 "total_loot": int(t.get("total_loot", 0)) + loot,
                 "respy_launched_at": 0,
@@ -1991,8 +2029,7 @@ def process_farm_targets(session, in_active_hours=True):
                     delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
                                       "next_action": "attack", "respy_launched_at": 0,
-                                      "total_raids": max(0, int(t.get("total_raids", 0)) - 1),
-                                      "raids_since_spy": max(0, int(t.get("raids_since_spy", 0)) - 1)})
+                                      "total_raids": max(0, int(t.get("total_raids", 0)) - 1)})
                     logger.warning("[farm] %s: o ataque nunca saiu (adiado/removido da fila de "
                                    "ataques) — não é ricochete; nova tentativa em %dmin",
                                    name, delay // 60)
@@ -2068,8 +2105,7 @@ def process_farm_targets(session, in_active_hours=True):
                     need_spy = _next_round_needs_spy(t)
                     delay = random.randint(*_LOOP_RELAUNCH_DELAY_RANGE)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
-                                      "next_action": "spy" if need_spy else "attack",
-                                      "raids_since_spy": 0 if need_spy else int(t.get("raids_since_spy", 0))})
+                                      "next_action": "spy" if need_spy else "attack"})
                     logger.info("[loop] %s: próxima vaga em %ds (%s)",
                                 name, delay, "spy" if need_spy else "attack")
                     continue
