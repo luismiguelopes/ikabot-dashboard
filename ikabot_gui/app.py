@@ -1290,9 +1290,35 @@ def api_farm_list():
     if not _db:
         return jsonify([])
     try:
-        return jsonify(_db.farm_list())
+        return jsonify(_farm_queue_positions(_db.farm_list()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _farm_queue_positions(targets, now=None):
+    """Add `queue_pos` (1 = worked first) to every enabled target, in the order the bot really
+    works them (farm_manager._farm_working_set): targets already spying/attacking, then the
+    DUE idle ones — loop mode first, then loot per hour, then scouted loot, then oldest — and
+    last the idle ones still waiting, by when they come due. The browser used to rank them
+    itself, by loot per hour only."""
+    now = int(now if now is not None else time.time())
+
+    def per_hour(t):
+        journey = int(t.get("last_troop_journey", 0) or 0)
+        return int(t.get("last_loot", 0) or 0) / max(1, journey * 2 if journey > 0 else 4 * 3600)
+
+    def rank(t):
+        return (1 if str(t.get("mode", "farm")) == "loop" else 0, per_hour(t),
+                int(t.get("last_loot", 0) or 0), -int(t.get("created_at", 0) or 0))
+    enabled = [t for t in targets if t.get("enabled")]
+    active = [t for t in enabled if t.get("state", "IDLE") != "IDLE"]
+    idle = [t for t in enabled if t.get("state", "IDLE") == "IDLE"]
+    due = sorted((t for t in idle if now >= int(t.get("next_run_at", 0) or 0)), key=rank, reverse=True)
+    later = sorted((t for t in idle if now < int(t.get("next_run_at", 0) or 0)),
+                   key=lambda t: int(t.get("next_run_at", 0) or 0))
+    for i, t in enumerate(active + due + later):
+        t["queue_pos"] = i + 1
+    return targets
 
 
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
@@ -1322,19 +1348,20 @@ def api_farm_army_get():
 @app.route("/api/farm/army", methods=["POST"])
 def api_farm_army_set():
     data = request.get_json(silent=True) or {}
-    army = data.get("army", {})
-    try:
-        clean = {str(k): int(v) for k, v in army.items() if int(v) > 0}
-    except (ValueError, TypeError):
-        return jsonify({"error": "loadout inválida"}), 400
-    try:
-        spy_agents = max(1, min(99, int(data.get("spyAgents", 1))))
-    except (ValueError, TypeError):
-        spy_agents = 1
-    # Merge so the ship-reserve keys (and any future settings) survive an army save.
+    # Merge so the ship-reserve keys (and any future settings) survive an army save. Each
+    # key is only touched when it is SENT: every save used to replace `army` (and reset
+    # spyAgents to 1 when absent), so toggling the ship reserve stored a half-typed loadout.
     s = _load_farm_settings()
-    s["army"] = clean
-    s["spyAgents"] = spy_agents
+    if "army" in data:
+        try:
+            s["army"] = {str(k): int(v) for k, v in (data.get("army") or {}).items() if int(v) > 0}
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({"error": "loadout inválida"}), 400
+    if "spyAgents" in data:
+        try:
+            s["spyAgents"] = max(1, min(99, int(data.get("spyAgents"))))
+        except (ValueError, TypeError):
+            pass
     if "fleet" in data:
         try:
             s["fleet"] = {str(k): int(v) for k, v in (data.get("fleet") or {}).items() if int(v) > 0}

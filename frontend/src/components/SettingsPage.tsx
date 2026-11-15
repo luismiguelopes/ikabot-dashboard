@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiAction } from '../api'
 import { useT, useLang } from '../i18n'
 import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
 import { ALERT_DEFAULTS, MATERIALS } from '../constants'
@@ -179,7 +180,7 @@ function ConstrucaoTab() {
 
   const handleSave = () => {
     setSaving(true)
-    fetch('/api/building-queue/settings', {
+    apiAction('/api/building-queue/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -187,7 +188,7 @@ function ConstrucaoTab() {
         resourceBuffer: buffer,
       }),
     })
-      .then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) })
+      .then(r => { if (!r) return; setSaved(true); setTimeout(() => setSaved(false), 3000) })
       .catch(() => {})
       .finally(() => setSaving(false))
   }
@@ -302,15 +303,19 @@ function SpyBuildCard() {
 
   const save = (next: SpyBuildSettings) => {
     setS(next)
-    fetch('/api/espionage/spy-build', {
+    apiAction('/api/espionage/spy-build', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
-    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 2500) }).catch(() => {})
+    }).then(r => {
+      if (!r) { fetch('/api/espionage/spy-build').then(x => x.json()).then(setS).catch(() => {}); return }
+      if (r.settings) setS(r.settings as SpyBuildSettings)      // what the server actually stored
+      setSaved(true); setTimeout(() => setSaved(false), 2500)
+    }).catch(() => {})
   }
 
   const preview = async () => {
     setPreviewing(true)
     const before = st.at || 0
-    await fetch('/api/espionage/spy-build/preview', { method: 'POST' }).catch(() => {})
+    await apiAction('/api/espionage/spy-build/preview', { method: 'POST' }).catch(() => {})
     for (let i = 0; i < 20; i++) {            // the bot picks the flag up within ≤60s
       await new Promise(r => setTimeout(r, 4000))
       const d: SpyBuildStatus = await fetch('/api/espionage/spy-build/status').then(r => r.json()).catch(() => ({}))
@@ -349,9 +354,17 @@ function SpyBuildCard() {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-600">{t('spybuild_dry')}</span>
-            <Toggle on={s.dryRun} onClick={() => save({ ...s, dryRun: !s.dryRun })} />
+            <Toggle on={s.dryRun} onClick={() => {
+              // leaving dry-run spends gold and crystal on the very next pass → ask first
+              if (s.dryRun && !confirm(t('spybuild_live_confirm'))) return
+              save({ ...s, dryRun: !s.dryRun })
+            }} />
           </div>
-          {!s.dryRun && <p className="text-xs text-amber-600">{t('spybuild_live_warning')}</p>}
+          {!s.dryRun && (
+            <p className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+              <i className="fa-solid fa-triangle-exclamation mr-1" />{t('spybuild_live_warning')}
+            </p>
+          )}
           {num('targetPerCity', t('spybuild_target'))}
           {num('goldFloor', t('spybuild_gold_floor'))}
           {num('crystalFloor', t('spybuild_crystal_floor'))}
@@ -577,7 +590,7 @@ function CombatAlertsCard() {
     fetch('/api/alert-settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
-    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
+    }).then(r => { if (!r) return; setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
   }
 
   if (!s) return null
@@ -748,11 +761,11 @@ function EspionagemTab() {
   }
 
   const handleSaveThresholds = () => {
-    fetch('/api/espionage/settings', {
+    apiAction('/api/espionage/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ garrisonThresholdTotal: thresholdTotal, minLootTotal, ignoreExpiryDays, ignorePermanentAfter }),
-    }).then(() => {
+    }).then(r => { if (!r) return;
       setThSaved(true)
       setTimeout(() => setThSaved(false), 3000)
     }).catch(() => {})
@@ -879,10 +892,10 @@ function WatchlistCard() {
   const save = (next: typeof s) => {
     if (!next) return
     setS(next); setSaved(false)
-    fetch('/api/watchlist', {
+    apiAction('/api/watchlist', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
-    }).then(() => { setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
+    }).then(r => { if (!r) return; setSaved(true); setTimeout(() => setSaved(false), 3000) }).catch(() => {})
   }
 
   if (!s) return null

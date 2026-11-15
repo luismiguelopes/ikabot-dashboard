@@ -871,7 +871,11 @@ def _spy_is_stuck(t, now):
         return False
     try:
         from espionage_manager import has_live_mission
-        return not has_live_mission(t["target_city_id"], disp)
+        # ANY live mission on the target counts, whenever it was dispatched: the farm may be
+        # waiting on spies sent earlier (re-arming parked spies defers to a mission already
+        # in flight). Counting only missions dispatched after this round began called that
+        # wait "stuck" and restarted the round every ~25 min (Tróia 3, 15/11).
+        return not has_live_mission(t["target_city_id"], 0)
     except Exception:
         return False
 

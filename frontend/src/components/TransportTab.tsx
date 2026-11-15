@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { pushToast } from './ui/Toast'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
@@ -140,9 +141,13 @@ export function TransportTab() {
         body: JSON.stringify(wine),
       })
       const json = await res.json()
-      if (json.settings) setWine(json.settings)
+      if (!res.ok) {                       // it used to say "saved" on a 400/401/500
+        pushToast(json.error ?? t('transport_save_failed'), 'error')
+        return
+      }
+      if (json.settings) setWine(json.settings)   // keep the values the server clamped
       setWineSaved(true)
-    } catch { /* ignore */ } finally {
+    } catch { pushToast(t('transport_save_failed'), 'error') } finally {
       setWineSaving(false)
     }
   }
@@ -157,10 +162,14 @@ export function TransportTab() {
         body: JSON.stringify(wineBuy),
       })
       const json = await res.json()
-      if (json.settings) setWineBuy(json.settings)
+      if (!res.ok) {                       // it used to say "saved" on a 400/401/500
+        pushToast(json.error ?? t('transport_save_failed'), 'error')
+        return
+      }
+      if (json.settings) setWineBuy(json.settings)   // keep the values the server clamped
       setWineBuySaved(true)
       handlePreviewWineBuy()   // B4: refresh the plan against the new settings
-    } catch { /* ignore */ } finally {
+    } catch { pushToast(t('transport_save_failed'), 'error') } finally {
       setWineBuySaving(false)
     }
   }
@@ -259,9 +268,11 @@ export function TransportTab() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Erro')
+      if (json.settings) setConsolidate(c => c ? { ...c, ...json.settings } : c)
       setConsFeedback(t('transport_saved'))
     } catch (e: any) {
-      setConsFeedback(e.message)
+      // the green "saved" line used to show this text too — errors go to a red toast
+      pushToast(e.message || t('transport_save_failed'), 'error')
     } finally {
       setConsSaving(false)
     }
@@ -704,9 +715,13 @@ export function TransportTab() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setWineBuy({ ...wineBuy, dryRun: !wineBuy.dryRun })}
+                    onClick={() => {
+                      // leaving dry-run means real purchases with gold → ask first
+                      if (wineBuy.dryRun && !confirm(t('winebuy_live_confirm'))) return
+                      setWineBuy({ ...wineBuy, dryRun: !wineBuy.dryRun })
+                    }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      wineBuy.dryRun ? 'bg-amber-500' : 'bg-slate-300'}`}
+                      wineBuy.dryRun ? 'bg-emerald-500' : 'bg-red-500'}`}
                   >
                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                       wineBuy.dryRun ? 'translate-x-6' : 'translate-x-1'}`} />

@@ -651,3 +651,37 @@ def test_missions_carry_the_garrison_verdict(monkeypatch, tmp_path):
     for bad in ("failed", "errored", "none"):         # unknown, never "clean port"
         assert got[bad]["garrisonOk"] is False and got[bad]["enemyShips"] is None
     assert "garrisonOk" not in missions[0]             # stored missions are not touched
+
+
+# ── P13.34: queue position in the order the bot really works the targets ─────────
+
+def test_farm_queue_positions_follow_the_bots_order():
+    now = 10_000
+    t = lambda cid, **kw: dict({"target_city_id": cid, "enabled": True, "state": "IDLE",
+                                "next_run_at": 0, "last_loot": 0, "created_at": 1}, **kw)
+    targets = [
+        t("rich_later", last_loot=900000, next_run_at=now + 3600),     # rich but not due
+        t("due_poor", last_loot=50000),
+        t("due_rich", last_loot=300000),
+        t("loop", last_loot=10, mode="loop"),                           # loop jumps the due queue
+        t("spying", state="SPYING"),
+        t("off", enabled=False, last_loot=999999),
+    ]
+    flask_app._farm_queue_positions(targets, now=now)
+    order = [x["target_city_id"] for x in sorted((x for x in targets if "queue_pos" in x),
+                                                 key=lambda x: x["queue_pos"])]
+    assert order == ["spying", "loop", "due_rich", "due_poor", "rich_later"]
+    assert "queue_pos" not in targets[-1]
+
+
+def test_farm_settings_save_only_touches_the_keys_sent(monkeypatch, tmp_path):
+    """P13.37: toggling the ship reserve used to send (and store) the half-typed army draft,
+    and any save without spyAgents reset it to 1."""
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "FARM_SETTINGS_PATH", str(tmp_path / "farm_settings.json"))
+    c.post("/api/farm/army", json={"army": {"303": 200, "308": 0}, "spyAgents": 4})
+    d = c.post("/api/farm/army", json={"shipReserveEnabled": False}).get_json()
+    assert d["army"] == {"303": 200} and d["spyAgents"] == 4 and d["shipReserveEnabled"] is False
+    assert c.post("/api/farm/army", json={"army": {"303": "x"}}).status_code == 400
+    saved = json.load(open(flask_app.FARM_SETTINGS_PATH))
+    assert saved["army"] == {"303": 200}

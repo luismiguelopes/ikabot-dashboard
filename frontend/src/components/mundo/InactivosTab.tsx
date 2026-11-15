@@ -16,6 +16,28 @@ import type { CitySpyCounts, FarmTarget, LootStat, SpyMission } from './types'
 // (mirrors the farm's _SWEEP_REUSE_MAX_AGE). Fleet targets are always re-scouted regardless.
 const SAFE_SWEEP_VALID_MIN = 24 * 60
 
+// One line saying what the farm will do with a target next, and why.
+function farmLine(f: FarmTarget, t: (k: string, v?: Record<string, string | number>) => string): string {
+  const hhmm = (ts?: number) => ts ? new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+  const now = Date.now() / 1000
+  if (f.state === 'ATTACKING')
+    return f.attack_return_at ? t('farm_line_back', { t: hhmm(f.attack_return_at) }) : ''
+  if (f.state === 'SPYING') return t('farm_line_report')
+  const why: string[] = []
+  if (!f.swept_at) why.push(t('farm_line_unswept'))
+  else if (f.is_fleet_target === 1) {
+    const ships = f.last_enemy_ships || 0
+    const back = f.enemy_return_at && f.enemy_return_at > now ? ' ' + t('farm_line_fleet_back', { t: hhmm(f.enemy_return_at) }) : ''
+    why.push((ships > 0 ? t('farm_line_fleet_n', { n: ships }) : t('farm_line_fleet')) + back)
+  }
+  if (f.scout_fail_count) why.push(t('farm_line_fails', { n: f.scout_fail_count }))
+  if (f.scout_fail_rounds) why.push(t('farm_line_rounds', { n: f.scout_fail_rounds }))
+  const due = !f.next_run_at || f.next_run_at <= now
+  const act = f.next_action === 'attack' ? t('farm_line_attack') : t('farm_line_spy')
+  const when = due ? t('farm_line_now') : hhmm(f.next_run_at)
+  return [`${act} · ${when}`, ...why].join(' — ')
+}
+
 // ── EnrichedPlayer ────────────────────────────────────────────────────────────
 
 interface EnrichedPlayer extends WorldScanPlayer {
@@ -195,6 +217,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   }
 
   async function farmAction(cityId: string, body: Record<string, unknown>, remove = false) {
+    // Removing wipes the target's history (sweep, counters, tunables) and forces a new first
+    // full sweep if it is added again — one click used to do it.
+    if (remove && !confirm(t('farm_remove_confirm'))) return
     await apiAction(remove ? '/api/farm/remove' : '/api/farm/update', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetCityId: cityId, ...body }),
@@ -250,6 +275,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   }, [confirmModal])
 
   const handleIgnore = useCallback((p: EnrichedPlayer) => {
+    // The mark is per player+island and every click adds a strike (4 = permanent). On an
+    // active farm target the row does not hide, so repeated clicks used to stack strikes.
+    if (p.cityId && farmByCity[String(p.cityId)]?.enabled) {
+      pushToast(t('ignore_farm_target'), 'error')
+      return
+    }
     const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : p.pKey
     setIgnoredKeys(prev => new Set([...prev, ignoreKey]))
     apiAction('/api/world-scan/mark', {
@@ -257,7 +288,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playerId: p.playerId, cityId: p.cityId, islandX: p.islandX, islandY: p.islandY, status: 'ignorar', note: 'Ignorado manualmente' }),
     })
-  }, [])
+  }, [farmByCity, t])
 
   const ambiguousCityKeys = useMemo((): Set<string> => {
     if (!scanData?.players) return new Set()
@@ -271,18 +302,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   // the one mid-cycle target leads, then enabled IDLE targets by loot/hour desc. Drained
   // (disabled) targets get no position. Lets the unified list show #1, #2… inline.
   const queuePos = useMemo((): Record<string, number> => {
-    const DEFAULT_RT = 4 * 3600
-    const roundTrip = (f: FarmTarget) => ((f.last_troop_journey ?? 0) > 0 ? (f.last_troop_journey as number) * 2 : DEFAULT_RT)
-    const score = (f: FarmTarget) => (f.last_loot || 0) / Math.max(1, roundTrip(f))
-    const order = Object.values(farmByCity)
-      .filter(f => f.enabled)
-      .sort((a, b) => {
-        const aActive = a.state !== 'IDLE', bActive = b.state !== 'IDLE'
-        if (aActive !== bActive) return aActive ? -1 : 1
-        return score(b) - score(a)
-      })
+    // The position comes from the backend, in the order the bot really works the targets.
     const pos: Record<string, number> = {}
-    order.forEach((f, i) => { pos[String(f.target_city_id)] = i + 1 })
+    for (const f of Object.values(farmByCity))
+      if (f.enabled && f.queue_pos) pos[String(f.target_city_id)] = f.queue_pos
     return pos
   }, [farmByCity])
 
@@ -470,6 +493,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                 const hasReport   = p.mission?.state === 'DONE' && !!p.mission.result &&
                   !!(p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0)
                 const isActiveSpy = !!p.mission && _ACTIVE_SPY_STATES.has(p.mission.state)
+                // A farmed target is always expandable: its controls (run now, pause, remove, the
+                // tunables) used to be reachable only while the last mission was DONE with a
+                // report, and an open panel closed itself when a poll changed that.
+                const inFarm      = !!(p.cityId && farmByCity[String(p.cityId)])
 
                 return (
                   <React.Fragment key={p.cKey}>
@@ -499,6 +526,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                 {t(`farm_state_${f.state}`)}
                               </span>
                             )
+                          })()}
+                          {(() => {
+                            const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
+                            if (!f || !f.enabled) return null
+                            const line = farmLine(f, t)
+                            return line ? <span className="text-[10px] text-slate-500 leading-tight max-w-[11rem]">{line}</span> : null
                           })()}
                         </div>
                       </Td>
@@ -574,7 +607,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                       {/* Action buttons: report / force-warehouse / recall / ignore */}
                       <Td className="text-center px-1">
                         <div className="flex items-center justify-center gap-0.5">
-                          {hasReport ? (
+                          {(hasReport || inFarm) ? (
                             <button
                               onClick={() => setExpandedKey(prev => prev === p.cKey ? null : p.cKey)}
                               title={t('spy_report_title')}
@@ -647,11 +680,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                       </Td>
                     </tr>
 
-                    {isExpanded && p.mission?.state === 'DONE' && p.mission.result &&
-                      p.mission.result.resources && Object.keys(p.mission.result.resources).length > 0 && (
+                    {isExpanded && (hasReport || inFarm) && (
                       <tr className="bg-indigo-50/40 border-b border-indigo-200">
                         <td colSpan={9} className="px-5 py-4">
                           <div className="flex flex-col gap-3 max-w-2xl">
+                            {p.mission?.state === 'DONE' && p.mission.result && p.mission.result.resources &&
+                              Object.keys(p.mission.result.resources).length > 0 && (<>
                             {/* Warehouse */}
                             <div className="bg-white rounded-lg border border-emerald-200 px-4 py-3">
                               <p className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
@@ -731,6 +765,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               <p className="text-xs text-slate-400 italic px-1">{p.mission.garrisonResult.error}</p>
                             )}
 
+                            </>)}
+
                             {/* Real loot brought home from THIS city (F1.b) */}
                             {(() => {
                               const ls = lootByCity[lootKey(p.playerName, p.cityName)]
@@ -780,11 +816,6 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                       <FarmNumInput min={0} max={9999} value={f.max_enemy_ships ?? 0} className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right"
                                         onCommit={v => farmAction(String(p.cityId), { maxEnemyShips: v })} />
                                     </span>
-                                    <span className="flex items-center gap-1">
-                                      {t('farm_respy')}
-                                      <FarmNumInput min={1} max={50} value={f.respy_every ?? 1} className="w-12 border border-slate-200 rounded px-1 py-0.5 text-right"
-                                        onCommit={v => farmAction(String(p.cityId), { respyEvery: v })} />
-                                    </span>
                                     {f.is_fleet_target === 1 && (
                                       <>
                                         <span className="flex items-center gap-1" title={t('farm_fleetlead_hint')}>
@@ -802,7 +833,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                   </div>
                                   <div className="ml-auto flex items-center gap-3">
                                     <button onClick={() => farmAction(String(p.cityId), { runNow: true })}
-                                            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium" title={t('farm_runnow')}>
+                                            disabled={f.state === 'ATTACKING'}
+                                            className="text-xs text-indigo-500 hover:text-indigo-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed" title={f.state === 'ATTACKING' ? t('farm_runnow_busy') : t('farm_runnow')}>
                                       <i className="fa-solid fa-bolt mr-1" />{t('farm_runnow')}
                                     </button>
                                     <button onClick={() => farmAction(String(p.cityId), { enabled: !f.enabled })}

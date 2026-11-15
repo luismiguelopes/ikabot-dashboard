@@ -519,6 +519,28 @@ def test_sync_does_not_duplicate_known_stationed_spies(monkeypatch):
     assert h["missions"][2].get("syntheticFromSafehouse") is True
 
 
+def test_sync_does_not_reregister_spies_parked_after_a_failed_mission(monkeypatch):
+    """Tróia 3, 15/11: the parked spy's last mission was FAILED with every agent kept. Each
+    hourly safehouse sync then took it for a new manual spy, created a synthetic mission and
+    ran a warehouse inspection on its own — outside the farm's control, during its backoff."""
+    h = _patch(monkeypatch, [
+        _mission(state="FAILED", targetCityId="200",
+                 error="Missão falhada no jogo — 0/1 agentes perdidos, espião continua estacionado"),
+        _mission(state="EXECUTING_MOVEMENTS", targetCityId="300"),        # movements leg is live
+        _mission(state="FAILED", targetCityId="400",
+                 error="Espião não encontrado ao tentar executar — possivelmente detectado"),
+        _mission(state="RECALLED", targetCityId="500"),
+    ])
+    em._sync_active_spy_missions(
+        [{"cityId": c, "x": i, "y": i, "cityName": c, "state": "WAITING_AT_CITY"}
+         for i, c in enumerate(("200", "300", "400", "500"))],
+        origin_city_id="1")
+    added = [m["targetCityId"] for m in h["missions"][4:]]
+    # 200 and 300 are known spies; 400's were lost and 500's recalled, so spies seen there
+    # now really are new ones
+    assert added == ["400", "500"]
+
+
 # ── reexecute_stationed_spy: reuse a parked spy instead of sending a fresh one ────
 
 def test_reexecute_rearms_a_failed_mission(monkeypatch):

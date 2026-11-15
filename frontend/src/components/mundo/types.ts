@@ -12,7 +12,12 @@ export interface FarmTarget {
   last_troop_journey?: number  // round-trip basis for the loot/hour queue score
   // Per-target tunables (editable inline, posted to /api/farm/update)
   min_loot?: number; max_enemy_ships?: number
-  is_fleet_target?: number; fleet_lead_min?: number; disperse_min?: number
+  is_fleet_target?: number; fleet_lead_min?: number; disperse_min?: number  // What the farm is doing and why (shown under the state pill) — all come from /api/farm.
+  next_action?: string; attack_return_at?: number; swept_at?: number; last_spy_at?: number
+  scout_fail_count?: number; scout_fail_rounds?: number
+  last_enemy_ships?: number; enemy_return_at?: number
+  total_loot?: number; loot_returns?: number
+  queue_pos?: number      // position in the order the bot really works the targets
 }
 export interface LootStat {
   from_player: string; from_city?: string; raids: number; last_ts: number; total: number

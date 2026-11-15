@@ -277,8 +277,17 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
     # known — matching only TRAVELING/WAITING missed spies whose mission had progressed to
     # EXECUTING/DONE, so every counts refresh created a DUPLICATE synthetic entry (and each
     # duplicate fired another warehouse mission — seen live 2026-07-18).
-    _KNOWN_STATES = ("TRAVELING", "WAITING_AT_CITY", "WAITING_FOR_GARRISON",
-                     "EXECUTING_WAREHOUSE", "EXECUTING_GARRISON", "DONE")
+    # Every live state counts (the movements leg was missing: a sync during it duplicated
+    # the spy), plus DONE (parked after a clean run).
+    _KNOWN_STATES = _LIVE_MISSION_STATES + ("DONE",)
+
+    def _still_parked_after_failure(m):
+        """FAILED, but the game said the agents are still there (mission failed without
+        losses, executeMission refused, report never arrived). These spies ARE known: seeing
+        them in the safehouse must not register a "new manual spy" — that created a fresh
+        synthetic mission on every hourly sync, and each one ran a warehouse inspection on
+        its own, outside the farm's control and on top of its backoff (Tróia 3, 15/11)."""
+        return m.get("state") == "FAILED" and not _spy_pool_gone(m.get("error"))
 
     for entry in active_entries:
         ex     = entry.get("x")
@@ -289,7 +298,9 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
         match_idx = None
         known = False
         for idx, m in enumerate(missions):
-            if m.get("state") not in _KNOWN_STATES or m.get("recalledAt"):
+            if m.get("recalledAt") or m.get("state") == "RECALLED":
+                continue
+            if m.get("state") not in _KNOWN_STATES and not _still_parked_after_failure(m):
                 continue
             if str(m.get("originCityId", "")) != str(origin_city_id):
                 continue

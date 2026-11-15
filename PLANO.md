@@ -1230,19 +1230,19 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
     farm. É o fail-open que o P12.3 fechou no bot e ficou aberto na UI.
   - Correcção: o backend devolve `enemyShips`/`garrisonOk` por missão (fonte única, resolve com o
     P13.7); a UI deixa de classificar unidades.
-- [ ] **P13.34 O operador não vê o que o farm está a fazer** **[C]** — só aparece a pill do
+- [x] **P13.34 O operador não vê o que o farm está a fazer** **[C]** ✅ 2026-11-15 (linha "próx.: espiar/atacar · hora — motivo" por baixo do estado: nunca varrido, alvo de frota e navios vistos, scouts falhados, rondas saltadas, regresso das tropas; `queue_pos` vem do `/api/farm` na ordem real do bot; campo morto "re-espiar a cada N" removido) — só aparece a pill do
       estado. `next_run_at` está no tipo e não é mostrado; `attack_return_at`, `swept_at`,
       `scout_fail_count`, `last_enemy_ships`, `enemy_return_at`, `last_spy_at`, `low_raids` vêm no
       `/api/farm` mas nem estão no tipo. Acrescentar uma linha "próxima acção / motivo"
       ("à espera · 14:32", "nunca varrido → scout completo", "scout falhou 2×", "frota vista: N
       navios, regressa às HH:MM"). O número "#1" da fila (linhas 280-294) não usa a chave real do
       bot (devidos primeiro, `loop` à frente, desempate por criação) — devolver a posição pelo API.
-- [ ] **P13.35 Controlos do farm inacessíveis a meio de um scout** **[C]** — a linha só expande se
+- [x] **P13.35 Controlos do farm inacessíveis a meio de um scout** **[C]** ✅ 2026-11-15 (um alvo no farm é sempre expansível; o relatório só aparece quando existe) — a linha só expande se
       a última missão for DONE com recursos (linhas 588-598, 661); "correr agora", pausar, remover e
       os parâmetros vivem lá dentro. Com o espião em viagem ou FAILED não há controlos, e um painel
       aberto fecha-se sozinho quando o poll de 30s muda o estado. Tornar a linha expansível sempre
       que o alvo esteja no farm.
-- [ ] **P13.36 Acções destrutivas sem confirmação nem guarda** **[C]**
+- [~] **P13.36 Acções destrutivas sem confirmação nem guarda** **[C]** *parte feita 2026-11-15* (remover do farm pede confirmação; ignorar é recusado num alvo activo do farm; "correr agora" desactivado com tropas fora e recusado pelo backend. **Falta:** confirmação ao cancelar ataque)
   - Remover do farm (linhas 649 e 819): um clique, apaga a linha (`swept_at`, contagens,
     parâmetros) e obriga a novo primeiro varrimento.
   - 🚫 Ignorar (linhas 259-267): esconde uma cidade na UI mas o backend marca **jogador+ilha** e
@@ -1251,7 +1251,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
   - "Correr agora" (linha 810) disponível em qualquer estado; o backend força IDLE com tropas ou
     espiões fora (ver P13.31).
   - Cancelar ataque sem confirmação e activo mesmo já "a despachar".
-- [ ] **P13.37 Gravações que dizem "ok" sem verificar** **[C]** — `FarmSettings.tsx` (45-61),
+- [~] **P13.37 Gravações que dizem "ok" sem verificar** **[C]** *parte feita 2026-11-15* (`/api/farm/army` só mexe nas chaves enviadas — `army` e `spyAgents` deixaram de ser substituídos em todos os POST. **Falta:** `apiAction` no `FarmSettings`, `DispatchPanel` e toggles do `MundoPage`) — `FarmSettings.tsx` (45-61),
       "adicionar ao farm" em `DispatchPanel.tsx` (309-325), os toggles de `MundoPage.tsx` (67-103)
       e o "des-ignorar" não olham para `res.ok`. Pior: qualquer gravação em `FarmSettings` (toggle
       da reserva, sair do campo dos espiões, gravar frota) envia o **rascunho** do exército, e o
@@ -1361,13 +1361,13 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       item e recusar com 409 se não bater (resolve-se com o P13.12). O "+" rápido em
       `BuildingsPage` só aparece em hover (inalcançável em ecrã táctil) e enfileira sem aviso;
       aplicar um modelo faz um POST por linha e não actualiza a fila.
-- [ ] **P13.48 Acções que gastam recursos sem confirmação** **[C]** — desligar o `dryRun` do
+- [x] **P13.48 Acções que gastam recursos sem confirmação** **[C]** ✅ 2026-11-15 (sair do modo de teste pede confirmação no treino de espiões e no comprador de vinho; aviso vermelho enquanto está ao vivo; o toggle do comprador fica verde em teste e vermelho ao vivo. **Falta só:** o preview deixar de substituir o status da última compra real) — desligar o `dryRun` do
       treino de espiões faz POST imediato (150 ouro + 40 cristal por espião, até `maxPerPass` por
       passagem). No comprador de vinho o toggle fica **cinzento quando está a gastar ouro** e
       âmbar quando é seguro — o contrário de um sinal de perigo — e não há aviso de "ao vivo".
       Confirmar a passagem para ao vivo e mostrar um aviso vermelho enquanto estiver ligado.
       Cada gravação do comprador dispara um preview que **substitui** o status da última compra real.
-- [ ] **P13.49 "Guardado" sem verificar a resposta** **[C]** — nenhum destes ficheiros usa o
+- [~] **P13.49 "Guardado" sem verificar a resposta** **[C]** *parte feita 2026-11-15* (`SettingsPage`: as 5 gravações passam pelo `apiAction` e só dizem "guardado" com 2xx; `TransportTab`: vinho, compra de vinho e consolidação mostram o erro a vermelho e ficam com o valor que o servidor limitou. **Falta:** o erro das notificações mostrado como "webhook inválido") — nenhum destes ficheiros usa o
       `apiAction`; quase todas as gravações mostram sucesso com 400/401/500 (`TransportTab`
       142-161, `SettingsPage` 190, 307, 580, 755, 885). O feedback da consolidação aparece
       sempre a verde, mesmo quando é um erro. Um erro qualquer ao gravar notificações é mostrado
@@ -1606,6 +1606,13 @@ com o farm, pára e passa para o Fable.
 fechada: aos itens de 14/11 juntaram-se P13.63, P13.62, P13.1-resto (hora real do relatório),
 P13.24, P13.27 e P13.28. O que resta do P13 é a tabela do Opus, sem dependências pendentes
 (P13.33 e P13.47 estão desbloqueados: o API já dá `garrisonResult.fleet` e ids na fila).
+**Achado ao vivo (15/11, Tróia 3) — corrigido:** a cada leitura horária das casas de espionagem,
+um espião estacionado cuja última missão tinha FALHADO sem perder agentes era registado como
+"espião manual novo" → missão sintética → inspecção ao armazém por conta própria, fora do
+controlo do farm e em cima do recuo dele. `_sync_active_spy_missions` passou a reconhecer esses
+espiões (e todos os estados vivos, incluindo a perna de movimentos). No mesmo incidente: esperar
+por espiões despachados antes da ronda era lido como "espião não chegou a partir" e a ronda
+recomeçava de 25 em 25 min — `_spy_is_stuck` conta agora qualquer missão viva no alvo.
 Achado lateral corrigido: `_auto_mark_ignored` rebentava com `NameError` no caminho de recurso
 em JSON (`atomic_write_json` não importado) — apanhado com `pyflakes`, que vale a pena correr
 no P13.45/P13.60.

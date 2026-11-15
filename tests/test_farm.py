@@ -2467,3 +2467,17 @@ def test_total_loot_comes_from_the_loot_log(monkeypatch, tmp_path):
     assert (vii["total_loot"], vii["loot_returns"]) == (900, 1)
     assert {t["target_city_id"]: t["total_loot"] for t in db_manager.farm_list()} == \
         {"100": 157000, "200": 900}
+
+
+def test_waiting_on_spies_sent_earlier_is_not_a_stuck_round(monkeypatch):
+    """Re-arming parked spies defers to a mission already in flight — one dispatched BEFORE
+    this round began. That wait used to be read as "the spy never left" and the round was
+    restarted every ~25 minutes (Tróia 3, 15/11)."""
+    import espionage_manager as em
+    now = int(time.time())
+    missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": now - 2 * 3600}]
+    monkeypatch.setattr(em, "_load_missions", lambda: {"missions": missions})
+    t = {"target_city_id": "100", "spy_dispatched_at": now - fm._SPY_STUCK_GRACE - 60}
+    assert fm._spy_is_stuck(t, now) is False
+    missions[0]["state"] = "FAILED"
+    assert fm._spy_is_stuck(t, now) is True
