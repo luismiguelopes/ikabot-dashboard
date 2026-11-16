@@ -84,7 +84,13 @@ def _parse_journey_times(form_raw):
     Robust to the AJAX escaping (\\" and \\n) since it keys off digits, not quotes."""
     import re
     transport = None
-    m = re.search(r'missionController\((?:\D*?\d+){2}\D*?(\d+)', form_raw)
+    # The CALL — `new missionController(266, 620, 6692, …)` — not the definition that precedes
+    # it on the page, `function missionController(freeTrans, transporterCapacity, …)`: the old
+    # pattern matched the definition and took unrelated digits from further down the script
+    # (seen on the real form: 0, so the callers fell back to the unit times by luck).
+    ws = r'(?:\\n|\\r|\\t|\s)*'
+    m = re.search(r'missionController\(' + ws + r'\d+' + ws + ',' + ws + r'\d+' + ws + ','
+                  + ws + r'(\d+)', form_raw)
     if m:
         transport = int(m.group(1))
     units = {}
@@ -131,9 +137,9 @@ def fetch_troop_journey(session, ikabot_config, origin_id, target_id):
     """Real one-way travel time (secs) of a sea pillage (troops on trade ships) from origin
     to target, read from the plunder form's transportJourneyTime. None if unreadable."""
     transport, units = _parse_journey_times(_fetch_form_raw(session, ikabot_config, "plunder", origin_id, target_id))
-    if transport:
-        return transport
-    return max(units.values()) if units else None
+    # The slowest thing on board sets the pace: never shorter than the slowest unit.
+    times = ([transport] if transport else []) + list(units.values())
+    return max(times) if times else None
 
 
 def _fetch_plunder_form(session, ikabot_config, origin_id, target_id):

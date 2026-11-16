@@ -1830,3 +1830,28 @@ valor ilegível na espionagem é ignorado em vez de dar 500.
   `smart_sleep`/fila, deixei para não misturar com a janela horária única) e
   `watchlist_settings.json`.
 
+
+**4. P13.44 (2)–(5) e P13.43** ✅ 16/11 — (3) e (5) já estavam cobertos (`test_espionage_state_machine`,
+`test_smart_sleep_steps`). Novo: `tests/test_seams.py` — (2) colector REAL + farm sobre a captura
+do conselheiro militar (leitura falhada não decide nada; saque visto liberta; só pilhagem vista
+vazia marca alvo de frota) e (4) vários escritores em simultâneo nas missões e na fila de
+construção. `tests/test_forms_real.py` + `tests/fixtures/plunder_form.json` / `blockade_form.json`
+(capturas de 16/11, anonimizadas): upkeeps, função, payloads e tempos de viagem.
+**Bug apanhado pelas fixtures:** `_parse_journey_times` lia a DEFINIÇÃO `function missionController(…)`
+em vez da chamada e devolvia 0; só funcionava porque o chamador recorria aos tempos por unidade.
+Corrigido (lê a chamada; a viagem das tropas é o máximo entre navios e unidade mais lenta).
+Não altera nenhum pedido ao jogo. **678 testes.**
+
+**5. Tróia 3 (K.7)** — as falhas em série pararam: 43 linhas de falha/dia a 14 e 15/11, 5 a 16/11;
+a 16/11 às 07:03 o varrimento completo passou e a vaga trouxe 43.947.
+⚠️ **POR INVESTIGAR (Fable), não corrigido:** dois regressos VAZIOS a 16/11.
+- **Tróia 3 13:12** — "só tropas, frota dispersa até ~118min". O relatório de movimentos (12:44)
+  deu "regressa em ~145min" (→15:09), mas o bloqueio chegou às 10:09 e a regra das 4 h dá 14:09:
+  exactamente **1 h de diferença**. Hipótese forte: `parse_fleet_movements` /
+  `_parse_movement_datetime` usa `time.mktime` (hora local) numa hora do **relógio do servidor
+  (Lisboa +1h)** — o `report_epoch` já converte, este não. As tropas chegaram ~14:50, com a frota
+  de volta desde ~14:09. Confirmar com o HTML de um relatório de movimentos e corrigir com teste.
+- **ATHLÉTICO 09:31 e 13:45** — duas vagas só de tropas após varrimento "porto limpo"
+  (guarnição: 16 unidades em 2 tipos, movimentos limpos), ambas regressaram vazias com ~1,1M no
+  armazém. Não é a frota: ver o que são as 16 unidades (muralha/defesa que as tropas não vencem?)
+  e se a secção "Frotas em" veio vazia. Até lá o alvo fica como de frota e volta a ser varrido.
