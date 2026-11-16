@@ -981,17 +981,24 @@ def _garrison_view(mission):
     known = (isinstance(g, dict) and g.get("success", True) is not False
              and isinstance(g.get("troops"), dict) and g.get("error") is None)
     if not known:
-        return {"garrisonOk": False, "enemyShips": None, "enemyTroops": None}
+        return {"garrisonOk": False, "enemyShips": None, "enemyCombatShips": None,
+                "enemyTroops": None}
     troops = g["troops"]
     total = sum(int(v or 0) for v in troops.values())
     fleet = g.get("fleet")
     if isinstance(fleet, dict):
         ships = sum(int(v or 0) for v in fleet.values())
         land = sum(int(v or 0) for k, v in troops.items() if k not in fleet)
+        flee = sum(int(v or 0) for k, v in fleet.items() if _is_flee_ship(k))
     else:                                  # report stored before the fleet section was kept
         ships = _seed_garrison_fleet_count(troops)
         land = total - ships
-    return {"garrisonOk": True, "enemyShips": ships, "enemyTroops": land}
+        flee = _seed_garrison_fleet_count({k: v for k, v in troops.items() if _is_flee_ship(k)})
+    # enemyCombatShips: ships that FIGHT a blockade (everything but lancha/reparador). The farm
+    # blockades a harbour of flee ships, but skips one with more combat ships than the target's
+    # max_enemy_ships — the page must not promise a blockade for those.
+    return {"garrisonOk": True, "enemyShips": ships, "enemyCombatShips": ships - flee,
+            "enemyTroops": land}
 
 
 @app.route("/api/espionage/missions")
@@ -1245,9 +1252,31 @@ def api_farm_list():
     if not _db:
         return jsonify([])
     try:
-        return jsonify(_farm_queue_positions(_db.farm_list()))
+        return jsonify(_farm_empty_returns(_farm_queue_positions(_db.farm_list())))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _farm_empty_returns(targets):
+    """Add `empty_returns`: how many of each target's latest recorded returns came home with
+    nothing, in a row (the count farm_manager pauses a target on — emptyReturnStrikes). Lets
+    the page say WHY a target is off instead of just showing it disabled."""
+    try:
+        rows = _db.get_loot_log(limit=1000)            # newest first
+    except Exception:
+        rows = []
+    streak, closed = {}, set()
+    for r in rows:
+        cid = str(r.get("from_city_id") or "")
+        if not cid or cid in closed:
+            continue
+        if sum(int(r.get(k, 0) or 0) for k in ("wood", "wine", "marble", "crystal", "sulfur")) > 0:
+            closed.add(cid)
+        else:
+            streak[cid] = streak.get(cid, 0) + 1
+    for t in targets:
+        t["empty_returns"] = streak.get(str(t.get("target_city_id")), 0)
+    return targets
 
 
 def _farm_queue_positions(targets, now=None):
@@ -1339,6 +1368,18 @@ _SEED_NAVAL_KEYWORDS = (
     "chamas", "ariete a vapor", "trirreme", "balista", "barco catapulta",
     "barco morteiro", "foguetes", "submergivel", "lancha", "porta-bal", "reparador",
 )
+
+
+# Ships that run from a blockade instead of fighting it — a MIRROR of
+# attack_manager._FLEE_SHIP_NAMES (test_flee_ship_names_mirror_attack_manager keeps them equal).
+_FLEE_SHIP_KEYWORDS = ("lancha", "reparador")
+
+
+def _is_flee_ship(name):
+    import unicodedata
+    norm = ''.join(c for c in unicodedata.normalize('NFD', str(name).lower())
+                   if unicodedata.category(c) != 'Mn')
+    return any(k in norm for k in _FLEE_SHIP_KEYWORDS)
 
 
 def _seed_garrison_fleet_count(troops):

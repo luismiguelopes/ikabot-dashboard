@@ -19,6 +19,7 @@ export interface FarmTarget {
   total_loot?: number; loot_returns?: number
   clean_sweeps?: number
   queue_pos?: number      // position in the order the bot really works the targets
+  empty_returns?: number  // latest returns in a row that came home with nothing
 }
 export interface LootStat {
   from_player: string; from_city?: string; from_city_id?: string; raids: number; last_ts: number; total: number
@@ -35,7 +36,7 @@ export interface SpyMission {
   garrisonExecuteAfter: number | null; garrisonExecutedAt: number | null
   missionType: string | null; result: SpyMissionResult | null; garrisonResult: SpyGarrisonResult | null; error?: string
   // Decided by the backend (one source for "is there a fleet"): never classify units in the browser.
-  garrisonOk?: boolean; enemyShips?: number | null; enemyTroops?: number | null
+  garrisonOk?: boolean; enemyShips?: number | null; enemyCombatShips?: number | null; enemyTroops?: number | null
   /** Epoch of the oldest leg when warehouse + garrison + movements all succeeded; null/undefined otherwise. */
   fullSweepAt?: number | null
 }

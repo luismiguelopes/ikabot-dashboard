@@ -971,3 +971,49 @@ def test_espionage_settings_junk_is_ignored_not_a_500(monkeypatch, tmp_path):
     s = r.get_json()["settings"]
     assert s["minLootTotal"] == 12000 and s["garrisonThresholdTotal"] == 0
     assert s["ignoreExpiryDays"] == 60 and s["processingEnabled"] is True
+
+
+# ── Combat ships vs. flee ships, and "paused after empty returns" — decided by the API ──
+
+def test_garrison_view_splits_combat_ships_from_flee_ships():
+    """The Targets page promised "the farm blockades first" for every harbour with ships; that
+    is only true for ships that flee. Warships that fight make the farm skip the target."""
+    view = lambda fleet: flask_app._garrison_view(
+        {"garrisonResult": {"success": True, "troops": dict(fleet), "fleet": fleet}})
+    assert view({"Lancha rápida": 2, "Reparador": 1})["enemyCombatShips"] == 0
+    v = view({"Lancha rápida": 2, "Submergível": 13, "Navio desconhecido": 1})
+    assert v["enemyShips"] == 16 and v["enemyCombatShips"] == 14     # unknown ship = it fights
+    # report stored before the fleet section was kept: ships recognised by name
+    old = flask_app._garrison_view({"garrisonResult": {
+        "success": True, "troops": {"Hoplita": 5, "Trirreme": 3, "Lancha rápida": 1}}})
+    assert old["enemyShips"] == 4 and old["enemyCombatShips"] == 3
+    assert flask_app._garrison_view({"garrisonResult": None})["enemyCombatShips"] is None
+
+
+def test_flee_ship_names_mirror_attack_manager():
+    import ast
+    with open(os.path.join(_ROOT, "bot", "attack_manager.py")) as f:
+        tree = ast.parse(f.read())
+    flee = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "_FLEE_SHIP_NAMES" for t in node.targets)):
+            flee = ast.literal_eval(node.value)
+    assert flee is not None and set(flee) == set(flask_app._FLEE_SHIP_KEYWORDS)
+
+
+def test_farm_list_counts_empty_returns_in_a_row(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "targetPlayer": "J"})
+    db_manager.farm_add({"targetCityId": "200", "targetCityName": "Outro", "targetPlayer": "K"})
+    log = lambda cid, ts, wood, key: db_manager.log_loot({
+        "ts": ts, "fromCity": "x", "fromCityId": cid, "fromPlayer": "J",
+        "resources": [wood, 0, 0, 0, 0], "returnKey": key})
+    log("100", 1000, 5000, "a")
+    log("100", 2000, 0, "b")
+    log("100", 3000, 0, "c")
+    log("200", 2500, 0, "d")
+    log("200", 3500, 700, "e")
+    got = {t["target_city_id"]: t for t in c.get("/api/farm").get_json()}
+    assert got["100"]["empty_returns"] == 2
+    assert got["200"]["empty_returns"] == 0

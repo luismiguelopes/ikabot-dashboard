@@ -18,6 +18,10 @@ export interface ConsolidateSettings {
   minSendTotal:  number
   shipType:      'transporters' | 'freighters' | 'both'
   ignoreCityIds: string[]
+  /** Resources never sent, by the bot's names: Wood, Wine, Marble, Crystal, Sulfur. */
+  skipResources?: string[]
+  /** Never send more than the destination warehouse can still hold (default on). */
+  respectDestCap?: boolean
   lastRun?:      number
   lastSent?:     Record<string, number>
 }

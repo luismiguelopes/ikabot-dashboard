@@ -14,6 +14,12 @@ const SHIP_LABEL = {
   both: 'transport_ship_type_both',
 } as const
 
+// The bot's own resource names (transport_manager._RESOURCES_ENG) and their labels.
+const SKIPPABLE = [
+  ['Wood', 'res_name_wood'], ['Wine', 'res_name_wine'], ['Marble', 'res_name_marble'],
+  ['Crystal', 'res_name_crystal'], ['Sulfur', 'res_name_sulfur'],
+] as const
+
 // Periodic consolidation of resources into one city.
 export function ConsolidateCard({ ownCities }: { ownCities: OwnCity[] }) {
   const t    = useT()
@@ -101,6 +107,38 @@ export function ConsolidateCard({ ownCities }: { ownCities: OwnCity[] }) {
                     )
                   })}
               </div>
+            </div>
+
+            <div>
+              <span className={LABEL_CLS}>{t('transport_consolidate_skip')}</span>
+              <p className="text-xs text-slate-400 mb-2">{t('transport_consolidate_skip_hint')}</p>
+              <div className="flex flex-wrap gap-2">
+                {SKIPPABLE.map(([name, label]) => {
+                  const cur = c.skipResources || []
+                  const on = cur.includes(name)
+                  return (
+                    <button
+                      key={name}
+                      aria-pressed={on}
+                      onClick={() => set({ skipResources: on ? cur.filter(x => x !== name) : [...cur, name] })}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        on
+                          ? 'bg-amber-500 text-white border-amber-500'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-amber-300'
+                      }`}
+                    >
+                      {on && <i className="fa-solid fa-ban mr-1" />}
+                      {t(label)}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div>
+              <ToggleLabel on={c.respectDestCap ?? true} onChange={v => set({ respectDestCap: v })}
+                label={t('transport_consolidate_cap')} />
+              <p className="text-xs text-slate-400 mt-1">{t('transport_consolidate_cap_hint')}</p>
             </div>
 
             <div className="text-xs text-slate-400">

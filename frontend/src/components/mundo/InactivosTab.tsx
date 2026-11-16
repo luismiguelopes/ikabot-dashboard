@@ -48,6 +48,7 @@ interface EnrichedPlayer extends WorldScanPlayer {
   totalResources: number | null
   hasTroops: boolean | null   // null = no garrison data; false = clear; true = has troops
   hasShips: boolean | null
+  combatShips: number   // ships that fight a blockade (0 when unknown) — from the backend
   priority: number
   cKey: string  // cityId (or fallback) — mission/dispatched lookup, unique per city
   pKey: string  // `${playerId}_${islandX}_${islandY}` — mark/ignore key (per player+island)
@@ -358,6 +359,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       let totalResources: number | null = null
       let hasTroops: boolean | null = null
       let hasShips: boolean | null = null
+      let combatShips = 0
 
       if (mission?.state === 'DONE' && mission.result) {
         const res = mission.result.resources
@@ -367,6 +369,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         if (mission.garrisonOk) {
           hasTroops = (mission.enemyTroops ?? 0) > 0
           hasShips = (mission.enemyShips ?? 0) > 0
+          combatShips = mission.enemyCombatShips ?? 0
         }
       }
 
@@ -387,7 +390,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
 
       const realLoot = realLootOf(p)
       const realPerRaid = realLoot && realLoot.raids > 0 ? Math.round(realLoot.total / realLoot.raids) : null
-      return { ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey, realLoot, realPerRaid }
+      return { ...p, mission, totalResources, hasTroops, hasShips, combatShips, priority, cKey, pKey, realLoot, realPerRaid }
     }
 
     // 1) Inactive players discovered by the world scan.
@@ -583,7 +586,11 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           })()}
                           {(() => {
                             const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
-                            if (!f || !f.enabled) return null
+                            if (!f) return null
+                            // a target switched off after waves that came home empty says so
+                            if (!f.enabled) return f.empty_returns
+                              ? <span className="text-[10px] text-red-600 leading-tight max-w-[11rem]">{t('farm_line_paused_empty', { n: f.empty_returns })}</span>
+                              : null
                             const line = farmLine(f, t)
                             return line ? <span className="text-[10px] text-slate-500 leading-tight max-w-[11rem]">{line}</span> : null
                           })()}
@@ -924,9 +931,15 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                               {/* Ships in port (priority 5) can be farmed too (P13.41): the farm blockades
                                   first. They used to be addable only from the Combat search. */}
                               {p.priority === 5 && p.cityId && !farmIds.has(String(p.cityId)) && (
-                                <span className="mr-auto text-[11px] text-amber-700 flex items-center gap-1">
-                                  <i className="fa-solid fa-anchor" />{t('farm_add_fleet_note')}
-                                </span>
+                                p.combatShips > 0 ? (
+                                  <span className="mr-auto text-[11px] text-red-700 flex items-center gap-1">
+                                    <i className="fa-solid fa-triangle-exclamation" />{t('farm_add_combat_note', { n: p.combatShips })}
+                                  </span>
+                                ) : (
+                                  <span className="mr-auto text-[11px] text-amber-700 flex items-center gap-1">
+                                    <i className="fa-solid fa-anchor" />{t('farm_add_fleet_note')}
+                                  </span>
+                                )
                               )}
                               {(p.priority === 6 || p.priority === 5) && p.cityId && (
                                 farmIds.has(String(p.cityId)) ? (

@@ -20,6 +20,12 @@ export function FarmSettings() {
   const [reserveHorizon, setReserveHorizon] = useState(45)
   const [earlyRespy,     setEarlyRespy]     = useState(true)
   const [farmArmySaved,  setFarmArmySaved]  = useState(false)
+  // Advanced rules (P13.30): numbers the bot already read from farm_settings.json but that had
+  // no field. `lootCap` is the MANUAL ceiling (0 = learn); `lootCapEffective` is what is in use.
+  const [adv, setAdv] = useState({
+    spyFreshnessHours: 24, earlyReportMaxAgeMins: 120, minShipFraction: 0.5,
+    fleetDemoteAfterSweeps: 3, emptyReturnStrikes: 2, lootCap: 0, lootCapEffective: 0,
+  })
 
   const loadAll = useCallback(() => {
     fetch('/api/military').then(r => r.json()).then(setMilitary).catch(() => {})
@@ -30,6 +36,15 @@ export function FarmSettings() {
       setShipReserve(data?.shipReserveEnabled ?? true)
       setReserveHorizon(data?.reserveHorizonMin ?? 45)
       setEarlyRespy(data?.earlyRespyEnabled ?? true)
+      setAdv(prev => ({
+        spyFreshnessHours:      data?.spyFreshnessHours ?? prev.spyFreshnessHours,
+        earlyReportMaxAgeMins:  data?.earlyReportMaxAgeMins ?? prev.earlyReportMaxAgeMins,
+        minShipFraction:        data?.minShipFraction ?? prev.minShipFraction,
+        fleetDemoteAfterSweeps: data?.fleetDemoteAfterSweeps ?? prev.fleetDemoteAfterSweeps,
+        emptyReturnStrikes:     data?.emptyReturnStrikes ?? prev.emptyReturnStrikes,
+        lootCap:                data?.lootCapPerRaidManual ?? prev.lootCap,
+        lootCapEffective:       data?.lootCapPerRaid ?? prev.lootCapEffective,
+      }))
     }).catch(() => {})
   }, [])
 
@@ -49,6 +64,18 @@ export function FarmSettings() {
     if ('fleet' in patch)             setFarmFleet(d.fleet ?? {})
     if ('spyAgents' in patch)         setFarmSpyAgents(d.spyAgents ?? 1)
     if ('reserveHorizonMin' in patch) setReserveHorizon(d.reserveHorizonMin ?? 45)
+    // the stored (clamped) advanced values; settings.lootCapPerRaid is the manual ceiling
+    const st = d.settings
+    if (st) setAdv(prev => ({
+      ...prev,
+      spyFreshnessHours:      st.spyFreshnessHours ?? prev.spyFreshnessHours,
+      earlyReportMaxAgeMins:  st.earlyReportMaxAgeMins ?? prev.earlyReportMaxAgeMins,
+      minShipFraction:        st.minShipFraction ?? prev.minShipFraction,
+      fleetDemoteAfterSweeps: st.fleetDemoteAfterSweeps ?? prev.fleetDemoteAfterSweeps,
+      emptyReturnStrikes:     st.emptyReturnStrikes ?? prev.emptyReturnStrikes,
+      lootCap:                st.lootCapPerRaid ?? prev.lootCap,
+    }))
+    if ('lootCapPerRaid' in patch) loadAll()   // the ceiling in use is computed by the server
     setFarmArmySaved(true)
     return true
   }
@@ -69,6 +96,18 @@ export function FarmSettings() {
   Object.values(military?.byCityName ?? {}).forEach(c => {
     Object.entries(c.fleet ?? {}).forEach(([uid, u]) => { fleetTypes[uid] = u.name })
   })
+
+  const fleetEmpty = !Object.values(farmFleet).some(v => v > 0)
+
+  const advRow = (label: string, hint: string, field: React.ReactNode) => (
+    <div className="flex items-start justify-between gap-3 py-1.5">
+      <div className="min-w-0">
+        <div className="text-xs text-slate-600">{label}</div>
+        <div className="text-xs text-slate-400">{hint}</div>
+      </div>
+      <div className="shrink-0 flex items-center gap-1 text-xs text-slate-500">{field}</div>
+    </div>
+  )
 
   return (
     <div>
@@ -128,6 +167,11 @@ export function FarmSettings() {
         ) : (
           <>
             <p className="text-xs text-slate-400 my-2">{t('farm_fleet_hint')}</p>
+            {fleetEmpty && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2">
+                <i className="fa-solid fa-triangle-exclamation mr-1" />{t('farm_fleet_empty_warn')}
+              </p>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {Object.entries(fleetTypes).map(([uid, uname]) => (
                 <div key={uid} className="flex items-center gap-2">
@@ -184,6 +228,40 @@ export function FarmSettings() {
           <Toggle size="sm" on={earlyRespy} label={t('farm_earlyrespy')} onChange={v => toggleSetting('earlyRespyEnabled', v)} />
         </div>
         <p className="text-xs text-slate-400 mt-1">{t('farm_earlyrespy_hint')}</p>
+      </div>
+
+      {/* Advanced rules — each field saves itself when you leave it */}
+      <div className="px-5 py-3 border-b border-slate-100">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          {t('farm_adv')}
+        </span>
+        <div className="mt-1 divide-y divide-slate-50">
+          {advRow(t('farm_adv_strikes'), t('farm_adv_strikes_hint'),
+            <NumberField value={adv.emptyReturnStrikes} min={0} max={20} label={t('farm_adv_strikes')}
+              onCommit={v => { setAdv(p => ({ ...p, emptyReturnStrikes: v })); saveFarm({ emptyReturnStrikes: v }) }}
+              size="sm" className="w-16" />)}
+          {advRow(t('farm_adv_fresh'), t('farm_adv_fresh_hint'),
+            <><NumberField value={adv.spyFreshnessHours} min={0} max={720} integer={false} step={0.5} label={t('farm_adv_fresh')}
+              onCommit={v => { setAdv(p => ({ ...p, spyFreshnessHours: v })); saveFarm({ spyFreshnessHours: v }) }}
+              size="sm" className="w-16" />h</>)}
+          {advRow(t('farm_adv_early_age'), t('farm_adv_early_age_hint'),
+            <><NumberField value={adv.earlyReportMaxAgeMins} min={10} max={1440} label={t('farm_adv_early_age')}
+              onCommit={v => { setAdv(p => ({ ...p, earlyReportMaxAgeMins: v })); saveFarm({ earlyReportMaxAgeMins: v }) }}
+              size="sm" className="w-16" />min</>)}
+          {advRow(t('farm_adv_ship_frac'), t('farm_adv_ship_frac_hint'),
+            <><NumberField value={Math.round(adv.minShipFraction * 100)} min={0} max={100} label={t('farm_adv_ship_frac')}
+              onCommit={v => { setAdv(p => ({ ...p, minShipFraction: v / 100 })); saveFarm({ minShipFraction: v / 100 }) }}
+              size="sm" className="w-16" />%</>)}
+          {advRow(t('farm_adv_demote'), t('farm_adv_demote_hint'),
+            <NumberField value={adv.fleetDemoteAfterSweeps} min={0} max={50} label={t('farm_adv_demote')}
+              onCommit={v => { setAdv(p => ({ ...p, fleetDemoteAfterSweeps: v })); saveFarm({ fleetDemoteAfterSweeps: v }) }}
+              size="sm" className="w-16" />)}
+          {advRow(t('farm_adv_cap'),
+            `${t('farm_adv_cap_hint')} ${adv.lootCapEffective > 0 ? `${t('farm_adv_cap_now')} ${adv.lootCapEffective.toLocaleString('pt-PT')}.` : t('farm_adv_cap_none')}`,
+            <NumberField value={adv.lootCap} min={0} label={t('farm_adv_cap')}
+              onCommit={v => { setAdv(p => ({ ...p, lootCap: v })); saveFarm({ lootCapPerRaid: v }) }}
+              size="sm" className="w-24" />)}
+        </div>
       </div>
     </div>
   )

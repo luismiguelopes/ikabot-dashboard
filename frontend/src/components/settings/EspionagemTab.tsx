@@ -13,10 +13,11 @@ interface EspionageSettings {
   minLootTotal?: number
   ignoreExpiryDays?: number
   ignorePermanentAfter?: number
+  missionRetentionDays?: number
 }
 
 // Same defaults as the server (app.py `_DEFAULT_ESPIONAGE_SETTINGS` / `_auto_mark_ignored`).
-const DEFAULTS = { garrisonThresholdTotal: 50000, minLootTotal: 50000, ignoreExpiryDays: 60, ignorePermanentAfter: 4 }
+const DEFAULTS = { garrisonThresholdTotal: 50000, minLootTotal: 50000, ignoreExpiryDays: 60, ignorePermanentAfter: 4, missionRetentionDays: 30 }
 
 function SpyDefaultsCard() {
   const t = useT()
@@ -122,6 +123,11 @@ function ThresholdsCard() {
               </label>
             </div>
             <p className="text-[10px] text-slate-400 -mt-1">{t('ignore_policy_hint')}</p>
+            <label className="flex items-center gap-3 pt-1 border-t border-slate-100">
+              <span className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('mission_retention_label')}</span>
+              {field('missionRetentionDays', { min: 1, max: 365, width: 'w-20' })}
+              <span className="text-[10px] text-slate-400">{t('mission_retention_hint')}</span>
+            </label>
             <div className="bg-slate-50 rounded-lg px-3 py-2.5 space-y-1">
               <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{t('threshold_funnel_title')}</p>
               <p className="text-[11px] text-slate-500">1. {t('threshold_funnel_1', { n: v.garrisonThresholdTotal.toLocaleString() })}</p>

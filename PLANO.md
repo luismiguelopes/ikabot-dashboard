@@ -1888,10 +1888,44 @@ seguidos (contados no `loot_log`) → alvo **pausado** (`enabled 0`, `swept_at 0
 (`notify_farm_empty_returns`). Antes re-varria, lia "limpo" e mandava outra vaga de 4 h, sem fim.
 Reactivar à mão dá direito a mais uma tentativa; se voltar vazia, pausa outra vez.
 
-**Para o Opus (UI):** campo `emptyReturnStrikes` nas Definições do farm (o API já o aceita e
-devolve); a linha do farm devia dizer "pausado — N regressos vazios" (hoje só aparece desactivado).
+~~Para o Opus (UI): campo `emptyReturnStrikes`; linha "pausado — N regressos vazios"~~ ✅ K.10.
 
 **Por fazer (Fable, se o caso se repetir):** ler o relatório de combate do conselheiro militar
 quando uma pilhagem regressa vazia, para o bot saber o motivo (pedido novo ao jogo — pesar contra
 a regra dos pedidos). O relatório de movimentos já traz as vagas de terceiros ("Pilhar" que não é
 nosso): hoje é ignorado; podia marcar o alvo como "disputado".
+
+#### K.10 — Trabalho do Opus feito a 2026-11-16 (noite)
+
+**693 testes**, `npm run build` limpo, dashboard reiniciado. Visto no browser: o cartão
+"Regras avançadas" (valores certos, tecto em uso 259.860) e o API. **Não experimentado no
+browser:** gravar um campo das regras avançadas pelo formulário (só o POST directo, 200), os
+campos novos da consolidação e da espionagem, e as duas notas novas da página Alvos (só aparecem
+com a linha do alvo expandida).
+
+- **P13.30 (UI) ✅** — `FarmSettings.tsx`: secção "Regras avançadas" com `emptyReturnStrikes`,
+  `spyFreshnessHours`, `earlyReportMaxAgeMins`, `minShipFraction` (em %), `fleetDemoteAfterSweeps`
+  e o tecto manual (`lootCapPerRaidManual` → grava `lootCapPerRaid`; mostra o tecto em uso). Cada
+  campo grava-se ao sair. Aviso a âmbar quando a frota de bloqueio está vazia.
+  `ConsolidateCard`: recursos nunca enviados (`skipResources`) e "nunca encher demais o destino"
+  (`respectDestCap`). `EspionagemTab`: `missionRetentionDays`.
+  **Falta do P13.30:** `queue_settings.json` e `watchlist_settings.json` no registo (o primeiro é
+  lido no `smart_sleep` → Fable); `FarmSettings` ainda usa `fetch` próprio em vez do `useSettings`.
+- **Navios de combate vs. de fuga ✅** — `_garrison_view` devolve `enemyCombatShips` (espelho de
+  `_FLEE_SHIP_NAMES`, com teste que os mantém iguais). Na página Alvos, um porto com navios de
+  combate diz que o farm salta o alvo (a não ser que o limite "navios combate" o permita) em vez
+  de prometer bloqueio.
+- **"Pausado — N regressos vazios" ✅** — `/api/farm` devolve `empty_returns`; a página Alvos
+  mostra-o por baixo do estado num alvo desactivado. (O ATHLÉTICO não aparece na lista porque o
+  jogador está nas Ignoradas — um alvo desactivado de jogador ignorado é escondido.)
+
+**O que falta do Opus, por ordem sugerida**
+
+| Item | Nota |
+|---|---|
+| Verificar no browser | os pontos "não experimentado" acima |
+| P13.60 | ESLint com `react-hooks/exhaustive-deps` — só relatar primeiro |
+| P13.45 | `conftest.py` com o `_setup_db` partilhado; estado global via `monkeypatch` |
+| P13.42 | Partir `InactivosTab` (~1000 linhas) e `DispatchPanel`; `types/farm.ts` único (há dois `FarmTarget`: `mundo/types.ts` e `dispatch/shared.ts`) |
+| P13.32 (resto) | Uniformizar logs (`lm()` vs português fixo) — cosmético |
+| Ícones | `fa-brands` (Telegram/Discord) não aparecem nas Notificações |
