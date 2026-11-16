@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useLiveRefresh } from '../../hooks/useLiveRefresh'
 import { useT, useLang } from '../../i18n'
 import { fmt, fmtArrival } from '../../utils'
 import { MATERIALS } from '../../constants'
@@ -50,6 +51,8 @@ export function HistoryPanel() {
   }, [])
 
   useEffect(() => { loadAll() }, [loadAll])
+  // the attack and loot logs are in SQLite: refresh when the bot writes there (P13.40)
+  useLiveRefresh(loadAll, ['db'], { minGapMs: 15000 })
 
   return (
     <div>

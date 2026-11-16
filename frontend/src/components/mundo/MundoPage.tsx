@@ -4,7 +4,8 @@ import { Card } from '../ui/Card'
 import { PageHeader } from '../ui/PageHeader'
 import { ConfirmModal } from '../ui/Modal'
 import { pushToast } from '../ui/Toast'
-import { apiAction, pollInterval, clearPoll } from '../../api'
+import { apiAction } from '../../api'
+import { useLiveRefresh } from '../../hooks/useLiveRefresh'
 import { loadSpyDefaults, saveSpyDefaults } from '../SettingsPage'
 import { InactivosTab } from './InactivosTab'
 import { IgnoradasTab } from './IgnoradasTab'
@@ -40,16 +41,7 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
         setSpyOriginCityId(prev => prev || (d.length > 0 ? String(d[0].cityId) : ''))
       }
     }).catch(() => {})
-    fetch('/api/espionage/spy-counts').then(r => r.json()).then(d => {
-      if (d.counts) {
-        const counts: Record<string, CitySpyCounts> = {}
-        for (const [id, val] of Object.entries(d.counts)) {
-          const v = val as Record<string, number | null>
-          counts[id] = { available: v.available ?? null, inDefense: v.inDefense ?? null, inTraining: v.inTraining ?? null, deployed: v.deployed ?? null }
-        }
-        setSpyCounts(counts)
-      }
-    }).catch(() => {})
+    loadSpyCounts()
     fetch('/api/world-scan/settings').then(r => r.json())
       .then(d => {
         if (d.enabled !== undefined) setWorldScanEnabled(d.enabled)
@@ -58,6 +50,22 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
     fetch('/api/espionage/settings').then(r => r.json())
       .then(d => { if (d.processingEnabled !== undefined) setSpyProcessingEnabled(d.processingEnabled) }).catch(() => {})
   }, [])
+
+  // Spy counts used to load once and never again (P13.40): they change when the bot reads the
+  // espionage view (spy_counts.json) and when missions start or end (SQLite).
+  const loadSpyCounts = useCallback(() => {
+    fetch('/api/espionage/spy-counts').then(r => r.json()).then(d => {
+      if (d?.counts && typeof d.counts === 'object') {
+        const counts: Record<string, CitySpyCounts> = {}
+        for (const [id, val] of Object.entries(d.counts)) {
+          const v = val as Record<string, number | null>
+          counts[id] = { available: v.available ?? null, inDefense: v.inDefense ?? null, inTraining: v.inTraining ?? null, deployed: v.deployed ?? null }
+        }
+        setSpyCounts(counts)
+      }
+    }).catch(() => {})
+  }, [])
+  useLiveRefresh(loadSpyCounts, ['spy', 'db'], { minGapMs: 10000 })
 
   const handleSpyCityChange = useCallback((cityId: string) => {
     setSpyOriginCityId(cityId)
@@ -126,11 +134,9 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
 
   useEffect(() => { fetchScan(); fetchStatus() }, [fetchScan, fetchStatus])
 
-  // Re-fetch scan data every 60s so auto-marks and new scan results appear without page reload
-  useEffect(() => {
-    const id = pollInterval(fetchScan, 60000)
-    return () => clearPoll(id)
-  }, [fetchScan])
+  // New scan results arrive with the world_scan.json change; marks (also the bot's auto-marks)
+  // are in SQLite. It used to poll every 60s whatever happened (P13.40).
+  useLiveRefresh(fetchScan, ['empire', 'db'], { minGapMs: 30000 })
 
   // Follow the scan: quickly while it runs, slowly otherwise (so a scan started after the page
   // was opened shows its progress bar too), and reload the list the moment it stops running.

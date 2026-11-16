@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { apiAction, pollInterval, clearPoll } from '../api'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration } from '../utils'
 import { MATERIALS, COST_KEYS } from '../constants'
 import { useLiveClock } from '../hooks/useLiveClock'
+import { useLiveRefresh } from '../hooks/useLiveRefresh'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { Th, Td } from './ui/TableCells'
@@ -149,13 +150,11 @@ function ActivityCard() {
   const t = useT()
   const now = useLiveClock()
   const [data, setData] = useState<ActivityData | null>(null)
-  useEffect(() => {
-    const load = () => fetch('/api/activity').then(asJson)
-      .then(d => { if (isActivity(d)) setData(d) }).catch(() => {})
-    load()
-    const id = pollInterval(load, 15000)
-    return () => clearPoll(id)
-  }, [])
+  // queues and the attack log are in SQLite; force flags appear/disappear with empire passes
+  const load = useCallback(() => fetch('/api/activity').then(asJson)
+    .then(d => { if (isActivity(d)) setData(d) }).catch(() => {}), [])
+  useEffect(() => { load() }, [load])
+  useLiveRefresh(load, ['db', 'empire'], { fallbackMs: 60000, minGapMs: 5000 })
   if (!data || (data.pending.length === 0 && data.flags.length === 0 && data.recent.length === 0)) return null
   const qIcon: Record<string, string> = {
     attack: 'fa-crosshairs', spy_dispatch: 'fa-user-secret', spy_recall: 'fa-rotate-left', transport: 'fa-ship',

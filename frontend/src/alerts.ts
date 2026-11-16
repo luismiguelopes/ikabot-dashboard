@@ -9,11 +9,28 @@ export type AlertLevel = 'critical' | 'warning' | 'info'
 export interface EmpireAlert {
   level: AlertLevel
   kind: 'wine' | 'storage' | 'gold' | 'ships'
+      | 'incoming' | 'offline' | 'subsystem' | 'transport_retry' | 'transport_dropped'
   city?: string
   seconds?: number        // wine: runway left
   material?: (typeof MATERIALS)[number]
   pct?: number            // storage: how full
-  value?: number          // gold production / total ships
+  value?: number          // gold production / total ships / incoming count / failures / retries
+  at?: number             // incoming: first arrival; transport: next try or when it gave up
+  name?: string           // subsystem
+  error?: string          // subsystem / transport: what went wrong
+  origin?: string         // transport
+  dest?: string
+}
+
+// What the empire data does not carry (P13.58): fetched by App and fed in here, so the Alerts
+// page and the sidebar counter still share one definition.
+export interface ExtraAlertSources {
+  incoming?: { count: number; eta: number | null }
+  silentFor?: number | null          // seconds since the bot's last heartbeat (null = unknown)
+  offlineAfterSecs?: number
+  subsystems?: Array<{ name: string; failures: number; error: string }>
+  transportRetrying?: Array<{ origin: string; dest: string; retries: number; error: string; nextTry?: number | null }>
+  transportDropped?: Array<{ ts: number; origin: string; dest: string; retries?: number; error: string }>
 }
 
 /** Wine level of one city against the configured thresholds, or null when it is fine. */
@@ -24,8 +41,19 @@ export function wineLevel(runsOut: number | undefined | null, th: AlertThreshold
   return null
 }
 
-export function computeAlerts(data: ApiData, th: AlertThresholds): EmpireAlert[] {
+export function computeAlerts(data: ApiData, th: AlertThresholds, extra: ExtraAlertSources = {}): EmpireAlert[] {
   const out: EmpireAlert[] = []
+  // the bot itself first: nothing else on this list gets handled while it is down
+  if (extra.silentFor != null && extra.silentFor > (extra.offlineAfterSecs ?? 1800))
+    out.push({ level: 'critical', kind: 'offline', seconds: extra.silentFor })
+  if (extra.incoming && extra.incoming.count > 0)
+    out.push({ level: 'critical', kind: 'incoming', value: extra.incoming.count, at: extra.incoming.eta ?? undefined })
+  for (const s of extra.subsystems ?? [])
+    out.push({ level: s.failures >= 3 ? 'critical' : 'warning', kind: 'subsystem', name: s.name, value: s.failures, error: s.error })
+  for (const tr of extra.transportDropped ?? [])
+    out.push({ level: 'warning', kind: 'transport_dropped', origin: tr.origin, dest: tr.dest, error: tr.error, at: tr.ts, value: tr.retries })
+  for (const tr of extra.transportRetrying ?? [])
+    out.push({ level: 'info', kind: 'transport_retry', origin: tr.origin, dest: tr.dest, error: tr.error, value: tr.retries, at: tr.nextTry ?? undefined })
   const { resourcesData, statusSummary: s } = data
   for (const [city, d] of Object.entries(resourcesData)) {
     const level = wineLevel(d.wineRunsOutIn, th)

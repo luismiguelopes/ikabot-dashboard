@@ -1271,7 +1271,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
   - `is_fleet_target` apresentado como facto, sem evidência e sem forma de o limpar (P13.4).
   - A dica de capacidade no despacho manual ignora o tecto por vaga (~207k) e pede milhares de navios.
   - `SpyModal` chama "em campo" aos espiões em defesa.
-- [ ] **P13.40 Frescura incoerente** **[C]** — `MundoPage`/`InactivosTab` fazem poll a 30/60s
+- [x] **P13.40 Frescura incoerente** **[C]** ✅ 2026-11-16 (o SSE ganhou o evento `change` com tópicos — `db` por `PRAGMA data_version` (`_DbChangeWatch`: só muda quando outra ligação faz commit), `spy`, `military`; o `App` reenvia-os como evento de janela e as páginas usam `useLiveRefresh(fn, tópicos)` — agrupa rajadas, pára com o separador escondido, poll lento só como recurso. `DispatchPanel` (fila de ataques, farm, navios, unidades, relatórios), `HistoryPanel`, contagens de espiões, scan do Mundo, missões/farm/saque do `InactivosTab` e a Actividade do Início. Os polls de 30/60s do Mundo saíram) — `MundoPage`/`InactivosTab` fazem poll a 30/60s
       (3 pedidos por tick, mesmo com o separador escondido) ao lado de um SSE que só o `App.tsx`
       escuta; `DispatchPanel`, `HistoryPanel` e as contagens de espiões **nunca** actualizam (um
       ataque pendente fica "a despachar" para sempre). Um hook partilhado para o evento `update`,
@@ -1433,13 +1433,13 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       ataque" vem apenas da fila manual (mostra "—" com o farm a trabalhar). Cartões que falham
       desaparecem (`return null`), logo "API em baixo" e "nada a acontecer" são iguais.
       Uma faixa de estado no topo + próxima acção do farm (liga ao P13.34).
-- [~] **P13.58 Alertas incoerentes entre páginas** **[C]** *feito 2026-11-16, menos as fontes novas* (`alerts.ts`: uma definição para a página, o contador e as cores da página das cidades; "Vinho em risco" só lista abaixo do limite de aviso. **Falta:** ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas) — "Vinho em risco" lista todas as
+- [x] **P13.58 Alertas incoerentes entre páginas** **[C]** ✅ 2026-11-16 (`alerts.ts`: uma definição para a página, o contador e as cores da página das cidades; "Vinho em risco" só lista abaixo do limite de aviso. 16/11: `computeAlerts(data, th, extra)` com bot sem sinal, movimentos hostis a caminho, subsistemas a falhar (crítico a partir de 3) e transportes — a tentar de novo (o item da fila guarda `lastError`) ou abandonados nas últimas 24 h (`transport_failures.json`, escrito pelo `transport_manager`, só ficheiro local). Novo `/api/alerts/extra`. O contador da barra lateral conta o mesmo) — "Vinho em risco" lista todas as
       cidades com autonomia finita (num império sem produção de vinho, as 13, sempre);
       `CitiesPage.tsx:90` usa limites fixos de 4h/12h enquanto o resto usa os configuráveis
       (2h/8h); a página Alertas e o contador da barra lateral têm a lógica duplicada e diferem
       por um; ataques a chegar, bot offline, subsistemas em falha e erros de transporte não
       entram em "Alertas". Um único `computeAlerts()`.
-- [x] **P13.59 Pequenos, mas visíveis** **[C]** ✅ 2026-11-16 (obra sem ETA já não aparece como concluída; o log só segue o fim se o leitor lá estiver; durações longas em dias; pausar pede confirmação. 16/11: rodapé diz "Ciclo a começar"/"Ciclo atrasado Xm" em vez de 0:00; o `Modal` guarda o `onClose` numa ref e só foca ao abrir; Histórico com as cores dos recursos (`Material.hex`), eixo de tempo real (noites offline = falha na linha) e selector 24h/7d/30d/tudo; a Actividade do Início mostra o dia quando não é hoje) — obra com ETA desconhecido aparece como
+- [x] **P13.59 Pequenos, mas visíveis** **[C]** ✅ 2026-11-16 (obra sem ETA já não aparece como concluída; o log só segue o fim se o leitor lá estiver; durações longas em dias; pausar pede confirmação. 16/11: rodapé diz "Ciclo a começar"/"Ciclo devido há Xm" em vez de 0:00; o `Modal` guarda o `onClose` numa ref e só foca ao abrir; Histórico com as cores dos recursos (`Material.hex`), eixo de tempo real (noites offline = falha na linha) e selector 24h/7d/30d/tudo; a Actividade do Início mostra o dia quando não é hoje) — obra com ETA desconhecido aparece como
       "concluída" (`HomePage.tsx:278`); os logs puxam a vista para o fim de 5 em 5s enquanto se
       lê; "Actualização em 0:00" para sempre quando o ciclo atrasa; `fmtDuration` não passa a
       dias ("300h 0m"); o `Modal` volta a focar o primeiro campo sempre que a página faz poll;
@@ -1699,14 +1699,12 @@ Visto e deixado (anotar, não é erro):
 | P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
 | P13.47 | Aplicar um modelo de construção num único pedido |
 | P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
-| P13.58 | Ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas (acrescentar a `alerts.ts`) |
 
 **B. Itens inteiros por fazer**
 
 | Item | Nota |
 |---|---|
 | P13.52 | Campos numéricos: limitar e gravar só ao sair do campo, e só se mudou. Fazer junto com o `NumberField` do P13.53 |
-| P13.40 | Hook partilhado para o evento `update` do SSE; `DispatchPanel`, `HistoryPanel` e contagens de espiões nunca actualizam. Os polls já param com o separador escondido (`pollInterval` em `api.ts`) |
 | P13.30 (resto) | Passar farm, espionagem, world scan, fila e alertas para o `settings_registry`; dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap` |
 | P13.53 | `<Toggle>` (com `role="switch"`), `<NumberField>`, `useSettings(url)`; partir `SettingsPage` e `TransportTab` |
 | P13.42 | Partir `InactivosTab` e `DispatchPanel`; `types/farm.ts` único; hooks de dados partilhados |

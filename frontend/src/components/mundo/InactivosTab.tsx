@@ -5,7 +5,8 @@ import { Card } from '../ui/Card'
 import { Td } from '../ui/TableCells'
 import { ConfirmModal, askConfirm } from '../ui/Modal'
 import { pushToast } from '../ui/Toast'
-import { apiAction, pollInterval, clearPoll } from '../../api'
+import { apiAction } from '../../api'
+import { useLiveRefresh } from '../../hooks/useLiveRefresh'
 import { SpyModal } from './SpyModal'
 import { AttackModal } from './AttackModal'
 import { FarmSettings } from '../dispatch/FarmSettings'
@@ -165,13 +166,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     ))
   }, [scanData])
 
-  useEffect(() => {
-    const load = () => fetch('/api/espionage/missions').then(r => r.json())
-      .then((d: { missions: SpyMission[] }) => { if (d.missions) setMissions(d.missions) }).catch(() => {})
-    load()
-    const id = pollInterval(load, 30000)
-    return () => clearPoll(id)
-  }, [])
+  // missions, farm and loot are in SQLite: refresh when the bot writes there instead of a
+  // 30s poll that ran whether anything changed or not (P13.40)
+  const loadMissions = useCallback(() => fetch('/api/espionage/missions').then(r => r.json())
+    .then((d: { missions: SpyMission[] }) => { if (Array.isArray(d?.missions)) setMissions(d.missions) }).catch(() => {}), [])
+  useEffect(() => { loadMissions() }, [loadMissions])
+  useLiveRefresh(loadMissions, ['db'], { minGapMs: 10000 })
 
   useEffect(() => {
     fetch('/api/espionage/settings').then(r => r.json())
@@ -192,16 +192,12 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       setFarmIds(new Set(d.map(f => String(f.target_city_id))))
       setFarmByCity(Object.fromEntries(d.map(f => [String(f.target_city_id), f])))
     }).catch(() => {})  // background poll — stays silent on failure
-  useEffect(() => {
-    loadFarm()
-    const loadLoot = () => fetch('/api/loot-stats?by=city').then(r => r.json())
-      .then((d: LootStat[]) => {
-        if (Array.isArray(d)) setLootByCity(Object.fromEntries(d.map(s => [lootKey(s.from_player, s.from_city), s])))
-      }).catch(() => {})
-    loadLoot()
-    const id = pollInterval(() => { loadFarm(); loadLoot() }, 30000)
-    return () => clearPoll(id)
-  }, [])
+  const loadLoot = () => fetch('/api/loot-stats?by=city').then(r => r.json())
+    .then((d: LootStat[]) => {
+      if (Array.isArray(d)) setLootByCity(Object.fromEntries(d.map(s => [lootKey(s.from_player, s.from_city), s])))
+    }).catch(() => {})
+  useEffect(() => { loadFarm(); loadLoot() }, [])
+  useLiveRefresh(() => { loadFarm(); loadLoot() }, ['db'], { minGapMs: 10000 })
 
   async function handleAddFarm(p: EnrichedPlayer, mode: 'farm' | 'loop' = 'farm') {
     if (!p.cityId) return

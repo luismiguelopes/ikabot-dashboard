@@ -1645,6 +1645,44 @@ def api_activity():
     return jsonify({"pending": pending, "flags": flags, "recent": recent})
 
 
+TRANSPORT_FAILURES_PATH = os.path.join(LOGS_DIR, "transport_failures.json")
+
+
+@app.route("/api/alerts/extra")
+def api_alerts_extra():
+    """What the Alerts page needs beyond the empire data (P13.58): subsystems failing and
+    transports that failed — still retrying (from the queue) or given up in the last 24 h.
+    Incoming attacks and the bot's heartbeat the browser already has."""
+    subsystems = []
+    try:
+        with open(os.path.join(LOGS_DIR, "health.json")) as f:
+            for name, v in (json.load(f) or {}).items():
+                n = (v or {}).get("consecutiveFailures") or 0
+                if isinstance(v, dict) and n > 0:
+                    subsystems.append({"name": name, "failures": n, "error": str(v.get("lastError") or "")})
+    except Exception:
+        pass
+    retrying = []
+    if _db:
+        try:
+            for it in _db.queue_items("transport"):
+                if (it.get("retries") or 0) > 0:
+                    retrying.append({"origin": it.get("originCityName") or "", "dest": it.get("destCityName") or "",
+                                     "retries": it.get("retries"), "error": it.get("lastError") or "",
+                                     "nextTry": it.get("dispatchAfter")})
+        except Exception:
+            pass
+    dropped = []
+    try:
+        with open(TRANSPORT_FAILURES_PATH) as f:
+            cut = time.time() - 86400
+            dropped = [x for x in (json.load(f).get("failures") or [])
+                       if isinstance(x, dict) and (x.get("ts") or 0) >= cut]
+    except Exception:
+        pass
+    return jsonify({"subsystems": subsystems, "transportRetrying": retrying, "transportDropped": dropped})
+
+
 # P6.4: UI alert thresholds (wine/storage) live on the server, not per-browser localStorage,
 # so every device sees the same configuration.
 ALERT_THRESHOLDS_PATH = os.path.join(LOGS_DIR, "alert_thresholds.json")
@@ -2251,6 +2289,44 @@ def api_health():
                     "requests": requests_by_hour})
 
 
+class _DbChangeWatch:
+    """Tells whether another connection committed to the SQLite file since the last look
+    (P13.40). The queues, farm, attack/loot logs and spy missions live there, and the SSE only
+    watched JSON files, so the pages built on them never heard of a change. File mtimes do not
+    work for this (the WAL is truncated on checkpoint and readers touch the -shm);
+    `PRAGMA data_version` changes exactly when someone else commits."""
+
+    def __init__(self, path):
+        self.path, self.conn, self.last = path, None, None
+
+    def changed(self):
+        try:
+            if self.conn is None:
+                if not os.path.exists(self.path):
+                    return False
+                self.conn = sqlite3.connect("file:%s?mode=ro" % self.path, uri=True,
+                                            timeout=2, check_same_thread=False)
+            version = self.conn.execute("PRAGMA data_version").fetchone()[0]
+        except Exception:
+            self.close()
+            return False
+        prev, self.last = self.last, version
+        return prev is not None and version != prev
+
+    def close(self):
+        try:
+            if self.conn is not None:
+                self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
+
+
+def _topic_paths():
+    """Files behind each live topic besides the database (`change` event, P13.40)."""
+    return {"spy": [SPY_COUNTS_PATH], "military": [MILITARY_JSON_PATH]}
+
+
 @app.route("/api/stream")
 def api_stream():
     """SSE endpoint — emits 'update' whenever any data file on the shared volume changes."""
@@ -2263,10 +2339,27 @@ def api_stream():
     # all the time, and every `update` made the browser re-fetch the whole empire (and the
     # home page the whole cost table). It gets its own light event carrying the timestamp.
 
+    # `change` (P13.40) names what else changed — "db" (queues, farm, logs, missions), "spy",
+    # "military" — so a page re-fetches only what it shows. `update` stays as it was: the
+    # empire data, which the whole app reloads.
+    topic_paths = _topic_paths()
+
+    def _mt(p):
+        return os.path.getmtime(p) if os.path.exists(p) else 0
+
     def generate():
         last_mtimes = {p: os.path.getmtime(p) if os.path.exists(p) else 0 for p in watched}
         alive_mtime = os.path.getmtime(LAST_ALIVE_JSON_PATH) if os.path.exists(LAST_ALIVE_JSON_PATH) else 0
+        topic_mtimes = {p: _mt(p) for ps in topic_paths.values() for p in ps}
+        db_watch = _DbChangeWatch(DB_PATH)
+        db_watch.changed()   # first look sets the baseline
         yield ": connected\n\n"
+        try:
+            yield from _stream_loop(last_mtimes, alive_mtime, topic_mtimes, db_watch)
+        finally:
+            db_watch.close()
+
+    def _stream_loop(last_mtimes, alive_mtime, topic_mtimes, db_watch):
         while True:
             time.sleep(2)
             mtime = os.path.getmtime(LAST_ALIVE_JSON_PATH) if os.path.exists(LAST_ALIVE_JSON_PATH) else 0
@@ -2279,9 +2372,19 @@ def api_stream():
                 if mtime != last_mtimes[p]:
                     last_mtimes[p] = mtime
                     changed = True
+            topics = ["db"] if db_watch.changed() else []
+            for topic, paths in topic_paths.items():
+                for p in paths:
+                    mtime = _mt(p)
+                    if mtime != topic_mtimes.get(p):
+                        topic_mtimes[p] = mtime
+                        if topic not in topics:
+                            topics.append(topic)
             if changed:
                 yield "event: update\ndata: {}\n\n"
-            else:
+            if topics:
+                yield "event: change\ndata: %s\n\n" % ",".join(topics)
+            if not changed and not topics:
                 yield ": keepalive\n\n"
 
     return Response(

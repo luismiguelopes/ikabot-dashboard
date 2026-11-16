@@ -9,7 +9,11 @@ import { ToastHost } from './components/ui/Toast'
 import { ConfirmHost } from './components/ui/Modal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { computeAlerts } from './alerts'
-import { setApiLang, pollInterval, clearPoll } from './api'
+import type { ExtraAlertSources } from './alerts'
+import { useLiveRefresh } from './hooks/useLiveRefresh'
+import { useLiveClock } from './hooks/useLiveClock'
+import { setApiLang, pollInterval, clearPoll, emitLive } from './api'
+import type { LiveTopic } from './api'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
 import { CitiesPage } from './components/CitiesPage'
@@ -208,8 +212,6 @@ export default function App() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  // same list the Alerts page shows — the two used to count differently
-  const alertCount = useMemo(() => (data ? computeAlerts(data, thresholds).length : 0), [data, thresholds])
 
   // Global pause (F11) — fetched from the bot, toggled from the sidebar
   const [paused, setPaused] = useState(false)
@@ -233,7 +235,12 @@ export default function App() {
     const es = new EventSource('/api/stream')
     es.onopen = () => setSseConnected(true)
     es.onerror = () => setSseConnected(false)
-    es.addEventListener('update', fetchData)
+    // the empire data reloads here; everything else listens through useLiveRefresh (P13.40)
+    es.addEventListener('update', () => { fetchData(); emitLive(['empire']) })
+    es.addEventListener('change', (e: MessageEvent) => {
+      const known: LiveTopic[] = ['db', 'spy', 'military']
+      emitLive(String(e.data).split(',').filter((x): x is LiveTopic => known.includes(x as LiveTopic)))
+    })
     // the bot's heartbeat: just the timestamp, no reload of the empire data
     es.addEventListener('alive', (e: MessageEvent) => {
       const ts = Number(e.data)
@@ -256,6 +263,29 @@ export default function App() {
       })
       .catch(() => {})
   }, [data])
+
+  // Alerts beyond the empire data (P13.58): failing subsystems and transports, from the bot.
+  const [extraRemote, setExtraRemote] = useState<Pick<ExtraAlertSources, 'subsystems' | 'transportRetrying' | 'transportDropped'>>({})
+  const loadExtra = useCallback(() => {
+    fetch('/api/alerts/extra').then(r => { if (!r.ok) throw new Error(); return r.json() }).then(d => {
+      if (d && Array.isArray(d.subsystems) && Array.isArray(d.transportRetrying) && Array.isArray(d.transportDropped))
+        setExtraRemote({ subsystems: d.subsystems, transportRetrying: d.transportRetrying, transportDropped: d.transportDropped })
+    }).catch(() => {})
+  }, [])
+  useEffect(() => { loadExtra() }, [loadExtra])
+  // health.json is not watched by the SSE: a slow poll covers the subsystems
+  useLiveRefresh(loadExtra, ['db', 'empire'], { fallbackMs: 60000, minGapMs: 10000 })
+  const minuteClock = useLiveClock(60000)
+  const heartbeat = Math.max(liveAlive ?? 0, data?.lastAlive ?? 0) || null
+  const extraAlerts = useMemo<ExtraAlertSources>(() => ({
+    ...extraRemote,
+    incoming: incomingAttacks,
+    silentFor: heartbeat ? minuteClock - heartbeat : null,
+    offlineAfterSecs: data?.offlineAfterSecs,
+  }), [extraRemote, incomingAttacks, heartbeat, minuteClock, data?.offlineAfterSecs])
+
+  // same list the Alerts page shows — the two used to count differently
+  const alertCount = useMemo(() => (data ? computeAlerts(data, thresholds, extraAlerts).length : 0), [data, thresholds, extraAlerts])
 
   // Only when there is no data at all: a refresh that fails keeps showing what we have.
   if (error && !data) return (
@@ -315,7 +345,7 @@ export default function App() {
               {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} thresholds={thresholds} />}
               {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
               {page === 'movements'    && <MovementsPage />}
-              {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}
+              {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} extra={extraAlerts} />}
               {page === 'history'      && <Suspense fallback={null}><HistoryPage data={data} /></Suspense>}
               {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}
               {page === 'construction' && <BuildingQueueTab data={data} />}

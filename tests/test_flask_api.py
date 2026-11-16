@@ -842,3 +842,53 @@ def test_cancel_allowed_for_a_wave_waiting_for_its_blockade(monkeypatch, tmp_pat
 def test_cancel_unknown_attack_is_404(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     assert c.post("/api/espionage/attack-queue/cancel", json={"id": "nope"}).status_code == 404
+
+
+# ── Live updates and extra alert sources (P13.40 / P13.58) ────────────────────
+
+def test_db_change_watch_sees_only_commits_from_others(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "w.db")
+    other = sqlite3.connect(path)
+    other.execute("CREATE TABLE t (x)")
+    other.commit()
+    w = flask_app._DbChangeWatch(path)
+    assert w.changed() is False          # first look = baseline
+    assert w.changed() is False          # nothing new
+    other.execute("INSERT INTO t VALUES (1)")
+    other.commit()
+    assert w.changed() is True
+    assert w.changed() is False
+    w.close()
+    other.close()
+
+
+def test_db_change_watch_without_a_database(tmp_path):
+    w = flask_app._DbChangeWatch(str(tmp_path / "missing.db"))
+    assert w.changed() is False and w.conn is None
+
+
+def test_alerts_extra_reports_failures(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "TRANSPORT_FAILURES_PATH", str(tmp_path / "transport_failures.json"))
+    now = int(time.time())
+    with open(tmp_path / "health.json", "w") as f:
+        json.dump({"farm": {"consecutiveFailures": 2, "lastError": "timeout"},
+                   "scan": {"consecutiveFailures": 0}}, f)
+    with open(tmp_path / "transport_failures.json", "w") as f:
+        json.dump({"failures": [{"ts": now - 90000, "origin": "Old", "dest": "X", "error": "e"},
+                                {"ts": now - 60, "origin": "A", "dest": "B", "retries": 3, "error": "sem navios"}]}, f)
+    db_manager.queue_add("transport", {"id": "t1", "originCityName": "C", "destCityName": "D",
+                                       "retries": 1, "lastError": "type 11", "dispatchAfter": now + 600})
+    db_manager.queue_add("transport", {"id": "t2", "originCityName": "E", "destCityName": "F"})
+    d = c.get("/api/alerts/extra").get_json()
+    assert d["subsystems"] == [{"name": "farm", "failures": 2, "error": "timeout"}]
+    assert [(x["origin"], x["error"]) for x in d["transportRetrying"]] == [("C", "type 11")]
+    assert [x["origin"] for x in d["transportDropped"]] == ["A"]      # older than 24 h left out
+
+
+def test_alerts_extra_with_nothing_on_disk(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "TRANSPORT_FAILURES_PATH", str(tmp_path / "none.json"))
+    d = c.get("/api/alerts/extra").get_json()
+    assert d == {"subsystems": [], "transportRetrying": [], "transportDropped": []}

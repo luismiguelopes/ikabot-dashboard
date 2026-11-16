@@ -82,3 +82,19 @@ export function clearPoll(id: ReturnType<typeof setInterval>) {
   const h = _pollCleanup.get(id)
   if (h) { document.removeEventListener('visibilitychange', h); _pollCleanup.delete(id) }
 }
+
+
+// ── Live updates (P13.40) ─────────────────────────────────────────────────────
+// The app has one EventSource (App.tsx). It used to refresh only the empire data; every other
+// page polled on its own clock or never refreshed at all (a pending attack sat "dispatching"
+// forever). App re-broadcasts what changed as a window event; pages subscribe through
+// `useLiveRefresh` with the topics they show.
+//   empire   — empire/resources/movements/world-scan JSON (the SSE `update` event)
+//   db       — anything in SQLite: queues, farm, attack/loot logs, spy missions, marks
+//   spy      — spy counts per city
+//   military — units per city
+export type LiveTopic = 'empire' | 'db' | 'spy' | 'military'
+export const LIVE_EVENT = 'ikabot:live'
+export function emitLive(topics: LiveTopic[]) {
+  if (topics.length) window.dispatchEvent(new CustomEvent<LiveTopic[]>(LIVE_EVENT, { detail: topics }))
+}

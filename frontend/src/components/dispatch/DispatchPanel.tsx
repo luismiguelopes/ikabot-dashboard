@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useLiveRefresh } from '../../hooks/useLiveRefresh'
 import { useT, useLang } from '../../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../../utils'
 import { useLiveClock } from '../../hooks/useLiveClock'
@@ -77,17 +78,10 @@ export function DispatchPanel() {
 
   // ── Fetch data ──────────────────────────────────────────────────────────────
 
-  const loadAll = useCallback(() => {
-    fetch('/api/own-cities').then(r => r.json()).then((data: OwnCity[]) => {
-      setOwnCities(data)
-      if (data.length > 0 && !originCityName) setOriginCityName(data[0].name)
-    }).catch(() => {})
-
+  // What the bot changes while the page is open (P13.40): the attack queue, the farm, ships,
+  // units and spy reports. These never refreshed — a pending attack stayed "dispatching".
+  const loadLive = useCallback(() => {
     fetch('/api/military').then(r => r.json()).then(setMilitary).catch(() => {})
-
-    fetch('/api/world-scan').then(r => r.json()).then((data: any) => {
-      setScanPlayers(data?.players ?? [])
-    }).catch(() => {})
 
     fetch('/api/espionage/attack-queue').then(r => r.json()).then((data: any) => {
       setPending(data?.pending ?? [])
@@ -98,8 +92,6 @@ export function DispatchPanel() {
       setTotalShips(data?.statusSummary?.ships?.total ?? null)
       setShipCapacity(data?.statusSummary?.shipCapacity ?? null)
     }).catch(() => {})
-    // what one wave can carry home, whatever the fleet size (learned from real returns)
-    fetch('/api/farm/army').then(r => r.json()).then((d: any) => setRaidCap(d?.lootCapPerRaid ?? null)).catch(() => {})
 
     // Known warehouse loot per target city, from the latest DONE spy report (F3)
     fetch('/api/espionage/missions').then(r => r.json()).then((d: any) => {
@@ -133,9 +125,27 @@ export function DispatchPanel() {
     fetch('/api/farm').then(r => r.json()).then((data: any) => {
       if (Array.isArray(data)) setFarmTargets(data)
     }).catch(() => {})
-  }, [originCityName])
+  }, [])
+
+  const loadAll = useCallback(() => {
+    fetch('/api/own-cities').then(r => r.json()).then((data: OwnCity[]) => {
+      if (!Array.isArray(data)) return
+      setOwnCities(data)
+      if (data.length > 0 && !originCityName) setOriginCityName(data[0].name)
+    }).catch(() => {})
+
+    fetch('/api/world-scan').then(r => r.json()).then((data: any) => {
+      setScanPlayers(data?.players ?? [])
+    }).catch(() => {})
+
+    // what one wave can carry home, whatever the fleet size (learned from real returns)
+    fetch('/api/farm/army').then(r => r.json()).then((d: any) => setRaidCap(d?.lootCapPerRaid ?? null)).catch(() => {})
+
+    loadLive()
+  }, [originCityName, loadLive])
 
   useEffect(() => { loadAll() }, [])
+  useLiveRefresh(loadLive, ['db', 'empire', 'military'], { minGapMs: 10000 })
 
   // ── Derived: units for selected city + mission type ─────────────────────────
 

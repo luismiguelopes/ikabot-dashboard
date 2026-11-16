@@ -197,6 +197,7 @@ def process_transport_queue(session, in_active_hours=True):
             retries = item.get("retries", 0) + 1
             if retries >= 3:
                 queue_remove(TRANSPORT_QUEUE, [item.get("id")])
+                record_transport_failure(item, error, retries)
                 logger.warning("[transport] falhou %d vezes (%s) → removido da fila",
                                retries, error)
                 try:
@@ -206,10 +207,35 @@ def process_transport_queue(session, in_active_hours=True):
                     pass
             else:
                 retry_mins = random.randint(10, 25)
-                queue_add(TRANSPORT_QUEUE, dict(item, retries=retries,
+                queue_add(TRANSPORT_QUEUE, dict(item, retries=retries, lastError=str(error or "")[:200],
                           dispatchAfter=int(time.time()) + retry_mins * 60))
                 logger.warning("[transport] falhou (%s) — tentativa %d/3, nova em %d min",
                                error, retries, retry_mins)
+
+
+TRANSPORT_FAILURES_PATH = os.path.join(LOGS_DIR, "transport_failures.json")
+_FAILURES_KEEP = 20
+
+
+def record_transport_failure(item, error, retries, now=None):
+    """Keep the last transports the bot gave up on (P13.58): a dropped item left the queue
+    and only the log said why, so the dashboard's Alerts page could not show it. Local file
+    only — nothing here talks to the game."""
+    entry = {"ts": int(now or time.time()),
+             "origin": item.get("originCityName") or "", "dest": item.get("destCityName") or "",
+             "retries": retries, "error": str(error or "")[:200]}
+    try:
+        with open(TRANSPORT_FAILURES_PATH) as f:
+            items = json.load(f).get("failures", [])
+        if not isinstance(items, list):
+            items = []
+    except Exception:
+        items = []
+    items = (items + [entry])[-_FAILURES_KEEP:]
+    try:
+        atomic_write_json(TRANSPORT_FAILURES_PATH, {"failures": items}, indent=2)
+    except Exception as e:
+        logger.warning("[transport] não foi possível registar a falha: %s", e)
 
 
 # ── Consolidation mode ────────────────────────────────────────────────────────

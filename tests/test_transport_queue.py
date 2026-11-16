@@ -74,10 +74,27 @@ def test_failed_transport_rescheduled_then_removed(monkeypatch, tmp_path):
     assert len(items) == 1 and items[0]["retries"] == 1
     assert items[0]["dispatchAfter"] > now
 
-    # third failure → removed
+    assert items[0]["lastError"] == "sem navios livres"   # the Alerts page shows why (P13.58)
+
+    # third failure → removed, and remembered for the Alerts page
+    monkeypatch.setattr(tm, "TRANSPORT_FAILURES_PATH", str(tmp_path / "transport_failures.json"))
     db_manager.queue_add("transport", dict(items[0], retries=2, dispatchAfter=now - 5))
     tm.process_transport_queue(session=None, in_active_hours=True)
     assert db_manager.queue_items("transport") == []
+    with open(tmp_path / "transport_failures.json") as f:
+        failures = json.load(f)["failures"]
+    assert len(failures) == 1
+    assert (failures[0]["origin"], failures[0]["dest"], failures[0]["retries"]) == ("A", "B", 3)
+    assert failures[0]["error"] == "sem navios livres"
+
+
+def test_transport_failures_keep_only_the_last_ones(monkeypatch, tmp_path):
+    monkeypatch.setattr(tm, "TRANSPORT_FAILURES_PATH", str(tmp_path / "f.json"))
+    for i in range(25):
+        tm.record_transport_failure({"originCityName": "A", "destCityName": str(i)}, "x", 3, now=1000 + i)
+    with open(tmp_path / "f.json") as f:
+        failures = json.load(f)["failures"]
+    assert len(failures) == 20 and failures[-1]["dest"] == "24" and failures[0]["dest"] == "5"
 
 
 def test_outside_active_hours_does_nothing(monkeypatch, tmp_path):
