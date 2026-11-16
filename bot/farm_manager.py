@@ -161,6 +161,15 @@ def _fleet_demote_after():
         return _FLEET_DEMOTE_AFTER_SWEEPS
 
 
+def _empty_return_strikes():
+    """Empty returns in a row after which a target is paused (0 = never)."""
+    try:
+        return max(0, int(_load_farm_settings().get("emptyReturnStrikes",
+                                                    _FARM_DEFAULTS["emptyReturnStrikes"])))
+    except (ValueError, TypeError):
+        return _FARM_DEFAULTS["emptyReturnStrikes"]
+
+
 def early_respy_enabled():
     """Pipelined re-spy: scout while the troops return so a re-spy round doesn't pay the
     spy round-trip after they dock. On by default; kill switch in farm settings."""
@@ -504,6 +513,20 @@ def _recent_return_loot(t):
     except Exception:
         return None
     return None
+
+
+def _consecutive_empty_returns(t):
+    """How many of the latest recorded returns from this target came home empty, in a row
+    (newest first, stopping at the first one that carried anything)."""
+    n = 0
+    try:
+        for row in _target_loot_rows(t, 10):
+            if sum(int(row.get(k, 0) or 0) for k in _LOOT_KEYS) > 0:
+                break
+            n += 1
+    except Exception:
+        return 0
+    return n
 
 
 def _returned_since_scout(t):
@@ -1862,6 +1885,25 @@ def process_farm_targets(session, in_active_hours=True):
             # (≤ max_enemy_ships) get fought by it — never ignored.
             enemy_ships = flee_ships + combat_ships
 
+            # Ships counted in the harbour make this a fleet target NOW, not when the raid is
+            # queued. The flag used to be written only with the queued waves: a sweep that saw
+            # ships but had to hold the raid (slot busy, ships out) left a sealed sweep on a
+            # "safe" target, and the next round took the safe shortcut — warehouse-only scout,
+            # troops-only wave into 22 warships (CT DO CAJU 16/11, stopped only by a lack of
+            # trade ships). Same for a target last seen with ships whose flag is unset for any
+            # reason: a report without a garrison leg says nothing about that harbour.
+            seen_ships = enemy_ships if garrison_known else 0
+            if int(t.get("is_fleet_target", 0) or 0) == 0 and (
+                    seen_ships > 0 or int(t.get("last_enemy_ships", 0) or 0) > 0):
+                t["is_fleet_target"] = 1
+                fields = {"is_fleet_target": 1, "clean_sweeps": 0}
+                if seen_ships > 0:
+                    fields["last_enemy_ships"] = seen_ships
+                farm_update(tid, fields)
+                logger.info("[farm] %s: navios no porto (%d) — passa a alvo de frota (varrimento "
+                            "completo antes de cada ataque)", name,
+                            seen_ships or int(t.get("last_enemy_ships", 0) or 0))
+
             # INCOMPLETE SWEEP → never raid on the guess. A target needs a FULL live sweep before
             # troops sail: a completed garrison AND (when requested) a completed movements leg.
             # This fires for a fleet target, or ANY first-contact scout — both set needMovements.
@@ -2069,6 +2111,27 @@ def process_farm_targets(session, in_active_hours=True):
                     farm_update(tid, {"attack_return_at": now + random.randint(180, 360)})
                     continue
                 if recent == 0:
+                    # Every wave is sent on a scout that found the way clear. One empty return
+                    # can be bad timing; several in a row mean something turns the troops back
+                    # that the scouts do not show (seen 16/11: two waves, each after a clean
+                    # full sweep, each back empty from a full warehouse). Another sweep would
+                    # read "clean" again and cost another round trip — stop and say so.
+                    strikes = _empty_return_strikes()
+                    empties = _consecutive_empty_returns(t)
+                    if strikes and empties >= strikes:
+                        farm_update(tid, {"state": "IDLE", "enabled": 0, "next_action": "spy",
+                                          "is_fleet_target": 1, "clean_sweeps": 0,
+                                          "swept_at": 0, "respy_launched_at": 0})
+                        logger.warning("[farm] %s: %d regressos VAZIOS seguidos apesar de "
+                                       "varrimentos limpos — alvo PAUSADO (os espiões não vêem o "
+                                       "que faz as tropas voltar; ver o relatório de combate no "
+                                       "jogo antes de o reactivar)", name, empties)
+                        try:
+                            from telegram_notifier import notify_farm_empty_returns
+                            notify_farm_empty_returns(name, t.get("target_player", ""), empties)
+                        except Exception:
+                            pass
+                        continue
                     delay = random.randint(*_RELAUNCH_DELAY_RANGE) * 60
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + delay,
                                       "next_action": "spy", "is_fleet_target": 1,

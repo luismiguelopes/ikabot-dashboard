@@ -142,6 +142,7 @@ SPECS = {
             "lootCapPerRaid":         _int(0, 0),         # 0 = learn it from the real returns
             "fleetDemoteAfterSweeps": _int(3, 0),         # 0 = a fleet target stays one for ever
             "minShipFraction":        _float(0.5, 0, 1),
+            "emptyReturnStrikes":     _int(2, 0),         # empty returns in a row that pause a target; 0 = never
         },
     },
     "espionage": {

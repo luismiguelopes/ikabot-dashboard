@@ -1844,14 +1844,54 @@ Não altera nenhum pedido ao jogo. **678 testes.**
 
 **5. Tróia 3 (K.7)** — as falhas em série pararam: 43 linhas de falha/dia a 14 e 15/11, 5 a 16/11;
 a 16/11 às 07:03 o varrimento completo passou e a vaga trouxe 43.947.
-⚠️ **POR INVESTIGAR (Fable), não corrigido:** dois regressos VAZIOS a 16/11.
-- **Tróia 3 13:12** — "só tropas, frota dispersa até ~118min". O relatório de movimentos (12:44)
-  deu "regressa em ~145min" (→15:09), mas o bloqueio chegou às 10:09 e a regra das 4 h dá 14:09:
-  exactamente **1 h de diferença**. Hipótese forte: `parse_fleet_movements` /
-  `_parse_movement_datetime` usa `time.mktime` (hora local) numa hora do **relógio do servidor
-  (Lisboa +1h)** — o `report_epoch` já converte, este não. As tropas chegaram ~14:50, com a frota
-  de volta desde ~14:09. Confirmar com o HTML de um relatório de movimentos e corrigir com teste.
-- **ATHLÉTICO 09:31 e 13:45** — duas vagas só de tropas após varrimento "porto limpo"
-  (guarnição: 16 unidades em 2 tipos, movimentos limpos), ambas regressaram vazias com ~1,1M no
-  armazém. Não é a frota: ver o que são as 16 unidades (muralha/defesa que as tropas não vencem?)
-  e se a secção "Frotas em" veio vazia. Até lá o alvo fica como de frota e volta a ser varrido.
+~~POR INVESTIGAR (Fable): dois regressos VAZIOS a 16/11~~ → investigado e corrigido, ver K.9.
+
+#### K.9 — Sessão Fable de 2026-11-16 (tarde): os regressos vazios
+
+Três erros, todos encontrados a partir da captura real da aba de relatórios
+(`tests/fixtures/spy_garrison_movements.html`, anonimizada). **690 testes.** Em produção (bot
+recriado e dashboard reiniciado às 18:05).
+
+**1. Tróia 3 — hora do relatório de movimentos lida no fuso errado** ✅
+Confirmado: `_parse_movement_datetime` usava `time.mktime` (hora de Lisboa) numa data que vem no
+relógio do servidor (+1 h). O regresso da frota inimiga (`enemyReturnAt`) ficava **1 h atrasado**:
+o bot deu a frota como fora até 15:09 quando voltou às 14:09 e mandou tropas sozinhas que chegaram
+às 14:50. Agora lê com `_GAME_SERVER_TZ`, como o `report_epoch`. Durações não mudam.
+
+**2. Guarnição — unidades de terra com o nome errado** ✅
+O cabeçalho de cada tabela traz o nome no `<th title="…">`; só a primeira tabela de cada arma era
+reconhecida (por acaso), e as unidades da 2.ª e 3.ª tabelas de terra ficavam com os nomes da 1.ª.
+As "8 Espadachim + 8 Lanceiro" do ATHLÉTICO e as "15 + 15" do CT DO CAJU são **cozinheiros e
+médicos** (ou aríetes/catapultas — os relatórios guardados não dizem de que tabela vieram).
+A secção dos navios lia bem. Uma contagem sem nome legível fica como "Unidade/Navio desconhecido"
+em vez de se perder (um navio sem nome continua a ser um navio).
+Os relatórios já guardados mantêm os nomes errados; só os novos saem certos.
+
+**3. CT DO CAJU — navios vistos, raide adiado, alvo dado como "seguro"** ✅ *(achado ao vivo)*
+O varrimento das 16:16 contou 22 navios de guerra (≤ `max_enemy_ships` 30 → bloqueio + tropas),
+mas o slot de ataque estava ocupado e o raide ficou adiado. `is_fleet_target` só era escrito ao
+pôr as vagas na fila, por isso o alvo ficou "varrido e seguro": na ronda seguinte fez só armazém e
+dimensionou uma vaga **só de tropas** — das 16:28 às 18:01 só não saiu por faltarem navios de
+comércio (136 livres, mínimo 177). Agora o alvo passa a alvo de frota no momento em que o
+varrimento conta navios; e um relatório sem perna de guarnição nunca ataca um alvo cujo último
+varrimento viu navios. O alvo foi marcado à mão (`is_fleet_target 1`) antes do deploy.
+
+**4. ATHLÉTICO — causa não determinada; travão novo** ✅ (o travão) / ⚠️ (a causa)
+Duas vagas só de tropas, cada uma depois de um varrimento completo limpo (0 navios, sem frota a
+regressar), voltaram vazias **no instante da chegada** (sem combate) com ~1,1M no armazém. Os
+dados guardados não explicam; o relatório de movimentos das 16:59 mostra **outro jogador a pilhar
+a mesma cidade** (80 navios, 18 min de viagem — um vizinho). Hipóteses, por ordem: porto
+bloqueado por terceiros (não aparece em "Frotas em"), cidade ocupada, ou combate de terceiros em
+curso à chegada. **Só o relatório de combate no jogo confirma — ver à mão.**
+Travão: `emptyReturnStrikes` (definições do farm, default **2**, 0 = nunca) — N regressos vazios
+seguidos (contados no `loot_log`) → alvo **pausado** (`enabled 0`, `swept_at 0`) + aviso
+(`notify_farm_empty_returns`). Antes re-varria, lia "limpo" e mandava outra vaga de 4 h, sem fim.
+Reactivar à mão dá direito a mais uma tentativa; se voltar vazia, pausa outra vez.
+
+**Para o Opus (UI):** campo `emptyReturnStrikes` nas Definições do farm (o API já o aceita e
+devolve); a linha do farm devia dizer "pausado — N regressos vazios" (hoje só aparece desactivado).
+
+**Por fazer (Fable, se o caso se repetir):** ler o relatório de combate do conselheiro militar
+quando uma pilhagem regressa vazia, para o bot saber o motivo (pedido novo ao jogo — pesar contra
+a regra dos pedidos). O relatório de movimentos já traz as vagas de terceiros ("Pilhar" que não é
+nosso): hoje é ignorado; podia marcar o alvo como "disputado".

@@ -448,51 +448,64 @@ def _parse_reports_from_html(html):
     return results
 
 
+_UNKNOWN_UNIT = "Unidade desconhecida"
+_UNKNOWN_SHIP = "Navio desconhecido"
+
+
 def _parse_garrison_sections(html):
     """Parse the table-structured garrison report HTML, keeping the two arms apart.
-    Format: header row (Quartel/Estaleiro + unit names),
-            data row (Tropas em CITY / Frotas em CITY + counts or "-").
+    Format: one table per group of units, each with a header row (Quartel/Estaleiro + unit
+            names) and a data row (Tropas em CITY / Frotas em CITY + counts or "-").
     Returns {"army": {unit_name: count}, "fleet": {unit_name: count}} for non-zero units.
 
     The report itself says which units are ships (the "Frotas em" row). Classifying by unit
     NAME instead (attack_manager._NAVAL_UNIT_NAMES) is fail-open: a ship whose name is not on
-    the list counts as a land unit and the port reads as clean (P13.7)."""
+    the list counts as a land unit and the port reads as clean (P13.7).
+
+    A unit's name is on its header cell: <th title="Hoplita"><img alt="Hoplita" …/></th>. The
+    "Quartel" cell that opens each land table has the title on the <th> only, so the header
+    row is recognised by being made of <th> cells, not by that first name — recognising it by
+    name alone left the 2nd and 3rd land tables under the 1st table's unit names (16/11).
+    A count with no readable name is kept under an "unknown" name rather than dropped: a ship
+    we cannot name is still a ship in the harbour."""
     import re
     out = {"army": {}, "fleet": {}}
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
     current_headers = []
     for row in rows:
-        cells_raw = re.findall(r'<t[hd][^>]*>(.*?)</t[hd]>', row, re.DOTALL | re.IGNORECASE)
         cells = []
-        for c in cells_raw:
+        for attrs, c in re.findall(r'<t[hd]\b([^>]*)>(.*?)</t[hd]>', row, re.DOTALL | re.IGNORECASE):
             text = re.sub(r'<[^>]+>', '', c).replace('\xa0', ' ').strip()
             text = re.sub(r'\s+', ' ', text).strip()
             if not text:
-                # Unit icons render name in title="" — e.g. <div class="army hoplite" title="Hoplita">
-                title_m = re.search(r'\btitle=["\']([^"\']+)["\']', c, re.IGNORECASE)
+                # Unit icons carry the name in a title/alt — on the icon or on the cell itself.
+                title_m = (re.search(r'\btitle=["\']([^"\']+)["\']', c, re.IGNORECASE)
+                           or re.search(r'\btitle=["\']([^"\']+)["\']', attrs, re.IGNORECASE)
+                           or re.search(r'\balt=["\']([^"\']+)["\']', c, re.IGNORECASE))
                 if title_m:
                     text = title_m.group(1).strip()
             cells.append(text)
         if not cells:
             continue
         first = cells[0]
-        if first in ('Quartel', 'Estaleiro'):
-            current_headers = cells[1:]
-        elif first.startswith('Tropas em') or first.startswith('Frotas em'):
-            section = out["fleet"] if first.startswith('Frotas em') else out["army"]
-            values = cells[1:]
-            for i, val in enumerate(values):
-                if i >= len(current_headers):
-                    break
-                unit_name = current_headers[i].strip()
-                if not unit_name or val in ('-', '', 'Nenhuma unidade disponível.'):
+        if first.startswith('Tropas em') or first.startswith('Frotas em'):
+            is_fleet = first.startswith('Frotas em')
+            section = out["fleet"] if is_fleet else out["army"]
+            for i, val in enumerate(cells[1:]):
+                if val in ('-', '', 'Nenhuma unidade disponível.'):
                     continue
                 try:
                     count = int(val.replace('.', '').replace(',', ''))
-                    if count > 0:
-                        section[unit_name] = section.get(unit_name, 0) + count
                 except ValueError:
-                    pass
+                    continue
+                if count <= 0:
+                    continue
+                unit_name = current_headers[i].strip() if i < len(current_headers) else ""
+                if not unit_name:
+                    unit_name = _UNKNOWN_SHIP if is_fleet else _UNKNOWN_UNIT
+                section[unit_name] = section.get(unit_name, 0) + count
+        elif first in ('Quartel', 'Estaleiro') or re.search(r'<th\b', row, re.IGNORECASE):
+            current_headers = cells[1:]
     return out
 
 
@@ -507,15 +520,22 @@ def _parse_garrison_troops(html):
 
 
 def _parse_movement_datetime(s):
-    """Parse the movement report's 'DD.MM.YYYY H:MM:SS' → epoch secs (local), or None.
-    Only used for DURATIONS (arrival − departure), so the local-TZ assumption cancels out."""
-    s = (s or "").strip()
-    for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
-        try:
-            return int(time.mktime(time.strptime(s, fmt)))
-        except (ValueError, OverflowError):
-            continue
-    return None
+    """Parse the movement report's 'DD.MM.YYYY H:MM:SS' → epoch secs, or None.
+    The date is on the SERVER's clock (see _GAME_SERVER_TZ), like every other date the game
+    prints. It was read with the container's local time, one hour off: harmless for durations,
+    but the enemy fleet's return is used as an ABSOLUTE time, so the port was believed clean
+    for an hour after the fleet was back (empty raid, 16/11)."""
+    import re
+    from datetime import datetime
+    m = re.fullmatch(r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?', (s or "").strip())
+    if not m:
+        return None
+    d, mo, y, h, mi, sec = (int(x) if x else 0 for x in m.groups())
+    try:
+        from zoneinfo import ZoneInfo
+        return int(datetime(y, mo, d, h, mi, sec, tzinfo=ZoneInfo(_GAME_SERVER_TZ)).timestamp())
+    except Exception:
+        return None
 
 
 def parse_fleet_movements(html):

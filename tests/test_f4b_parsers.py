@@ -119,13 +119,18 @@ def _mov_html(rows):
     return f"<table>{head}{body}</table>"
 
 
+from zoneinfo import ZoneInfo
+
+_SERVER = ZoneInfo("Europe/Berlin")   # the game prints its dates on the server's clock
+
+
 def _fmt(dt):
     return dt.strftime("%d.%m.%Y %H:%M:%S")
 
 
 def test_enemy_return_picks_soonest_future_inbound():
     now = int(_time.time())
-    base = datetime.fromtimestamp(now)
+    base = datetime.fromtimestamp(now, _SERVER)
     soon = base + timedelta(hours=2)        # defending fleet back in 2h
     later = base + timedelta(hours=5)
     html = _mov_html([
@@ -138,12 +143,12 @@ def test_enemy_return_picks_soonest_future_inbound():
          "Defender porto(Voltar)", 10),
     ])
     eta = em._enemy_return_from_movements(html, "Martelo", now)
-    assert eta == int(_time.mktime(soon.timetuple()))   # soonest future return
+    assert eta == int(soon.timestamp())   # soonest future return
 
 
 def test_enemy_return_ignores_outbound_and_other_cities():
     now = int(_time.time())
-    base = datetime.fromtimestamp(now)
+    base = datetime.fromtimestamp(now, _SERVER)
     html = _mov_html([
         ("Martelo", _fmt(base), _fmt(base + timedelta(hours=2)), "Pilhar", 168),          # outbound
         ("Outra Cidade", _fmt(base), _fmt(base + timedelta(hours=1)),

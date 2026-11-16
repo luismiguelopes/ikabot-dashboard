@@ -166,3 +166,38 @@ def test_manual_sweep_showing_ships_is_not_reused_as_the_first_scout():
     assert fm._recent_full_sweep([_sweep(now, garrison=LANCHAS)], t, now) is None
     assert fm._recent_full_sweep([_sweep(now, fleet={"Navio qualquer": 1})], t, now) is None
     assert fm._recent_full_sweep([_sweep(now, movements=now + 3600)], t, now) is None
+
+
+# ── Ships seen, raid held back: the target must not fall back to "safe" (CT DO CAJU, 16/11) ──
+
+def test_ships_seen_but_raid_deferred_is_already_a_fleet_target(monkeypatch, tmp_path):
+    """The sweep saw ships but the attack slot was busy, so nothing was queued. The target was
+    left `is_fleet_target 0` with a sealed sweep: the next round took the safe-target shortcut
+    (warehouse-only scout) and sized a troops-only wave into a harbour with 22 warships."""
+    now = int(time.time())
+    monkeypatch.setattr(fm, "_MAX_CONCURRENT_FARM", 0)      # attack slot taken by another raid
+
+    q, t = _run(monkeypatch, tmp_path,
+                missions=[_sweep(now, garrison={"Submergível": 13}, fleet={"Submergível": 13})],
+                farm_fleet={"s216": 40}, own_fleet={"s216": 78}, target={"max_enemy_ships": 30})
+    assert q == {}
+    assert t["state"] == "IDLE" and t["swept_at"] > 0
+    assert t["is_fleet_target"] == 1 and t["last_enemy_ships"] == 13
+    # …so the next round is a full sweep again, never a direct raid or a warehouse-only scout
+    assert fm._next_round_needs_spy(t)
+
+
+def test_warehouse_only_report_never_raids_a_target_last_seen_with_ships(monkeypatch, tmp_path):
+    """Defence in depth: whatever left the flag unset, a report with no garrison leg cannot
+    send troops to a target whose last sweep counted ships."""
+    now = int(time.time())
+    wh_only = {"state": "DONE", "targetCityId": "100", "originCityId": "1",
+               "needGarrison": False, "needMovements": False, "executedAt": now - 100,
+               "result": {"resources": {"wood": 90000}, "reportedAt": now - 100},
+               "garrisonResult": None, "movementsResult": None}
+    q, t = _run(monkeypatch, tmp_path, missions=[wh_only], farm_fleet={"s216": 40},
+                own_fleet={"s216": 78},
+                target={"swept_at": now - 3600, "is_fleet_target": 0, "last_enemy_ships": 22,
+                        "last_spy_at": now - 200})
+    assert q == {}
+    assert t["state"] == "IDLE" and t["next_action"] == "spy" and t["is_fleet_target"] == 1

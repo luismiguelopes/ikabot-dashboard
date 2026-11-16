@@ -398,6 +398,13 @@ def notify_farm_drained(target_city: str, player: str, loot: int) -> None:
           category="farm")
 
 
+def notify_farm_empty_returns(target_city: str, player: str, count: int) -> None:
+    _send(f"⛔ <b>Alvo pausado — regressos vazios</b>\n{_esc(target_city)} ({_esc(player)}): "
+          f"{count} vagas seguidas voltaram sem saque apesar de o varrimento dar caminho livre. "
+          f"Desactivado do farm; vê o relatório de combate no jogo antes de o reactivar.",
+          level="warning", category="farm")
+
+
 def notify_farm_active(target_city: str, player: str) -> None:
     _send(f"🟢 <b>Alvo já não inactivo</b>\n{_esc(target_city)} ({_esc(player)}) deixou de estar "
           f"inactivo — desactivado do farm (já não é seguro atacar às cegas).",

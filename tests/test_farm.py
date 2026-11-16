@@ -2481,3 +2481,67 @@ def test_waiting_on_spies_sent_earlier_is_not_a_stuck_round(monkeypatch):
     assert fm._spy_is_stuck(t, now) is False
     missions[0]["state"] = "FAILED"
     assert fm._spy_is_stuck(t, now) is True
+
+
+# ── Repeated empty returns: stop sending waves the scouts cannot explain ─────────
+
+def _empty_return_setup(tmp_path, now, earlier_returns):
+    """Target in ATTACKING whose wave just came home empty; `earlier_returns` are the totals
+    of the previous returns, newest first."""
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "targetPlayer": "J"})
+    db_manager.farm_update("100", {"state": "ATTACKING", "attack_return_at": now - 10,
+                                   "last_attack_at": now - 7200, "is_fleet_target": 1,
+                                   "swept_at": now - 7300})
+    db_manager.log_attack({"ts": now - 7100, "originCity": "Home", "targetCity": "Alvo",
+                           "targetCityId": "100", "missionType": "army", "source": "farm",
+                           "units": {"s303": 10}, "transporters": 20, "success": True})
+    for i, total in enumerate(reversed(earlier_returns)):
+        db_manager.log_loot({"ts": now - 90000 + i * 10000, "fromCity": "Alvo", "fromCityId": "100",
+                             "fromPlayer": "J", "resources": [total, 0, 0, 0, 0],
+                             "returnKey": f"old{i}"})
+    db_manager.log_loot({"ts": now - 20, "fromCity": "Alvo", "fromCityId": "100",
+                         "fromPlayer": "J", "resources": [0, 0, 0, 0, 0], "returnKey": "last"})
+
+
+def test_second_empty_return_in_a_row_pauses_the_target(monkeypatch, tmp_path):
+    """Two waves in a row came home empty although each followed a clean full sweep (16/11):
+    whatever turns the troops back is something the scouts do not see. Stop and tell the
+    user instead of sending a third 4-hour wave."""
+    now = int(time.time())
+    _empty_return_setup(tmp_path, now, earlier_returns=[0, 150000])
+    added = _common_patches(monkeypatch, tmp_path)
+    paused = []
+    import telegram_notifier
+    monkeypatch.setattr(telegram_notifier, "notify_farm_empty_returns",
+                        lambda *a, **k: paused.append(a), raising=False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["enabled"] == 0 and t["state"] == "IDLE"
+    assert t["swept_at"] == 0 and t["next_action"] == "spy"     # nothing direct if re-enabled
+    assert added == []
+    assert len(paused) == 1
+
+
+def test_first_empty_return_only_forces_a_full_sweep(monkeypatch, tmp_path):
+    now = int(time.time())
+    _empty_return_setup(tmp_path, now, earlier_returns=[150000, 0])   # last one before was good
+    _common_patches(monkeypatch, tmp_path)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("100")
+    assert t["enabled"] == 1 and t["is_fleet_target"] == 1 and t["next_action"] == "spy"
+
+
+def test_empty_return_strikes_zero_never_pauses(monkeypatch, tmp_path):
+    now = int(time.time())
+    _empty_return_setup(tmp_path, now, earlier_returns=[0, 0, 0])
+    _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_empty_return_strikes", lambda: 0)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    assert db_manager.farm_get("100")["enabled"] == 1
