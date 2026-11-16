@@ -10,6 +10,9 @@ import { ConstructionTemplate } from './ConstructionTemplate'
 import { apiAction, pollInterval, clearPoll } from '../api'
 import type { ApiData, BuildingQueue, BuildingCostsData, Movement, QueueItem } from '../types'
 
+// One stable fallback: a fresh {} on every render made every memo that depends on it recompute.
+const NO_EMPIRE: ApiData['empireData'] = {}
+
 interface BuildingInCity {
   name: string
   level: number
@@ -262,7 +265,7 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
   }
 
 
-  const empireData = data?.empireData || {}
+  const empireData = data?.empireData || NO_EMPIRE
   const cityNames  = Object.keys(empireData).sort()
 
   useEffect(() => {

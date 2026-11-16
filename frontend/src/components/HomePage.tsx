@@ -11,6 +11,9 @@ import { Th, Td } from './ui/TableCells'
 import { StatBadge } from './ui/StatBadge'
 import type { ApiData, AlertThresholds, BuildingQueue, BuildingCostsData } from '../types'
 
+// One stable fallback: a fresh {} on every render made the constructions memo recompute every time.
+const NO_PROGRESS: NonNullable<BuildingQueue['inProgress']> = {}
+
 interface ActivityData {
   pending: Array<{ queue: string; label: string; queuedAt: number | null; dispatchAfter: number | null; retries: number }>
   flags: Array<{ kind: string; requestedAt: number }>
@@ -356,7 +359,7 @@ function ConstructionsCard({ empireData, queue }: { empireData: ApiData['empireD
   const t   = useT()
   const now = useLiveClock()
   const queues     = queue?.queues      || {}
-  const inProgress = (queue?.inProgress && typeof queue.inProgress === 'object') ? queue.inProgress : {}
+  const inProgress = (queue?.inProgress && typeof queue.inProgress === 'object') ? queue.inProgress : NO_PROGRESS
 
   // Active constructions — merges empire.json (isBusy flag) with queue inProgress (accurate ETA).
   // empire._constructionEnds is 0 when construction started after the last full empire cycle,

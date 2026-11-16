@@ -1924,11 +1924,10 @@ com a linha do alvo expandida).
 | Item | Nota |
 |---|---|
 | Verificar no browser | os pontos "não experimentado" acima |
-| P13.60 (resto) | Corrigir os 12 avisos do `npm run lint`, **um a um** (lista abaixo) |
+| P13.60 (resto) | Corrigir os 9 avisos que restam do `npm run lint`, **um a um** (lista abaixo; os 3 de memo já estão) |
 | P13.45 (resto) | Opcional: trocar as atribuições directas que restam (`test_db`, `test_pause`, `test_flask_api`, `test_loot_log`) pelo `setup_db`/fixture `db` do `conftest.py` — já não contaminam (são repostas), é só arrumação |
 | P13.42 | Partir `InactivosTab` (~1000 linhas) e `DispatchPanel`; `types/farm.ts` único (há dois `FarmTarget`: `mundo/types.ts` e `dispatch/shared.ts`) |
 | P13.32 (resto) | Uniformizar logs (`lm()` vs português fixo) — cosmético |
-| Ícones | `fa-brands` (Telegram/Discord) não aparecem nas Notificações |
 
 **P13.45 ✅ (16/11)** — `tests/conftest.py`: `setup_db(tmp_path)` + fixture `db`; uma fixture
 automática repõe os globais do `db_manager` depois de **cada** teste; e o pacote `ikabot` real
@@ -1954,6 +1953,21 @@ muda quando ele corre):
 | `mundo/MundoPage.tsx:52` | `useEffect` sem `loadSpyCounts` |
 | `hooks/useEmpireRefresh.ts:40` | `useEffect` sem `onDone` |
 
-Os de `empireData`/`inProgress` são só desempenho (memo que não memoriza) e são seguros de
-corrigir com um `useMemo`. Os de `useEffect` pedem cuidado: acrescentar a dependência pode pôr o
+Os três de `empireData`/`inProgress` (memo que não memorizava) **estão corrigidos** com uma
+constante estável de módulo — restam 9, todos de dependências de `useEffect`/`useMemo`. Os de `useEffect` pedem cuidado: acrescentar a dependência pode pôr o
 efeito a correr em ciclo se a função não estiver num `useCallback`.
+
+**Fecho da sessão de 16/11 (noite)** — vistos no browser depois do último build: Início,
+Construção, Definições → Espionagem (campo de retenção, 30) e Transportes (recursos nunca
+enviados + tecto do destino). Os ícones `fa-brands` das Notificações **carregam** (fonte
+"Font Awesome 6 Brands" carregada, ícone com largura) — retirado da lista.
+Continua por experimentar: **gravar** pelos formulários novos (só o POST directo foi testado) e
+as duas notas da página Alvos com um alvo expandido.
+
+**Próxima sessão (Opus), por ordem:** (1) experimentar as gravações acima; (2) P13.42 — começar
+pelo `types/farm.ts` único (há dois `FarmTarget`, em `mundo/types.ts` e `dispatch/shared.ts`, com
+campos obrigatórios diferentes) antes de partir o `InactivosTab`; (3) os 9 avisos do lint, um a
+um; (4) P13.32-resto (logs).
+**A vigiar (Fable):** CT DO CAJU ficou em re-varrimento como alvo de frota (22 navios, limite 30)
+— a próxima vaga deve ser bloqueio + tropas acopladas; e o motivo dos regressos vazios do
+ATHLÉTICO continua por confirmar no relatório de combate do jogo.

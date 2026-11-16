@@ -6,6 +6,9 @@ import { Card } from './ui/Card'
 import { Th, Td } from './ui/TableCells'
 import type { ApiData, BuildingQueue, BuildingCostsData } from '../types'
 
+// One stable fallback: a fresh {} on every render made the memo below recompute every time.
+const NO_EMPIRE: ApiData['empireData'] = {}
+
 const TEMPLATE_KEY = 'ikabot_construction_template'
 
 function loadTemplate(): Record<string, number> {
@@ -39,7 +42,7 @@ export function ConstructionTemplate({ data, queue, costsData, onApplied }: {
   const [done,     setDone]     = useState(false)
   const [saved,    setSaved]    = useState(false)
 
-  const empireData = data?.empireData || {}
+  const empireData = data?.empireData || NO_EMPIRE
 
   const allBuildings = useMemo(() => {
     const set = new Set<string>()
