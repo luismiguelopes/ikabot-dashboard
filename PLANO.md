@@ -14,8 +14,8 @@ falhar (bug de formato de id), foi **corrigido (`7b95486`) e confirmado live** �
 type=10 (`ataque despachado → Própria (Vampiria)` às 09:53). Auto-attack foi **descontinuado**
 (P6.2) — ignorar itens antigos que o referem.
 
-> **Actualização 2026-11-14:** a auditoria linha a linha (**secção P13**, no fim) reabriu trabalho
-> de código — a nota "nada pendente" acima já não vale. Começar por P13-A.
+> **Actualização 2026-11-16:** o trabalho corrente é a **secção P13** (no fim). O que falta e
+> como o fazer está em **P13-K — Passagem para o Opus**; começar por aí.
 
 ---
 
@@ -1395,7 +1395,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
 **F.3 — Início, cidades, histórico, logs, calculadoras, shell** (`HomePage`, `CitiesPage`,
 `MovementsPage`, `AlertsPage`, `HistoryPage`, `LogsPage`, `calculadoras/*`, `ui/*`, `i18n.tsx`)
 
-- [ ] **P13.54 As calculadoras dão respostas erradas com confiança** **[C]**
+- [~] **P13.54 As calculadoras dão respostas erradas com confiança** **[C]** *parte feita 2026-11-16* (`calcUpgradeTime`: falta por recurso, tempo = o recurso mais lento, ouro por bissecção; `ColonyROICalc`: o ganho multiplica pelas cidades **da ilha**, com campo próprio. **Falta:** a opção B ignorar o custo da colónia e creditar a produção desde a hora 0; o preço do ouro que se anula; "disponível" somado pelo império; nomes de edifícios fixos em português)
   - `utils.ts:90-99` (`calcUpgradeTime`) trata os recursos como intermutáveis: falta de mármore é
     anulada por excedente de madeira → "Tens tudo!" com linhas a vermelho por baixo. Usar a soma
     das faltas por recurso para o custo e o máximo de `falta/produção` para o tempo.
@@ -1446,7 +1446,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       "Pausar bot" é um toque sem confirmação mesmo acima das Definições; cores das linhas do
       histórico trocadas face ao resto (vinho verde, cristal vermelho); eixo do tempo comprime as
       noites offline e não há selector de intervalo.
-- [ ] **P13.60 Base do frontend** **[C]** — sem ESLint (logo sem `react-hooks/exhaustive-deps`),
+- [~] **P13.60 Base do frontend** **[C]** *parte feita 2026-11-16* (o comando documentado passou a `npm run build`, que corre o `tsc` antes do `vite build`. **Falta:** ESLint com `react-hooks/exhaustive-deps`; chaves de tradução sem uso; `useT` tipado; ícones/fonte locais) — sem ESLint (logo sem `react-hooks/exhaustive-deps`),
       e o comando de deploy documentado (`npx vite build`) **salta o `tsc`**: erros de tipos não
       travam um deploy → usar `npm run build`. `i18n.tsx`: 712 chaves, paridade pt/en perfeita,
       ~12% sem uso, `useT` aceita qualquer string (um typo aparece como identificador cru).
@@ -1616,3 +1616,137 @@ recomeçava de 25 em 25 min — `_spy_is_stuck` conta agora qualquer missão viv
 Achado lateral corrigido: `_auto_mark_ignored` rebentava com `NameError` no caminho de recurso
 em JSON (`atomic_write_json` não importado) — apanhado com `pyflakes`, que vale a pena correr
 no P13.45/P13.60.
+
+### K — Passagem para o Opus (2026-11-16)
+
+Esta secção substitui a tabela J como guia de trabalho. O Fable fechou tudo o que mexe em
+despachos ao jogo; o que resta é frontend, testes e estrutura.
+
+#### K.1 — Estado em 2026-11-16
+
+- `main` em dia com o remoto; último commit de código `56659d1` (+ o commit desta secção).
+- Suite: **618 testes** (`.venv/bin/python -m pytest tests/ -q`), ~10 s.
+- Em produção: tudo o que está marcado `[x]` ou `[~]` no P13. Containers recriados a 16/11.
+- **Uma janela horária única** (7–23, definida no dashboard): fora dela o bot só actualiza o
+  império de 8 em 8 h. Confirmado ao vivo ("Fora das horas activas (7h–23h)").
+- **Nada do dashboard alterado a 15–16/11 foi visto num browser** — só compilado (`tsc`) e
+  testado pelo lado do API. É a primeira coisa a fazer (K.3).
+
+#### K.2 — O que foi feito (resumo por bloco; detalhe em cada item acima)
+
+| Bloco | Itens fechados |
+|---|---|
+| Farm e espionagem (Fable) | P13.0–P13.14, P13.23, P13.24, P13.27, P13.28, P13.61–P13.64 |
+| Estado em ficheiros | P13.15, P13.16, P13.17, P13.18 |
+| Logística | P13.19, P13.20, P13.21, P13.22 |
+| Pedidos ao jogo | P13.25 (39 pedidos em vez de ~330, validado ao vivo), P13.26 |
+| Dados e legado | P13.29, P13.31 |
+| Dashboard | P13.33, P13.34, P13.35, P13.38, P13.46, P13.48, P13.50, P13.51, P13.57 |
+| Achados ao vivo | espião estacionado re-registado como "manual" (Tróia 3); marcas antigas só em JSON (126) |
+
+#### K.3 — Primeiro: verificar no browser o que já está feito
+
+Abrir `http://localhost:5001`, entrar, e percorrer esta lista. Qualquer coisa partida corrige-se
+**antes** de avançar para itens novos.
+
+1. **Início** — faixa de estado no topo (bot vivo, sem erros, próxima acção do farm); cartão
+   "Vinho em risco" só com cidades abaixo do limite; obras em curso com tempo, não "concluído".
+2. **Mundo → alvos** — caixa de pesquisa filtra; coluna Navios com ✗ onde há frota (Esparta
+   tem 40 navios); linha por baixo do estado ("próx.: espiar · 17:30 — alvo de frota…");
+   um alvo do farm expande sempre e mostra saque mínimo, botão farm/loop, "correr já"
+   (desactivado com tropas fora), remover (pede confirmação).
+3. **Definições** — notificações: token e webhook vazios com "Definido (…xxxx)"; gravar sem
+   os preencher **não** os apaga (confirmar com o botão de teste). Treino de espiões: desligar
+   o modo de teste pede confirmação. Horas activas 22→6 dá erro a vermelho.
+4. **Transportes** — mudar a origem para a cidade de destino troca o destino; agendar "às" sem
+   hora é recusado; toggle do comprador de vinho verde em teste, vermelho ao vivo.
+5. **Movimentos, Histórico, Logs** — carregam; o log não salta para o fim ao ler acima.
+6. **Sessão** — apagar o cookie de sessão a meio: a app volta ao ecrã de login, não fica em branco.
+7. **Calculadoras** — melhoria de edifício com mármore em falta e madeira a sobrar **não** diz
+   "tens tudo"; ROI de colónia tem o campo "cidades tuas nesta ilha".
+
+#### K.4 — O que falta, por ordem
+
+**A. Restos pequenos de itens já começados** (uma sessão cada, ou duas juntas)
+
+| Item | O que falta |
+|---|---|
+| P13.36 | Confirmação ao cancelar um ataque; botão inactivo quando já está "a despachar" |
+| P13.37 | `apiAction` em `FarmSettings.tsx`, "adicionar ao farm" do `DispatchPanel`, toggles do `MundoPage`, "des-ignorar" |
+| P13.39 | Filtro e pontuação dos alvos ainda usam `last_loot` espiado em vez do saque real |
+| P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
+| P13.47 | Aplicar um modelo de construção num único pedido |
+| P13.48 | O preview do comprador de vinho não deve substituir o status da última compra real |
+| P13.49 | Erro ao gravar notificações mostrado como "webhook inválido" — **já corrigido em 16/11, confirmar** |
+| P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
+| P13.55 | `useLiveClock` ao nível da página; `Section` declarado dentro do render no `MovementsPage` |
+| P13.56 | Guardas contra respostas inesperadas no `HomePage` |
+| P13.58 | Ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas (acrescentar a `alerts.ts`) |
+| P13.59 | "Actualização em 0:00" quando o ciclo atrasa; foco do `Modal` a cada poll; cores e eixo do Histórico |
+
+**B. Itens inteiros por fazer**
+
+| Item | Nota |
+|---|---|
+| P13.52 | Campos numéricos: limitar e gravar só ao sair do campo, e só se mudou. Fazer junto com o `NumberField` do P13.53 |
+| P13.40 | Hook partilhado para o evento `update` do SSE; `DispatchPanel`, `HistoryPanel` e contagens de espiões nunca actualizam. Os polls já param com o separador escondido (`pollInterval` em `api.ts`) |
+| P13.30 (resto) | Passar farm, espionagem, world scan, fila e alertas para o `settings_registry`; dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap` |
+| P13.53 | `<Toggle>` (com `role="switch"`), `<NumberField>`, `useSettings(url)`; partir `SettingsPage` e `TransportTab` |
+| P13.42 | Partir `InactivosTab` e `DispatchPanel`; `types/farm.ts` único; hooks de dados partilhados |
+| P13.60 | ESLint com `react-hooks/exhaustive-deps` — **só relatar** os avisos primeiro; corrigir dependências de efeitos muda comportamento, fazer um a um |
+| P13.45 | `conftest.py` (o `_setup_db` está copiado em `test_farm`, `test_attack_queue`, `test_transport_queue`); estado global atribuído sem `monkeypatch` |
+| P13.44 | Testes (2)–(5) da lista; o (1) já existe (`test_farm_attack_e2e.py`) |
+| P13.43 | Mais capturas reais → fixtures (`/tmp/ikalogs/captures/`), sem nomes de terceiros |
+| P13.32 (resto) | Uniformizar logs (`lm()` vs português fixo) — cosmético |
+
+**C. Fora do alcance do Opus — anotar e deixar**
+
+- Qualquer coisa em `process_farm_targets`, `process_attack_queue`, os colectores de relatórios,
+  `smart_sleep` ou `_sync_active_spy_missions`.
+- Tirar o `pip install` do arranque do dashboard (pede imagem própria: decisão do utilizador).
+- Dividir os ramos SPYING/ATTACKING do farm (decidido não fazer — P13.28).
+
+#### K.5 — Regras de trabalho
+
+1. **Um item ou um grupo pequeno por sessão.** Ler primeiro o item no plano e o `CLAUDE.md`.
+2. **Teste primeiro**, depois a correcção. Suite inteira antes de qualquer deploy.
+3. **Frontend:** `cd frontend && npm run build` (corre o `tsc`; o `npx vite build` sozinho
+   deixa passar erros de tipos). O Flask serve o `dist`: basta refrescar o browser.
+4. **Dashboard (`app.py`):** já **não** se recarrega sozinho — `docker restart ikabot-gui`
+   depois de cada alteração, senão continua a correr o código antigo.
+5. **Bot (`bot/*.py`):** `docker compose up -d --force-recreate ikabot`, e olhar para o log
+   durante um ciclo completo e para o `health.json`.
+6. **Módulo novo partilhado:** criar o ficheiro → acrescentar ao `docker-compose.yml` nos dois
+   serviços → recriar os dois → **só então** escrever o `import`. A ordem contrária deitou o
+   dashboard abaixo e parou transportes durante 2 h (15/11).
+7. **Migrações de dados:** fazer o deploy logo a seguir a escrevê-las; antes, tirar uma cópia
+   do que vai mudar (`docker exec ikabot python3 …` para um JSON em `/tmp/ikalogs/`).
+8. **Definições novas** nos ficheiros do registo = uma linha em `bot/settings_registry.py`,
+   nunca um dicionário de defaults no `app.py`.
+9. **"Há navios" / classificação de unidades** decide-se no backend (`_garrison_view`), nunca
+   no browser.
+10. **Commits:** mensagens em inglês, sem qualquer referência a Claude/Anthropic; o `CLAUDE.md`
+    nunca é staged (usar a skill `commit`). Commit e push só quando o utilizador pedir.
+11. **Dúvida sobre se algo muda um pedido ao jogo → não fazer.** Anotar aqui, na lista C.
+12. **`pyflakes`** está no `.venv`: correr nos `.py` tocados (`.venv/bin/python -m pyflakes …`).
+
+#### K.6 — O que verificar depois de cada sessão
+
+- `pytest` a verde e o número de testes a subir, não a descer.
+- `npm run build` sem erros.
+- `docker ps`: os três containers `Up`, o `ikabot` `healthy`.
+- `health.json` sem `consecutiveFailures`; `bot.log` sem `Traceback` novo.
+- A página alterada **aberta no browser** e a acção alterada **experimentada** — incluindo o
+  caso de erro (servidor a responder 400/500).
+- O item no plano actualizado: `[x]` com data e uma linha do que mudou, ou `[~]` com o que falta.
+
+#### K.7 — A vigiar nos próximos dias (não é trabalho, é observação)
+
+- **Tróia 3:** as falhas de armazém em série devem diminuir agora que o espião estacionado
+  deixou de correr missões por conta própria. Se continuarem, é caso para o Fable.
+- **Noites:** entre as 23h e as 7h o farm não relança e o vinho não é rebalanceado. Se uma
+  cidade ficar sem vinho de noite, rever a janela (Definições → horas activas).
+- **126 cidades ignoradas** vindas do ficheiro antigo ficaram permanentes; rever no separador
+  "Ignoradas" as que já não fazem sentido.
+- **Pedidos por hora** (`/api/health` → `requests`): com a janela única e a fila de construção
+  só a correr quando é dela, os totais devem baixar face a 14/11.

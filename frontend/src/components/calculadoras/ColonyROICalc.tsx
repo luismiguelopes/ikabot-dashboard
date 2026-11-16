@@ -43,6 +43,16 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
     setResType(islandPreset.resType)
     setNewIslandLevel(islandPreset.level || 1)
   }, [islandPreset])
+  const [islandCities,   setIslandCities]   = useState(1)
+  useEffect(() => {
+    // default: the largest group of own cities sharing an island
+    fetch('/api/own-cities').then(r => r.json()).then((cs: Array<{ islandId?: string }>) => {
+      if (!Array.isArray(cs)) return
+      const per: Record<string, number> = {}
+      cs.forEach(c => { if (c.islandId) per[c.islandId] = (per[c.islandId] || 0) + 1 })
+      setIslandCities(Math.max(1, ...Object.values(per)))
+    }).catch(() => {})
+  }, [])
   const [costsData,      setCostsData]      = useState<any>(null)
   const [costsLoading,   setCostsLoading]   = useState(true)
 
@@ -65,7 +75,9 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
   const gainPerCity = (upFromData && upToData && upTo > upFrom)
     ? Math.round((upToData[2] - upFromData[2]) * ISLAND_WORKER_BONUS * 10) / 10
     : 0
-  const totalGainA  = gainPerCity * numCities
+  // A sawmill/quarry only serves the cities ON ITS ISLAND. This used to multiply by every
+  // city in the empire, inflating the upgrade option up to 13×.
+  const totalGainA  = gainPerCity * islandCities
   const upgradeCost = islandLevels
     .filter(r => r[0] > upFrom && r[0] <= upTo)
     .reduce((s, r) => s + r[1], 0)
@@ -174,7 +186,11 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
           <div className="p-5 space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
               <i className="fa-solid fa-city mr-1" />
-              {t('one_sawmill_note', { n: String(numCities) })}
+              {t('one_sawmill_note', { n: String(islandCities) })}
+            </div>
+            <div className="w-56">
+              <NumInput label={t('island_cities_lbl')} value={islandCities}
+                onChange={v => setIslandCities(Math.max(1, Math.min(numCities || 1, v)))} min={1} />
             </div>
             <div className="flex flex-wrap gap-3">
               <LevelSelect label={t('current_level')} value={upFrom}
@@ -192,7 +208,7 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-slate-500">{t('gain_all_islands_lbl', { n: String(numCities) })}</span>
+                <span className="text-slate-500">{t('gain_all_islands_lbl', { n: String(islandCities) })}</span>
                 <span className={`font-bold ${isWood ? 'text-green-700' : 'text-slate-600'}`}>
                   <i className={`fa-solid ${resIcon} mr-1`} />{fmt(totalGainA)} /h
                 </span>

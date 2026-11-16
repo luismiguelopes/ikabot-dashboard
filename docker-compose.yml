@@ -117,7 +117,7 @@ services:
       - ./bot/settings_registry.py:/gui/settings_registry.py
       - ./bot/telegram_notifier.py:/gui/telegram_notifier.py
       # P6.11: build de produção do frontend, servido pelo Flask (era um container Vite)
-      # Rebuild após mudanças no frontend: cd frontend && npx vite build
+      # Rebuild após mudanças no frontend: cd frontend && npm run build
       - ./frontend/dist:/gui/dist:ro
       # A mesma Pasta Virtual Partilhada
       - ikalogs_volume:/tmp/ikalogs/

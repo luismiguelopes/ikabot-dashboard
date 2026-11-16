@@ -88,24 +88,34 @@ export function calcUpgradeTime(
   const gp      = goldPrice || 15
   const missing = needed.map((n, i) => Math.max(0, n - (available[i] || 0)))
 
-  const totalNeeded     = needed.reduce((s, n) => s + n, 0)
-  const totalAvailable  = available.reduce((s, a) => s + (a || 0), 0)
-  const totalMissing    = Math.max(0, totalNeeded - totalAvailable)
+  // Each resource is short on its own: surplus wood does not pay for missing marble. (The
+  // totals used to be compared as one pool, so a marble shortfall hidden by spare wood read
+  // "you have everything" above a table with red rows.)
+  const totalMissing    = missing.reduce((s, m) => s + m, 0)
   const totalProduction = production.reduce((s, p) => s + (p || 0), 0)
   const goldNeededAll   = totalMissing * gp
   const canBuyAll       = gold >= goldNeededAll
 
-  const timeNoGold = totalProduction > 0
-    ? totalMissing / totalProduction
-    : (totalMissing > 0 ? Infinity : 0)
+  // Waiting time = the slowest resource (they accumulate in parallel).
+  const waitFor = (short: number, prod: number) => short <= 0 ? 0 : (prod > 0 ? short / prod : Infinity)
+  const timeNoGold = Math.max(0, ...missing.map((m, i) => waitFor(m, production[i] || 0)))
 
-  let timeWithGold = canBuyAll ? 0 : timeNoGold
-  if (!canBuyAll && gold > 0) {
-    const goldBuysUnits = gold / gp
-    const stillMissing  = Math.max(0, totalMissing - goldBuysUnits)
-    timeWithGold = totalProduction > 0
-      ? stillMissing / totalProduction
-      : (stillMissing > 0 ? Infinity : 0)
+  // With gold: after waiting T hours, what is still short has to be bought. Find the
+  // smallest T the gold can cover.
+  const toBuyAfter = (hours: number) =>
+    missing.reduce((s, m, i) => s + Math.max(0, m - (production[i] || 0) * hours), 0)
+  const canBuyUnits = gold > 0 ? gold / gp : 0
+  let timeWithGold = 0
+  if (!canBuyAll) {
+    if (!isFinite(timeNoGold) && toBuyAfter(1e7) > canBuyUnits) timeWithGold = Infinity
+    else {
+      let lo = 0, hi = isFinite(timeNoGold) ? timeNoGold : 1e7
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2
+        if (toBuyAfter(mid) <= canBuyUnits) hi = mid; else lo = mid
+      }
+      timeWithGold = hi
+    }
   }
 
   return { missing, totalMissing, totalProduction, timeNoGold, timeWithGold, goldNeededAll, canBuyAll }
