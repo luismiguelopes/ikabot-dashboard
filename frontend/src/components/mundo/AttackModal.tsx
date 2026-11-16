@@ -1,18 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useT } from '../../i18n'
 import { Modal } from '../ui/Modal'
+import { useLiveClock } from '../../hooks/useLiveClock'
 import type { WorldScanPlayer, OwnCity } from '../../types'
 
 interface MilitaryUnit { name: string; amount: number }
 interface CityMilitary { cityId: string; troops: Record<string, MilitaryUnit>; fleet: Record<string, MilitaryUnit> }
 interface MilitaryData { lastUpdated: number; byCityName: Record<string, CityMilitary> }
 
+const hhmmIn = (minutes: number, nowSec: number) =>
+  new Date((nowSec + minutes * 60) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
 interface AttackModalProps {
   player: WorldScanPlayer
   ownCities: OwnCity[]
   defaultOriginCityId: string
   onClose: () => void
-  onQueued: (playerName: string) => void
+  onQueued: (playerName: string, dispatchAfter?: number) => void
 }
 
 export function AttackModal({ player, ownCities, defaultOriginCityId, onClose, onQueued }: AttackModalProps) {
@@ -33,6 +37,7 @@ export function AttackModal({ player, ownCities, defaultOriginCityId, onClose, o
   const originCityName = ownCities.find(c => String(c.cityId) === originCityId)?.name || ''
   const units = military?.byCityName[originCityName]?.troops || {}
   const hasUnits = Object.values(unitInputs).some(v => v > 0)
+  const now = useLiveClock(30000)
 
   async function handleConfirm() {
     if (!hasUnits) { setError(t('attack_no_units')); return }
@@ -57,8 +62,8 @@ export function AttackModal({ player, ownCities, defaultOriginCityId, onClose, o
         }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error || 'Erro desconhecido'); return }
-      onQueued(player.playerName)
+      if (!res.ok) { setError(data.error || t('transport_save_failed')); return }
+      onQueued(player.playerName, data?.item?.dispatchAfter)
       onClose()
     } catch (e) {
       setError(String(e))
@@ -105,7 +110,7 @@ export function AttackModal({ player, ownCities, defaultOriginCityId, onClose, o
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="text-left px-3 py-2 font-medium text-slate-600">Unidade</th>
+                    <th className="text-left px-3 py-2 font-medium text-slate-600">{t('attack_unit_col')}</th>
                     <th className="text-center px-3 py-2 font-medium text-slate-600">{t('attack_available')}</th>
                     <th className="text-center px-3 py-2 font-medium text-slate-600">{t('attack_send_count')}</th>
                   </tr>
@@ -142,6 +147,17 @@ export function AttackModal({ player, ownCities, defaultOriginCityId, onClose, o
             className="w-24 text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-400"
           />
         </div>
+
+        {/* The server adds a random 5–20 min before the bot sends it (app.py attack-queue/add). */}
+        <div className="mb-3 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-start gap-2">
+          <i className="fa-solid fa-clock mt-0.5 text-slate-400" />
+          <span>{t('attack_departure', { from: hhmmIn(5, now), to: hhmmIn(20, now) })}</span>
+        </div>
+        {hasUnits && transporters <= 0 && (
+          <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+            <i className="fa-solid fa-triangle-exclamation mr-1" />{t('attack_no_ships_warn')}
+          </div>
+        )}
 
         {error && (
           <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{error}</div>

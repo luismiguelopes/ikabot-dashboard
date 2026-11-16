@@ -1276,7 +1276,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       escuta; `DispatchPanel`, `HistoryPanel` e as contagens de espiões **nunca** actualizam (um
       ataque pendente fica "a despachar" para sempre). Um hook partilhado para o evento `update`,
       refetch ao receber, poll lento só como recurso.
-- [~] **P13.41 Em falta na UI** **[C]** *parte feita 2026-11-16* (saque mínimo e modo farm/loop editáveis por alvo; pesquisa na tabela de alvos; agendar sem hora é recusado. **Falta:** adicionar alvos com frota fora do Combate; hora de saída no modal de ataque. Bloquear 0 navios ficou de fora de propósito: na mesma ilha é legítimo) — `minLoot` e modo (farm/loop) não se editam por alvo;
+- [x] **P13.41 Em falta na UI** **[C]** ✅ 2026-11-16 (saque mínimo e modo farm/loop editáveis por alvo; pesquisa na tabela de alvos; agendar sem hora é recusado; alvos com navios no porto têm "Adicionar ao farm/loop" nos Alvos, com a nota de que o farm bloqueia primeiro; o modal de ataque mostra a janela de saída (agora + 5–20 min) e o toast diz a hora exacta que o servidor marcou. 0 navios só avisa — na mesma ilha é legítimo) — `minLoot` e modo (farm/loop) não se editam por alvo;
       alvos com frota só se adicionam pela pesquisa do Combate (sem modo); sem pesquisa/filtro na
       tabela de alvos; sem scan, os alvos do farm ficam invisíveis; agendar "às HH:MM" com a hora
       vazia envia **já**; o modal de ataque não mostra a hora de saída (o backend soma 5-20 min) e
@@ -1351,7 +1351,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
     outra cidade mas o estado mantém a antiga → o envio falha com "origem e destino iguais".
   - Janela horária da fila com início ≥ fim (ex.: 22→6): o servidor ignora e responde `ok`.
   - Agendar "às HH:MM" sem hora envia **já** (igual ao despacho de ataques, P13.41).
-- [~] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** —
+- [x] **P13.47 Fila de construção por posição numa lista que não actualiza** **[C]** ✅ 2026-11-16 (o modelo aplica-se num só pedido — `POST /api/building-queue/add-many`: uma leitura e uma gravação da fila, salta o que já está na fila, cada linha com o seu resultado) —
       *feito 2026-11-14:* remover e reordenar enviam o **id** do item (o API devolve os ids);
       item que já saiu da fila → 409 com aviso e a lista é actualizada. *Feito 2026-11-15:* a lista
       relê-se a cada actualização do império e de 30 em 30s; o "+" rápido é visível sem hover e
@@ -1696,8 +1696,8 @@ Visto e deixado (anotar, não é erro):
 | Item | O que falta |
 |---|---|
 | P13.39 | Filtro e pontuação dos alvos ainda usam `last_loot` espiado em vez do saque real |
-| P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
-| P13.47 | Aplicar um modelo de construção num único pedido |
+| ~~P13.41~~ | ✅ 16/11 |
+| ~~P13.47~~ | ✅ 16/11 |
 | P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
 
 **B. Itens inteiros por fazer**

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useT } from '../i18n'
+import { apiAction } from '../api'
 import { fmt } from '../utils'
 import { Card } from './ui/Card'
 import { Th, Td } from './ui/TableCells'
@@ -97,22 +98,21 @@ export function ConstructionTemplate({ data, queue, costsData, onApplied }: {
   const handleApply = async () => {
     if (!preview) return
     setApplying(true)
-    const next = [...preview]
-    for (let i = 0; i < next.length; i++) {
-      const row = next[i]
-      if (row.status !== 'add') continue
-      try {
-        const r = await fetch('/api/building-queue/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cityName: row.city, buildingName: row.building, targetLevel: row.targetLevel }),
-        })
-        next[i] = { ...row, status: r.ok ? 'done' : 'error' }
-      } catch {
-        next[i] = { ...row, status: 'error' }
-      }
-      setPreview([...next])
-    }
+    // One request for the whole template (P13.47) — it used to be one POST per row, each a full
+    // read and write of the queue. The server skips rows already queued and reports each one.
+    const rows = preview.filter(r => r.status === 'add')
+    const res = await apiAction('/api/building-queue/add-many', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: rows.map(r => ({ cityName: r.city, buildingName: r.building, targetLevel: r.targetLevel })) }),
+    })
+    const results = (res?.results as { cityName: string; buildingName: string; status: string }[] | undefined) ?? []
+    const byKey = new Map(results.map(r => [`${r.cityName}|${r.buildingName}`, r.status]))
+    setPreview(preview.map(row => {
+      if (row.status !== 'add') return row
+      const st = res ? byKey.get(`${row.city}|${row.building}`) : undefined
+      return { ...row, status: st === 'added' ? 'done' : st === 'queued' ? 'queued' : 'error' }
+    }))
     setApplying(false)
     setDone(true)
     onApplied?.()          // the queue shown next to the template was left as it was

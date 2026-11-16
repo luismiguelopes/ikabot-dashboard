@@ -892,3 +892,45 @@ def test_alerts_extra_with_nothing_on_disk(monkeypatch, tmp_path):
     monkeypatch.setattr(flask_app, "TRANSPORT_FAILURES_PATH", str(tmp_path / "none.json"))
     d = c.get("/api/alerts/extra").get_json()
     assert d == {"subsystems": [], "transportRetrying": [], "transportDropped": []}
+
+
+# ── P13.47: apply a construction template in one request ───────────────────────
+
+def test_add_many_queues_every_row_in_one_save(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    saves = []
+    real_save = db_manager.save_queue
+    monkeypatch.setattr(db_manager, "save_queue", lambda d: (saves.append(1), real_save(d))[1])
+    r = c.post("/api/building-queue/add-many", json={"items": [
+        {"cityName": "Lisboa", "buildingName": "Academia", "targetLevel": 10},
+        {"cityName": "Porto", "buildingName": "Museu", "targetLevel": 4},
+        {"cityName": "Lisboa", "buildingName": "Porto", "targetLevel": 8},
+    ]})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["added"] == 3 and [x["status"] for x in d["results"]] == ["added"] * 3
+    assert len(saves) == 1
+    q = c.get("/api/building-queue").get_json()["queues"]
+    assert [i["building"] for i in q["Lisboa"]] == ["Academia", "Porto"]
+    assert [(i["building"], i["targetLevel"]) for i in q["Porto"]] == [("Museu", 4)]
+
+
+def test_add_many_skips_already_queued_and_reports_bad_rows(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    _queue_with(c, "Academia")
+    d = c.post("/api/building-queue/add-many", json={"items": [
+        {"cityName": "Lisboa", "buildingName": "Academia", "targetLevel": 9},   # already there
+        {"cityName": "", "buildingName": "Museu", "targetLevel": 3},            # invalid
+        {"cityName": "Lisboa", "buildingName": "Museu", "targetLevel": "x"},    # invalid
+        {"cityName": "Lisboa", "buildingName": "Museu", "targetLevel": 3},
+    ]}).get_json()
+    assert [x["status"] for x in d["results"]] == ["queued", "error", "error", "added"]
+    assert d["added"] == 1
+    q = c.get("/api/building-queue").get_json()["queues"]["Lisboa"]
+    assert [i["building"] for i in q] == ["Academia", "Museu"]
+
+
+def test_add_many_rejects_a_body_without_items(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/building-queue/add-many", json={}).status_code == 400
+    assert c.post("/api/building-queue/add-many", json={"items": []}).status_code == 400

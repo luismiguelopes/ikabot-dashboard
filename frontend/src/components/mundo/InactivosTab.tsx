@@ -887,7 +887,14 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
 
                             {/* Manual attack + add-to-farm (when spied and ready) */}
                             <div className="flex justify-end items-center gap-2 pt-1">
-                              {p.priority === 6 && p.cityId && (
+                              {/* Ships in port (priority 5) can be farmed too (P13.41): the farm blockades
+                                  first. They used to be addable only from the Combat search. */}
+                              {p.priority === 5 && p.cityId && !farmIds.has(String(p.cityId)) && (
+                                <span className="mr-auto text-[11px] text-amber-700 flex items-center gap-1">
+                                  <i className="fa-solid fa-anchor" />{t('farm_add_fleet_note')}
+                                </span>
+                              )}
+                              {(p.priority === 6 || p.priority === 5) && p.cityId && (
                                 farmIds.has(String(p.cityId)) ? (
                                   <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-600">
                                     <i className="fa-solid fa-seedling" /> {t('farm_in')}
@@ -953,7 +960,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
           ownCities={ownCities}
           defaultOriginCityId={spyOriginCityId}
           onClose={() => setAttackTarget(null)}
-          onQueued={name => pushToast(t('attack_queued', { player: name }), 'ok')}
+          onQueued={(name, at) => pushToast(at
+            ? t('attack_queued_at', { player: name, at: new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+            : t('attack_queued', { player: name }), 'ok')}
         />
       )}
 

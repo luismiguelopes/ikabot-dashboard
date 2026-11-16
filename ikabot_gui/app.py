@@ -708,6 +708,44 @@ def api_building_queue_add():
     return jsonify({"ok": True, "queue": data["queues"][city_name]})
 
 
+@app.route("/api/building-queue/add-many", methods=["POST"])
+def api_building_queue_add_many():
+    """Apply a construction template in one request (P13.47): it used to be one POST per row,
+    each a full load + save of the queue. Rows whose building is already queued for that city
+    are skipped ("queued"); invalid rows are reported ("error") without stopping the others."""
+    body = request.get_json(silent=True) or {}
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items obrigatório (lista não vazia)"}), 400
+
+    data = _load_building_queue()
+    queues = data.setdefault("queues", {})
+    now = int(time.time())
+    results, added = [], 0
+    for it in items:
+        it = it if isinstance(it, dict) else {}
+        city = str(it.get("cityName", "")).strip()
+        building = str(it.get("buildingName", "")).strip()
+        try:
+            level = int(it.get("targetLevel", 0))
+        except (ValueError, TypeError):
+            level = 0
+        if not city or not building or level < 1:
+            results.append({"cityName": city, "buildingName": building, "status": "error",
+                            "error": "cityName, buildingName e targetLevel são obrigatórios"})
+            continue
+        city_queue = queues.setdefault(city, [])
+        if any(q.get("building") == building for q in city_queue):
+            results.append({"cityName": city, "buildingName": building, "status": "queued"})
+            continue
+        city_queue.append({"building": building, "targetLevel": level, "addedAt": now})
+        results.append({"cityName": city, "buildingName": building, "status": "added"})
+        added += 1
+    if added:
+        _save_building_queue(data)
+    return jsonify({"ok": True, "added": added, "results": results})
+
+
 @app.route("/api/building-queue/remove", methods=["POST"])
 def api_building_queue_remove():
     body = request.get_json(force=True)
