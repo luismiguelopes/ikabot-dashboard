@@ -344,7 +344,7 @@ export default function App() {
                                                        lastAlive={Math.max(liveAlive ?? 0, data.lastAlive ?? 0) || null} />}
               {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} thresholds={thresholds} />}
               {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
-              {page === 'movements'    && <MovementsPage />}
+              {page === 'movements'    && <MovementsPage resourcesData={data.resourcesData} />}
               {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} extra={extraAlerts} />}
               {page === 'history'      && <Suspense fallback={null}><HistoryPage data={data} /></Suspense>}
               {page === 'calc'         && <CalculadorasPage data={data} islandPreset={calcIslandPreset} />}

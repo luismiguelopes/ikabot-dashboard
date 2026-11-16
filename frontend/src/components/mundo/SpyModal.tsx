@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useT } from '../../i18n'
 import { Modal } from '../ui/Modal'
-import { loadSpyDefaults } from '../SettingsPage'
+import { loadSpyDefaults } from '../settings/spyDefaults'
 import type { WorldScanPlayer, OwnCity } from '../../types'
 import type { CitySpyCounts } from './types'
 

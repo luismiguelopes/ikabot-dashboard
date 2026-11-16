@@ -1381,10 +1381,10 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
 - [x] **P13.51 Segredos visíveis** **[C]** ✅ 2026-11-16 (o token e o webhook nunca vão para o browser — só `…Set`/`…Hint`/`…Source`; campos tipo password; gravar mantém o valor guardado se o campo ficar vazio; valores do ambiente não são copiados para o ficheiro) — token do Telegram e webhook do Discord em campos de
       texto simples, preenchidos a partir das variáveis de ambiente; gravar copia-os para o
       `telegram_settings.json`. Campo tipo password e valor mascarado vindo do servidor.
-- [ ] **P13.52 Campos numéricos limitados a cada tecla** **[C]** — com mínimo 50, escrever "95"
+- [x] **P13.52 Campos numéricos limitados a cada tecla** **[C]** ✅ 2026-11-16 (`NumberField`: escreve-se à vontade; limita e arredonda só ao sair do campo ou com Enter, e só avisa se o valor mudou — percorrer um cartão com Tab já não faz POST; confirmado no browser: "95" com mínimo 50 fica 95, "150" com máximo 99 fica 99) — com mínimo 50, escrever "95"
       dá 9 → 50 → "505" → 99. Guardar em cada `blur` mesmo sem alteração (5 POST ao percorrer um
       cartão com Tab). Limitar e gravar só ao sair do campo e só se mudou.
-- [ ] **P13.53 Estrutura** **[C]** — `SettingsPage.tsx` (977 linhas, 11 componentes) e
+- [x] **P13.53 Estrutura** **[C]** ✅ 2026-11-16 (`ui/Toggle` com `role="switch"`/`aria-checked`/`aria-label`, `ui/NumberField`, `hooks/useSettings(url)` — "guardado" só com 2xx, fica com o que o servidor gravou, campo que grava sozinho relê em falha. `SettingsPage` partido em `settings/` (um ficheiro por separador/cartão; o cartão de alertas de combate passou a usar o mesmo caminho e já não diz "guardado" num erro); `TransportTab` partido em `transport/` (manual, consolidação, vinho, compra, pendentes), recebe `resourcesData` do `App` em vez de voltar a pedir o `/api/data`, a lista de pendentes segue o tópico `db` e o relógio de 1s só vive na contagem decrescente de cada linha. `FarmSettings` usa os mesmos componentes) — `SettingsPage.tsx` (977 linhas, 11 componentes) e
       `TransportTab.tsx` (887 linhas, 22 `useState`); o mesmo toggle escrito 9× e o campo numérico
       ~20×; todos os cartões são "ler JSON → editar → POST do objecto inteiro". Um `<Toggle>`
       (com `role="switch"`/`aria-label`, que hoje faltam), um `<NumberField>` e um
@@ -1704,9 +1704,9 @@ Visto e deixado (anotar, não é erro):
 
 | Item | Nota |
 |---|---|
-| P13.52 | Campos numéricos: limitar e gravar só ao sair do campo, e só se mudou. Fazer junto com o `NumberField` do P13.53 |
+| ~~P13.52~~ | ✅ 16/11 |
 | P13.30 (resto) | Passar farm, espionagem, world scan, fila e alertas para o `settings_registry`; dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap` |
-| P13.53 | `<Toggle>` (com `role="switch"`), `<NumberField>`, `useSettings(url)`; partir `SettingsPage` e `TransportTab` |
+| ~~P13.53~~ | ✅ 16/11 |
 | P13.42 | Partir `InactivosTab` e `DispatchPanel`; `types/farm.ts` único; hooks de dados partilhados |
 | P13.60 | ESLint com `react-hooks/exhaustive-deps` — **só relatar** os avisos primeiro; corrigir dependências de efeitos muda comportamento, fazer um a um |
 | P13.45 | `conftest.py` (o `_setup_db` está copiado em `test_farm`, `test_attack_queue`, `test_transport_queue`); estado global atribuído sem `monkeypatch` |

@@ -7,7 +7,7 @@ import { RefreshButton } from './ui/RefreshButton'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
 import { TransportTab } from './TransportTab'
-import type { Movement } from '../types'
+import type { Movement, ResourcesData } from '../types'
 
 // Declared at module level (P13.55): inside MovementsTab it was a new component type on every
 // render, so React unmounted and remounted every section each second. The clock now lives only
@@ -127,7 +127,7 @@ function MovementsTab() {
   )
 }
 
-export function MovementsPage() {
+export function MovementsPage({ resourcesData }: { resourcesData: ResourcesData }) {
   const t = useT()
   const [tab, setTab] = useState('movements')
 
@@ -156,7 +156,7 @@ export function MovementsPage() {
         ))}
       </div>
       {tab === 'movements' && <MovementsTab />}
-      {tab === 'transport' && <TransportTab />}
+      {tab === 'transport' && <TransportTab resourcesData={resourcesData} />}
     </div>
   )
 }

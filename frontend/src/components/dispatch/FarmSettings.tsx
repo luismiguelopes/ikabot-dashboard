@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useT } from '../../i18n'
 import { apiAction } from '../../api'
+import { Toggle } from '../ui/Toggle'
+import { NumberField } from '../ui/NumberField'
 import type { MilitaryData } from './shared'
 
 // Farm-wide settings: the minimal army loadout sent per raid, the combat-fleet loadout for
@@ -78,12 +80,9 @@ export function FarmSettings() {
           </span>
           <span className="flex items-center gap-1.5 text-xs text-slate-500">
             {t('farm_spies')}
-            <input
-              type="number" min={1} max={99} value={farmSpyAgents}
-              onChange={e => setFarmSpyAgents(Math.max(1, Number(e.target.value)))}
-              onBlur={() => saveFarm({ spyAgents: farmSpyAgents })}
-              className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs text-right"
-            />
+            <NumberField value={farmSpyAgents} min={1} max={99} label={t('farm_spies')}
+              onCommit={v => { setFarmSpyAgents(v); saveFarm({ spyAgents: v }) }}
+              size="sm" className="w-14" />
             {farmArmySaved && <span className="text-emerald-600 ml-1">{t('transport_saved')}</span>}
           </span>
         </div>
@@ -162,24 +161,15 @@ export function FarmSettings() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
             {t('farm_reserve')}
           </span>
-          <button
-            onClick={() => toggleSetting('shipReserveEnabled', !shipReserve)}
-            role="switch" aria-checked={shipReserve}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${shipReserve ? 'bg-indigo-600' : 'bg-slate-300'}`}
-          >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${shipReserve ? 'translate-x-4' : 'translate-x-1'}`} />
-          </button>
+          <Toggle size="sm" on={shipReserve} label={t('farm_reserve')} onChange={v => toggleSetting('shipReserveEnabled', v)} />
         </div>
         <p className="text-xs text-slate-400 mt-1">{t('farm_reserve_hint')}</p>
         {shipReserve && (
           <label className="flex items-center gap-2 mt-2 text-xs text-slate-500">
             {t('farm_reserve_horizon')}
-            <input
-              type="number" min={0} max={720} value={reserveHorizon}
-              onChange={e => setReserveHorizon(Math.max(0, Number(e.target.value)))}
-              onBlur={() => saveFarm({ reserveHorizonMin: reserveHorizon })}
-              className="w-16 border border-slate-200 rounded px-1.5 py-0.5 text-xs text-right"
-            />
+            <NumberField value={reserveHorizon} min={0} max={720} label={t('farm_reserve_horizon')}
+              onCommit={v => { setReserveHorizon(v); saveFarm({ reserveHorizonMin: v }) }}
+              size="sm" className="w-16" />
             min
           </label>
         )}
@@ -191,13 +181,7 @@ export function FarmSettings() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
             {t('farm_earlyrespy')}
           </span>
-          <button
-            onClick={() => toggleSetting('earlyRespyEnabled', !earlyRespy)}
-            role="switch" aria-checked={earlyRespy}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${earlyRespy ? 'bg-indigo-600' : 'bg-slate-300'}`}
-          >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${earlyRespy ? 'translate-x-4' : 'translate-x-1'}`} />
-          </button>
+          <Toggle size="sm" on={earlyRespy} label={t('farm_earlyrespy')} onChange={v => toggleSetting('earlyRespyEnabled', v)} />
         </div>
         <p className="text-xs text-slate-400 mt-1">{t('farm_earlyrespy_hint')}</p>
       </div>
