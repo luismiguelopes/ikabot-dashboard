@@ -50,6 +50,8 @@ _MAX_SCOUT_FAILS = 3               # consecutive garrison scouts without fleet i
 _SCOUT_ROUND_BACKOFF_CAP = 24 * 3600   # ceiling for the doubling wait between failed scout rounds
 _CLEAN_FAIL_RETRY_RANGE = (20, 40)     # minutes × attempt before re-running a mission that failed
                                        # with every agent still parked (discovery risk must decay)
+_FLEET_DEFER_RANGE = (30, 60)          # minutes before a fleet target whose raid could not leave
+                                       # is scouted again (every retry is a full triple sweep)
 _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the report is
                                   # ready on arrival (re-spy rounds skip the post-return wait)
 # ── P11.9 Parallel farming ──────────────────────────────────────────────────────
@@ -718,6 +720,15 @@ def _recent_full_sweep(missions, t, now):
     oldest = full_sweep_at(m)
     if oldest is None or now - oldest > _SWEEP_REUSE_MAX_AGE:
         return None
+    # Same rule for a target that is about to BECOME a fleet target: a sweep that saw ships in
+    # port, or a fleet due back, sizes a blockade — that needs a live reading, not one up to a
+    # day old. (Such targets can be added from the Targets page since 16/11.)
+    from attack_manager import _classify_enemy_fleet
+    gres = m.get("garrisonResult") or {}
+    if sum(_classify_enemy_fleet(gres.get("troops") or {}, gres.get("fleet"))) > 0:
+        return None
+    if (m.get("movementsResult") or {}).get("enemyReturnAt"):
+        return None
     return m, oldest
 
 
@@ -1243,7 +1254,17 @@ def process_farm_targets(session, in_active_hours=True):
                 fleet_units = {uid: min(qty, avail_f.get(uid, {}).get("amount", 0))
                                for uid, qty in farm_fleet.items()
                                if avail_f.get(uid, {}).get("amount", 0) > 0}
-            if not fleet_units:
+                # A configured loadout is a CEILING on what the farm may expose. When those
+                # ships are away (out on another blockade) this used to fall back to the
+                # origin's whole fleet — every other warship in the city. Wait instead, and
+                # do not send a token force either (same floor as the army).
+                fielded, wanted = sum(fleet_units.values()), sum(farm_fleet.values())
+                if fielded < wanted * _MIN_ARMY_FRACTION:
+                    logger.info("[farm] %s: %s só tem %d dos %d navios da frota de bloqueio "
+                                "configurada — raide adiado até regressarem", name, origin_name,
+                                fielded, wanted)
+                    return None
+            else:
                 fleet_units = _build_fleet_units(origin_name, military)
             if not fleet_units:
                 logger.info("[farm] %s: %s sem frota de combate para o bloqueio — raide adiado",
@@ -1280,6 +1301,8 @@ def process_farm_targets(session, in_active_hours=True):
             "targetPlayerName": t.get("target_player", ""),
             "islandX": ix, "islandY": iy, "islandId": str(t.get("island_id", "")),
             "targetType": "enemy", "addedAt": now,
+            # Who queued it — read by the attack history. Never sent to the game.
+            "source": "farm",
             # P11.10: the farm recycles transporters non-stop, so its raids must yield trade
             # ships to wine logistics when a city is low on autonomy (see wine_ship_reserve).
             # Manual UI attacks are NOT flagged — they take priority as the user intends.
@@ -1473,6 +1496,16 @@ def process_farm_targets(session, in_active_hours=True):
         logger.info("[farm] %s: só %d navios livres (< %d) — ataque agendado para o regresso (~%dmin)",
                     t.get("target_city_name", ""), _free_ships_once(), _PARALLEL_SHIP_FLOOR,
                     max(0, (eta - now) // 60))
+
+    def _deferred_retry_at(t, enemy_ships):
+        """When to retry a raid that had its report but could not leave (no troops, ships or
+        blockade fleet). A target with ships in port / a fleet target re-scouts on every
+        retry — a full triple sweep — so the 5-15 min fallback meant a sweep every few minutes
+        for as long as the fleet was away. Give those at least _FLEET_DEFER_RANGE."""
+        eta = _ships_back_eta(t, now, session, first_city_id)
+        if enemy_ships > 0 or int(t.get("is_fleet_target", 0) or 0) == 1:
+            eta = max(eta, now + random.randint(*_FLEET_DEFER_RANGE) * 60)
+        return eta
 
     def _can_launch_attack():
         """True if a NEW raid may be enqueued now: a dispatch is left this cycle, the concurrency
@@ -1899,7 +1932,7 @@ def process_farm_targets(session, in_active_hours=True):
             # the fresh intel and retry directly in a few minutes once they're back. Uses the
             # reserve-aware count (P11.10): only the wine reserve free → nothing for the farm.
             if enemy_ships == 0 and not _raid_ships_ready():
-                eta = _ships_back_eta(t, now, session, first_city_id)
+                eta = _deferred_retry_at(t, enemy_ships)
                 farm_update(tid, {"state": "IDLE", "next_run_at": eta,
                                   "last_loot": loot, "last_enemy_ships": enemy_ships,
                                   "next_action": "attack"})
@@ -1921,8 +1954,9 @@ def process_farm_targets(session, in_active_hours=True):
             res = _enqueue_attack(t, loot, enemy_ships, combat_ships)
             if not res:
                 # Report is fresh; we just lack free troops/ships now (returning) → retry when
-                # they land and attack directly, no need to re-scout.
-                eta = _ships_back_eta(t, now, session, first_city_id)
+                # they land and attack directly, no need to re-scout (a fleet target does
+                # re-scout, so it waits longer).
+                eta = _deferred_retry_at(t, enemy_ships)
                 logger.info("[farm] %s: relatório pronto mas sem tropas/navios livres — "
                             "nova tentativa ~%dmin", name, max(0, (eta - now) // 60))
                 farm_update(tid, {"state": "IDLE", "next_run_at": eta, "last_loot": loot,

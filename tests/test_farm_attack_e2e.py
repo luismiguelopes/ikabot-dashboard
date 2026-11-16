@@ -162,3 +162,13 @@ def test_failure_without_feedback_does_not_inherit_a_previous_vacation_text(monk
     am.process_attack_queue(session=object())
     (army,) = db_manager.queue_items("attack")
     assert army["retries"] == 1                            # retried, not treated as vacation
+
+
+def test_both_waves_say_they_come_from_the_farm_and_keep_it_when_released(monkeypatch, tmp_path):
+    """The attack history names the source from the item itself, not from the wine flag."""
+    q = _world(monkeypatch, tmp_path, garrison={"Lancha rápida": 2})
+    assert q["fleet"]["source"] == "farm" and q["army"]["source"] == "farm"
+    _dispatcher(monkeypatch, {"fleet": [True], "army": []})
+    am.process_attack_queue(session=object())
+    (army,) = db_manager.queue_items("attack")              # released and re-timed
+    assert army["source"] == "farm"

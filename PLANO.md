@@ -1687,7 +1687,7 @@ Visto e deixado (anotar, não é erro):
 - **Corrigido (bot):** todos os ataques ficavam "manual" no `attack_log`, incluindo os do farm
   (o `_log_attack_attempt` nunca recebia a origem). Agora deriva-a do `respectWineReserve`, que
   só o farm põe — sem tocar no `process_attack_queue` nem no farm. As linhas antigas ficam "manual".
-  Fica para o Fable decidir se o farm deve pôr `source:"farm"` explícito no item.
+  ~~Fica para o Fable decidir se o farm deve pôr `source:"farm"` explícito no item.~~ ✅ 16/11 (K.8).
 
 #### K.4 — O que falta, por ordem
 
@@ -1765,3 +1765,40 @@ Visto e deixado (anotar, não é erro):
   "Ignoradas" as que já não fazem sentido.
 - **Pedidos por hora** (`/api/health` → `requests`): com a janela única e a fila de construção
   só a correr quando é dela, os totais devem baixar face a 14/11.
+
+#### K.8 — Sessão Fable de 2026-11-16 (farm, fila de ataques, espiões, colectores)
+
+**1. Revisão do `51fa87e` (alvos com navios adicionáveis pela página Alvos)** ✅
+`tests/test_farm_fleet_first_contact.py` (11 testes, `shared_queue` real). Confirmado sem mexer:
+- alvo novo = `swept_at 0` → primeiro passo é sempre o varrimento triplo, nenhum ataque na fila;
+- navios no porto num varrimento completo → item `fleet` primeiro, `army` com `waitsForFleet`;
+- sem perna de movimentos → nada sai; navios de **combate** → nunca atacado com `maxEnemyShips 0`
+  (o alvo é saltado e alertado a cada `intervalHours`; a nota da página Alvos "o farm bloqueia
+  primeiro" só é verdade para lanchas/reparadores — ver "para o Opus" abaixo).
+
+Corrigido (três falhas reais, nenhuma muda o formato de um pedido — só deixam de enviar):
+- **Frota de bloqueio configurada mas ausente → ia a frota TODA.** Com `fleet` definido nas
+  Definições do farm e esses navios fora (noutro bloqueio), o código caía em
+  `_build_fleet_units` = todos os navios de guerra da origem. Agora a carga configurada é um
+  tecto: menos de 50 % dela na origem → raide adiado.
+- **Raide adiado num alvo com navios → varrimento triplo de 5 em 5-15 min.** O adiamento
+  voltava em 5-15 min e um alvo de frota re-espia sempre. Agora espera 30-60 min
+  (`_FLEET_DEFER_RANGE`).
+- **Varrimento manual com navios era reutilizado como primeiro scout** (até 24 h). Um
+  relatório que mostra navios no porto ou frota a regressar dimensiona um bloqueio: exige
+  leitura viva (`_recent_full_sweep`).
+
+Fica como está, por decisão (dizer ao utilizador): **sem frota de bloqueio definida, o bloqueio
+leva a frota inteira da origem** (comportamento antigo, hoje sem efeito: há `s216: 40` definido).
+
+**2. `source:"farm"` explícito nos itens da fila de ataques** ✅ O farm põe `source:"farm"` nas
+duas vagas, o Flask põe `source:"manual"`; `_log_attack_attempt` lê o item e só recorre ao
+`respectWineReserve` para itens antigos. O campo nunca vai para o jogo (`_dispatch_attack` só
+passa campos nomeados). +4 testes.
+
+**Para o Opus (UI):**
+- Página Alvos: a nota `farm_add_fleet_note` devia distinguir navios de fuga (o farm bloqueia)
+  de navios de combate (o farm salta o alvo enquanto `maxEnemyShips` for 0). A classificação
+  tem de vir do backend (`_garrison_view`), não do browser.
+- Definições do farm: avisar quando `fleet` está vazio ("o bloqueio leva a frota inteira").
+

@@ -1962,6 +1962,7 @@ def api_attack_queue_add():
         "addedAt":          int(time.time()),
         "dispatchAfter":    int(time.time()) + delay_min * 60,
         "missionId":        data.get("missionId"),
+        "source":           "manual",
     }
     try:
         _db.queue_add("attack", item)
@@ -2069,6 +2070,7 @@ def api_dispatch_combat():
         "addedAt":          now,
         "dispatchAfter":    dispatch_after,
         "missionId":        None,
+        "source":           "manual",
     }
     try:
         _db.queue_add("attack", item)
