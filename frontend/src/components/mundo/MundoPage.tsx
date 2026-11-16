@@ -64,14 +64,17 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
     saveSpyDefaults(cityId, loadSpyDefaults().numAgents)
   }, [])
 
-  const handleWorldScanToggle = useCallback(() => {
+  // Toggles flip at once and flip back when the server refuses (P13.37): a 4xx/5xx used to
+  // leave the switch showing a value that was never stored.
+  const handleWorldScanToggle = useCallback(async () => {
     const next = !worldScanEnabled
     setWorldScanEnabled(next)
-    fetch('/api/world-scan/settings', {
+    const ok = await apiAction('/api/world-scan/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: next }),
-    }).catch(() => setWorldScanEnabled(!next))
+    })
+    if (!ok) setWorldScanEnabled(!next)
   }, [worldScanEnabled])
 
   const handleRadiusSave = useCallback(() => {
@@ -81,25 +84,26 @@ export function MundoPage({ onSelectIsland }: { onSelectIsland?: (preset: { resT
       return
     }
     if (n === radiusSaved) return
-    fetch('/api/world-scan/settings', {
+    apiAction('/api/world-scan/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ radius: n }),
-    }).then(r => {
-      if (!r.ok) throw new Error('save failed')
+    }).then(ok => {
+      if (!ok) { setRadiusInput(radiusSaved !== null ? String(radiusSaved) : ''); return }
       setRadiusSaved(n)
       pushToast(t('scan_radius_saved', { n }), 'ok')
-    }).catch(() => setRadiusInput(radiusSaved !== null ? String(radiusSaved) : ''))
-  }, [radiusInput, radiusSaved, pushToast, t])
+    })
+  }, [radiusInput, radiusSaved, t])
 
-  const handleSpyProcessingToggle = useCallback(() => {
+  const handleSpyProcessingToggle = useCallback(async () => {
     const next = !spyProcessingEnabled
     setSpyProcessingEnabled(next)
-    fetch('/api/espionage/settings', {
+    const ok = await apiAction('/api/espionage/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ processingEnabled: next }),
-    }).catch(() => setSpyProcessingEnabled(!next))
+    })
+    if (!ok) setSpyProcessingEnabled(!next)
   }, [spyProcessingEnabled])
 
   const fetchScan = useCallback(() => {

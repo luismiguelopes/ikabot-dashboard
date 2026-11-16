@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { pollInterval, clearPoll } from '../api'
+import { apiAction, pollInterval, clearPoll } from '../api'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration } from '../utils'
 import { MATERIALS, COST_KEYS } from '../constants'
@@ -54,11 +54,11 @@ function CyclesCard() {
 
   async function force(c: CycleInfo) {
     setBusy(b => ({ ...b, [c.key]: true }))
-    try {
-      await fetch(c.endpoint, { method: 'POST' })
+    // "requested" only when the server took it (P13.37)
+    if (await apiAction(c.endpoint, { method: 'POST' })) {
       setDone(d => ({ ...d, [c.key]: Date.now() }))
       setTimeout(() => setDone(d => { const n = { ...d }; delete n[c.key]; return n }), 6000)
-    } catch { /* ignore */ }
+    }
     setBusy(b => ({ ...b, [c.key]: false }))
     setTimeout(load, 1500)
   }
@@ -325,34 +325,11 @@ function StatusStrip({ lastAlive, offlineAfterSecs, paused }: {
   )
 }
 
-export function HomePage({ data, thresholds, lastAlive, paused }: {
-  data: ApiData; thresholds: AlertThresholds; lastAlive?: number | null; paused?: boolean
-}) {
-  const t    = useT()
-  const lang = useLang() as 'pt' | 'en'
-  const now  = useLiveClock()
-  const { statusSummary: s, empireData, resourcesData } = data
-  const res = s.resources
-  const totalAvail = res.available.reduce((a, b) => a + b, 0)
-  const totalProd  = res.production.reduce((a, b) => a + b, 0)
-
-  const [queue, setQueue] = useState<BuildingQueue | null>(null)
-  const [costsData, setCostsData] = useState<BuildingCostsData | null>(null)
-  // The queue: when the empire data really changed (not on every re-render of `data`).
-  useEffect(() => {
-    fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
-  }, [data.lastUpdatedTs])
-  // The cost table (every city × building × level) changes every 3 days — fetch it once.
-  // It used to be re-fetched on every live update, i.e. on every heartbeat of the bot.
-  useEffect(() => {
-    fetch('/api/building-costs').then(r => r.ok ? r.json() : null).then(d => {
-      if (d && !(d as any).error) setCostsData(d)
-    }).catch(() => {})
-  }, [])
-
-  const goldProd   = s.gold.production
-  const goldRunway = goldProd < 0 ? s.gold.total / Math.abs(goldProd) / 24 : null
-
+// Own component with its own clock (P13.55): the page-level useLiveClock re-rendered the whole
+// home page — badges, resource table, matrix — every second just for these countdowns.
+function ConstructionsCard({ empireData, queue }: { empireData: ApiData['empireData']; queue: BuildingQueue | null }) {
+  const t   = useT()
+  const now = useLiveClock()
   const queues     = queue?.queues      || {}
   const inProgress = queue?.inProgress  || {}
 
@@ -391,6 +368,76 @@ export function HomePage({ data, thresholds, lastAlive, paused }: {
   const queuedCities = Object.entries(queues)
     .filter(([city, items]) => items.length > 0 && !inProgress[city])
     .map(([city, items]) => ({ city, building: items[0].building, targetLevel: items[0].targetLevel, extra: items.length - 1 }))
+
+  return (
+    <Card>
+      <CardHeader icon="fa-hammer" title={t('home_constr_queue_title')} />
+      {activeConstructions.length === 0 && queuedCities.length === 0 ? (
+        <p className="px-5 pb-4 text-sm text-slate-400">{t('home_no_active_constr')}</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {activeConstructions.map(({ city, building, fromLevel, toLevel, timeLeft, eta }) => (
+            <li key={city} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
+              <i className="fa-solid fa-hammer text-orange-400 text-xs w-3 shrink-0" />
+              <span className="font-semibold text-sm text-slate-700 w-28 shrink-0 truncate">{city}</span>
+              <span className="text-sm text-slate-600 flex-1 truncate">
+                {building}
+                <span className="ml-1.5 text-xs text-slate-400 font-mono">
+                  {t('home_constr_lv')}{fromLevel}→{toLevel}
+                </span>
+              </span>
+              <span className={`text-xs font-mono shrink-0 ${timeLeft === 0 ? 'text-green-600 font-semibold' : 'text-orange-500'}`}>
+                {/* an unknown ETA (0) is not "finished" */}
+                {!eta ? '…' : timeLeft === 0 ? t('home_constr_done') : fmtDuration(timeLeft)}
+              </span>
+            </li>
+          ))}
+          {queuedCities.map(({ city, building, targetLevel, extra }) => (
+            <li key={city} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
+              <i className="fa-solid fa-hourglass-half text-slate-400 text-xs w-3 shrink-0" />
+              <span className="font-semibold text-sm text-slate-500 w-28 shrink-0 truncate">{city}</span>
+              <span className="text-sm text-slate-500 flex-1 truncate">
+                {building}
+                <span className="ml-1.5 text-xs text-slate-400 font-mono">→{targetLevel}</span>
+                {extra > 0 && (
+                  <span className="ml-2 text-xs text-indigo-400">{t('home_queue_items', { n: extra })}</span>
+                )}
+              </span>
+              <span className="text-xs text-slate-400 shrink-0">{t('home_queue_waiting')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+export function HomePage({ data, thresholds, lastAlive, paused }: {
+  data: ApiData; thresholds: AlertThresholds; lastAlive?: number | null; paused?: boolean
+}) {
+  const t    = useT()
+  const lang = useLang() as 'pt' | 'en'
+  const { statusSummary: s, empireData, resourcesData } = data
+  const res = s.resources
+  const totalAvail = res.available.reduce((a, b) => a + b, 0)
+  const totalProd  = res.production.reduce((a, b) => a + b, 0)
+
+  const [queue, setQueue] = useState<BuildingQueue | null>(null)
+  const [costsData, setCostsData] = useState<BuildingCostsData | null>(null)
+  // The queue: when the empire data really changed (not on every re-render of `data`).
+  useEffect(() => {
+    fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
+  }, [data.lastUpdatedTs])
+  // The cost table (every city × building × level) changes every 3 days — fetch it once.
+  // It used to be re-fetched on every live update, i.e. on every heartbeat of the bot.
+  useEffect(() => {
+    fetch('/api/building-costs').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && !(d as any).error) setCostsData(d)
+    }).catch(() => {})
+  }, [])
+
+  const goldProd   = s.gold.production
+  const goldRunway = goldProd < 0 ? s.gold.total / Math.abs(goldProd) / 24 : null
 
   // Wine balance
   const criticalSecs  = thresholds.wineCritical * 3600
@@ -473,46 +520,7 @@ export function HomePage({ data, thresholds, lastAlive, paused }: {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
 
-        {/* Construction & Queue card */}
-        <Card>
-          <CardHeader icon="fa-hammer" title={t('home_constr_queue_title')} />
-          {activeConstructions.length === 0 && queuedCities.length === 0 ? (
-            <p className="px-5 pb-4 text-sm text-slate-400">{t('home_no_active_constr')}</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {activeConstructions.map(({ city, building, fromLevel, toLevel, timeLeft, eta }) => (
-                <li key={city} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
-                  <i className="fa-solid fa-hammer text-orange-400 text-xs w-3 shrink-0" />
-                  <span className="font-semibold text-sm text-slate-700 w-28 shrink-0 truncate">{city}</span>
-                  <span className="text-sm text-slate-600 flex-1 truncate">
-                    {building}
-                    <span className="ml-1.5 text-xs text-slate-400 font-mono">
-                      {t('home_constr_lv')}{fromLevel}→{toLevel}
-                    </span>
-                  </span>
-                  <span className={`text-xs font-mono shrink-0 ${timeLeft === 0 ? 'text-green-600 font-semibold' : 'text-orange-500'}`}>
-                    {/* an unknown ETA (0) is not "finished" */}
-                    {!eta ? '…' : timeLeft === 0 ? t('home_constr_done') : fmtDuration(timeLeft)}
-                  </span>
-                </li>
-              ))}
-              {queuedCities.map(({ city, building, targetLevel, extra }) => (
-                <li key={city} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
-                  <i className="fa-solid fa-hourglass-half text-slate-400 text-xs w-3 shrink-0" />
-                  <span className="font-semibold text-sm text-slate-500 w-28 shrink-0 truncate">{city}</span>
-                  <span className="text-sm text-slate-500 flex-1 truncate">
-                    {building}
-                    <span className="ml-1.5 text-xs text-slate-400 font-mono">→{targetLevel}</span>
-                    {extra > 0 && (
-                      <span className="ml-2 text-xs text-indigo-400">{t('home_queue_items', { n: extra })}</span>
-                    )}
-                  </span>
-                  <span className="text-xs text-slate-400 shrink-0">{t('home_queue_waiting')}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <ConstructionsCard empireData={empireData} queue={queue} />
 
         {/* Wine balance card */}
         <Card>
@@ -571,7 +579,8 @@ function ResourceMatrix({ data, queue, costsData }: {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
 
-  const cityNames = Object.keys(data.resourcesData).sort()
+  // memoised: a fresh array on every render made the `reserved` memo below recompute each time
+  const cityNames = useMemo(() => Object.keys(data.resourcesData).sort(), [data.resourcesData])
 
   const reserved = useMemo((): Record<string, number[]> => {
     if (!costsData || !queue) return {}

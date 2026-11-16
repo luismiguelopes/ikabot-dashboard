@@ -71,8 +71,7 @@ export function BuildingUpgradeCalc({ data }: { data: ApiData }) {
   const handleForceRefresh = () => {
     setRefreshMsg('sending')
     fetch('/api/building-costs/refresh', { method: 'POST' })
-      .then(r => r.json())
-      .then(() => setRefreshMsg('ok'))
+      .then(r => setRefreshMsg(r.ok ? 'ok' : 'error'))
       .catch(() => setRefreshMsg('error'))
   }
 

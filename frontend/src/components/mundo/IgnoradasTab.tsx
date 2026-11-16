@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useT } from '../../i18n'
 import { Card } from '../ui/Card'
+import { apiAction } from '../../api'
 import type { WorldScanData } from '../../types'
 
 interface IgnoradasTabProps {
@@ -25,13 +26,15 @@ export function IgnoradasTab({ scanData, onScanDataChange }: IgnoradasTabProps) 
       .sort((a, b) => (b.markUpdatedAt || 0) - (a.markUpdatedAt || 0))
   }, [scanData])
 
-  const handleUnignore = useCallback((p: { playerId: string; islandX: number; islandY: number }) => {
-    fetch('/api/world-scan/mark', {
+  const handleUnignore = useCallback(async (p: { playerId: string; islandX: number; islandY: number }) => {
+    // a refused un-ignore used to reload the list as if it had worked (P13.37)
+    const ok = await apiAction('/api/world-scan/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playerId: p.playerId, islandX: p.islandX, islandY: p.islandY, status: 'novo', note: '' }),
     })
-      .then(() => fetch('/api/world-scan'))
+    if (!ok) return
+    fetch('/api/world-scan')
       .then(r => r.json())
       .then(d => { if (d.players) onScanDataChange(d) })
       .catch(() => {})

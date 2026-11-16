@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { pushToast } from './ui/Toast'
 import { askConfirm } from './ui/Modal'
+import { apiAction } from '../api'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
@@ -255,11 +256,11 @@ export function TransportTab() {
   }
 
   async function handleCancel(id: string) {
-    await fetch('/api/transport/queue/cancel', {
+    await apiAction('/api/transport/queue/cancel', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ id }),
-    }).catch(() => {})
+    })
     loadAll()
   }
 

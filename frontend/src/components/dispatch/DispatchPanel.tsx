@@ -333,7 +333,7 @@ export function DispatchPanel() {
 
   async function handleAddFarm() {
     if (!target || target.type !== 'enemy') return
-    await fetch('/api/farm/add', {
+    const res = await apiAction('/api/farm/add', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -344,8 +344,11 @@ export function DispatchPanel() {
         islandX:        target.islandX,
         islandY:        target.islandY,
       }),
-    }).catch(() => {})
-    setFeedback({ ok: true, msg: `${t('farm_add')}: ${target.cityName}` })
+    })
+    // only a 2xx says "added" (the server's reason goes to a toast) — a refusal used to be reported as success (P13.37)
+    setFeedback(res
+      ? { ok: true, msg: `${t('farm_add')}: ${target.cityName}` }
+      : { ok: false, msg: `${t('farm_add_failed')}: ${target.cityName}` })
     loadAll()
   }
 

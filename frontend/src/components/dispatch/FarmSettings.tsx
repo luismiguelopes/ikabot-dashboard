@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useT } from '../../i18n'
+import { apiAction } from '../../api'
 import type { MilitaryData } from './shared'
 
 // Farm-wide settings: the minimal army loadout sent per raid, the combat-fleet loadout for
@@ -32,33 +33,30 @@ export function FarmSettings() {
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  async function saveFarmArmy(
-    next: Record<string, number>,
-    spyAgents = farmSpyAgents,
-    settings: Record<string, unknown> = {
-      shipReserveEnabled: shipReserve, reserveHorizonMin: reserveHorizon,
-      earlyRespyEnabled: earlyRespy,
-    },
-  ) {
-    setFarmArmy(next)
+  // Each control saves only its own key (P13.37): a toggle used to send the half-typed army
+  // draft along with it. "Saved" only on a 2xx; the server's (clamped) values are kept.
+  async function saveFarm(patch: Record<string, unknown>): Promise<boolean> {
     setFarmArmySaved(false)
-    await fetch('/api/farm/army', {
+    const d: any = await apiAction('/api/farm/army', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ army: next, spyAgents, ...settings }),
-    }).catch(() => {})
+      body:    JSON.stringify(patch),
+    })
+    if (!d) return false
+    if ('army' in patch)              setFarmArmy(d.army ?? {})
+    if ('fleet' in patch)             setFarmFleet(d.fleet ?? {})
+    if ('spyAgents' in patch)         setFarmSpyAgents(d.spyAgents ?? 1)
+    if ('reserveHorizonMin' in patch) setReserveHorizon(d.reserveHorizonMin ?? 45)
     setFarmArmySaved(true)
+    return true
   }
 
-  async function saveFarmFleet(next: Record<string, number>) {
-    setFarmFleet(next)
-    setFarmArmySaved(false)
-    await fetch('/api/farm/army', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ army: farmArmy, spyAgents: farmSpyAgents, fleet: next }),
-    }).catch(() => {})
-    setFarmArmySaved(true)
+  const positive = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).filter(([, v]) => v > 0))
+
+  async function toggleSetting(key: 'shipReserveEnabled' | 'earlyRespyEnabled', next: boolean) {
+    const set = key === 'shipReserveEnabled' ? setShipReserve : setEarlyRespy
+    set(next)
+    if (!(await saveFarm({ [key]: next }))) set(!next)   // failed → show what is really stored
   }
 
   const troopTypes: Record<string, string> = {}
@@ -83,7 +81,7 @@ export function FarmSettings() {
             <input
               type="number" min={1} max={99} value={farmSpyAgents}
               onChange={e => setFarmSpyAgents(Math.max(1, Number(e.target.value)))}
-              onBlur={() => saveFarmArmy(farmArmy, farmSpyAgents)}
+              onBlur={() => saveFarm({ spyAgents: farmSpyAgents })}
               className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs text-right"
             />
             {farmArmySaved && <span className="text-emerald-600 ml-1">{t('transport_saved')}</span>}
@@ -112,7 +110,7 @@ export function FarmSettings() {
               ))}
             </div>
             <button
-              onClick={() => saveFarmArmy(Object.fromEntries(Object.entries(farmArmy).filter(([, v]) => v > 0)))}
+              onClick={() => saveFarm({ army: positive(farmArmy) })}
               className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >
               <i className="fa-solid fa-floppy-disk" /> {t('transport_save')}
@@ -149,7 +147,7 @@ export function FarmSettings() {
               ))}
             </div>
             <button
-              onClick={() => saveFarmFleet(Object.fromEntries(Object.entries(farmFleet).filter(([, v]) => v > 0)))}
+              onClick={() => saveFarm({ fleet: positive(farmFleet) })}
               className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >
               <i className="fa-solid fa-floppy-disk" /> {t('transport_save')}
@@ -165,11 +163,8 @@ export function FarmSettings() {
             {t('farm_reserve')}
           </span>
           <button
-            onClick={() => {
-              const next = !shipReserve
-              setShipReserve(next)
-              saveFarmArmy(farmArmy, farmSpyAgents, { shipReserveEnabled: next, reserveHorizonMin: reserveHorizon, earlyRespyEnabled: earlyRespy })
-            }}
+            onClick={() => toggleSetting('shipReserveEnabled', !shipReserve)}
+            role="switch" aria-checked={shipReserve}
             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${shipReserve ? 'bg-indigo-600' : 'bg-slate-300'}`}
           >
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${shipReserve ? 'translate-x-4' : 'translate-x-1'}`} />
@@ -182,7 +177,7 @@ export function FarmSettings() {
             <input
               type="number" min={0} max={720} value={reserveHorizon}
               onChange={e => setReserveHorizon(Math.max(0, Number(e.target.value)))}
-              onBlur={() => saveFarmArmy(farmArmy, farmSpyAgents, { shipReserveEnabled: shipReserve, reserveHorizonMin: reserveHorizon, earlyRespyEnabled: earlyRespy })}
+              onBlur={() => saveFarm({ reserveHorizonMin: reserveHorizon })}
               className="w-16 border border-slate-200 rounded px-1.5 py-0.5 text-xs text-right"
             />
             min
@@ -197,11 +192,8 @@ export function FarmSettings() {
             {t('farm_earlyrespy')}
           </span>
           <button
-            onClick={() => {
-              const next = !earlyRespy
-              setEarlyRespy(next)
-              saveFarmArmy(farmArmy, farmSpyAgents, { shipReserveEnabled: shipReserve, reserveHorizonMin: reserveHorizon, earlyRespyEnabled: next })
-            }}
+            onClick={() => toggleSetting('earlyRespyEnabled', !earlyRespy)}
+            role="switch" aria-checked={earlyRespy}
             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${earlyRespy ? 'bg-indigo-600' : 'bg-slate-300'}`}
           >
             <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${earlyRespy ? 'translate-x-4' : 'translate-x-1'}`} />

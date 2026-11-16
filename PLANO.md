@@ -1251,7 +1251,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
   - "Correr agora" (linha 810) disponível em qualquer estado; o backend força IDLE com tropas ou
     espiões fora (ver P13.31).
   - Cancelar ataque sem confirmação e activo mesmo já "a despachar".
-- [~] **P13.37 Gravações que dizem "ok" sem verificar** **[C]** *parte feita 2026-11-15* (`/api/farm/army` só mexe nas chaves enviadas — `army` e `spyAgents` deixaram de ser substituídos em todos os POST. **Falta:** `apiAction` no `FarmSettings`, `DispatchPanel` e toggles do `MundoPage`) — `FarmSettings.tsx` (45-61),
+- [x] **P13.37 Gravações que dizem "ok" sem verificar** **[C]** ✅ 2026-11-16 (`/api/farm/army` só mexe nas chaves enviadas; o `FarmSettings` envia só a chave de cada controlo — nunca o rascunho do exército — pelo `apiAction`, "guardado" só com 2xx, interruptores voltam atrás se o servidor recusar; "adicionar ao farm" do `DispatchPanel` diz "não foi adicionado" numa recusa; interruptores e raio do `MundoPage` e o "des-ignorar" pelo `apiAction`. Também: cancelar transporte, "forçar" no Início e actualizar custos na calculadora) — `FarmSettings.tsx` (45-61),
       "adicionar ao farm" em `DispatchPanel.tsx` (309-325), os toggles de `MundoPage.tsx` (67-103)
       e o "des-ignorar" não olham para `res.ok`. Pior: qualquer gravação em `FarmSettings` (toggle
       da reserva, sair do campo dos espiões, gravar frota) envia o **rascunho** do exército, e o
@@ -1405,7 +1405,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
   - O "preço do ouro por unidade" anula-se nas fórmulas de retorno (não faz nada) e trata todos
     os recursos ao mesmo preço; "disponível" é a soma do império embora a obra precise dos
     recursos numa cidade; nomes de edifícios fixos em português (sem dados → "já está no nível").
-- [~] **P13.55 Página inicial: o ponto quente de performance** **[C]** *feito 2026-11-16, menos o relógio* (sinal de vida com evento SSE próprio; custos pedidos uma vez; `Tile` fora do render; gráficos carregados só no Histórico; todos os polls param com o separador escondido. **Falta:** o `useLiveClock` ao nível da página e o `Section` do `MovementsPage`)
+- [x] **P13.55 Página inicial: o ponto quente de performance** **[C]** ✅ 2026-11-16 (sinal de vida com evento SSE próprio; custos pedidos uma vez; `Tile` fora do render; gráficos carregados só no Histórico; todos os polls param com o separador escondido; o `HomePage` já não tem relógio — as construções são um `ConstructionsCard` com o seu; `cityNames` da matriz memorizado; `Section` do `MovementsPage` fora do render e o relógio só no `ArrivalCell`. Ainda com relógio ao nível da página, sem queixa medida: `Construction`, `TransportTab`, `DispatchPanel`)
   - O SSE vigia `last_alive.json`, que o bot reescreve a cada ≤15-60s → o evento `update` dispara
     continuamente, e a cada um o `HomePage` (linhas 251-256) volta a pedir a fila **e a tabela
     completa de custos** (todas as cidades × edifícios × níveis), que muda de 3 em 3 dias.
@@ -1695,12 +1695,10 @@ Visto e deixado (anotar, não é erro):
 
 | Item | O que falta |
 |---|---|
-| P13.37 | `apiAction` em `FarmSettings.tsx`, "adicionar ao farm" do `DispatchPanel`, toggles do `MundoPage`, "des-ignorar" |
 | P13.39 | Filtro e pontuação dos alvos ainda usam `last_loot` espiado em vez do saque real |
 | P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
 | P13.47 | Aplicar um modelo de construção num único pedido |
 | P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
-| P13.55 | `useLiveClock` ao nível da página; `Section` declarado dentro do render no `MovementsPage` |
 | P13.56 | Guardas contra respostas inesperadas no `HomePage` |
 | P13.58 | Ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas (acrescentar a `alerts.ts`) |
 | P13.59 | "Actualização em 0:00" quando o ciclo atrasa; foco do `Modal` a cada poll; cores e eixo do Histórico |
