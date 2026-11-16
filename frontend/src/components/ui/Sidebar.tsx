@@ -100,7 +100,11 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
       {/* Pause toggle + Settings — separated, above status footer */}
       <div className="px-3 py-2 border-t border-slate-700/60 space-y-1">
         <button
-          onClick={onTogglePause}
+          onClick={() => {
+            // pausing stops every game action — one stray tap used to do it
+            if (!paused && !confirm('Pausar o bot? Deixa de construir, espiar, atacar e transportar até ser retomado.')) return
+            onTogglePause()
+          }}
           title={t('pause_tooltip')}
           className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
             paused

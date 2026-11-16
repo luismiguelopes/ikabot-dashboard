@@ -1299,6 +1299,19 @@ def _load_farm_settings():
         return {}
 
 
+def _loot_cap_per_raid(settings):
+    try:
+        manual = int(settings.get("lootCapPerRaid", 0) or 0)
+    except (TypeError, ValueError):
+        manual = 0
+    if manual > 0:
+        return manual
+    try:
+        return _db.learned_loot_cap() if _db else None
+    except Exception:
+        return None
+
+
 @app.route("/api/farm/army")
 def api_farm_army_get():
     s = _load_farm_settings()
@@ -1309,6 +1322,8 @@ def api_farm_army_get():
         "shipReserveEnabled": bool(s.get("shipReserveEnabled", True)),
         "reserveHorizonMin": int(s.get("reserveHorizonMin", 45)),
         "earlyRespyEnabled": bool(s.get("earlyRespyEnabled", True)),
+        # what one wave can carry home (manual setting, else learned from real returns)
+        "lootCapPerRaid": _loot_cap_per_raid(s),
     })
 
 
@@ -1522,6 +1537,7 @@ def api_farm_update():
     if "enabled" in data:        fields["enabled"] = 1 if data["enabled"] else 0
     if "intervalHours" in data:  fields["interval_hours"] = max(1, min(168, int(data["intervalHours"])))
     if "minLoot" in data:        fields["min_loot"] = max(0, int(data["minLoot"]))
+    if "mode" in data:           fields["mode"] = "loop" if str(data["mode"]) == "loop" else "farm"
     if "maxEnemyShips" in data:  fields["max_enemy_ships"] = max(0, int(data["maxEnemyShips"]))
     if "respyEvery" in data:     fields["respy_every"] = max(1, min(50, int(data["respyEvery"])))
     if "fleetLeadMin" in data:   fields["fleet_lead_min"] = max(1, min(120, int(data["fleetLeadMin"])))

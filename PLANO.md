@@ -1261,7 +1261,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       `App.tsx` nunca limpam `error` após um sucesso: uma falha passageira (restart do Flask,
       ficheiro a meio — P13.14) deixa o ecrã de erro até recarregar a página. A barra de progresso
       do scan só aparece se a página for aberta a meio (linhas 130-137: closure sempre `running`).
-- [ ] **P13.39 Dados enganadores** **[C]**
+- [~] **P13.39 Dados enganadores** **[C]** *feito 2026-11-16, menos um ponto* (saque real por id da cidade nos alvos do farm; "a cada Nh" passou a "recuo após falha"; o alvo de frota mostra a evidência — navios vistos ou varrimentos limpos; a dica de navios do despacho respeita o tecto por vaga, vindo de `/api/farm/army`; "em campo" → "na cidade". **Falta:** o filtro/pontuação ainda usa `last_loot` espiado)
   - `reportedAt` mostrado como data do relatório e usado para escolher "o mais recente"; o selo
     "verificado há N min" herda o mesmo erro (P13.1).
   - `last_loot` (armazém espiado) tratado como rendimento real no filtro e na pontuação; o saque
@@ -1276,7 +1276,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       escuta; `DispatchPanel`, `HistoryPanel` e as contagens de espiões **nunca** actualizam (um
       ataque pendente fica "a despachar" para sempre). Um hook partilhado para o evento `update`,
       refetch ao receber, poll lento só como recurso.
-- [ ] **P13.41 Em falta na UI** **[C]** — `minLoot` e modo (farm/loop) não se editam por alvo;
+- [~] **P13.41 Em falta na UI** **[C]** *parte feita 2026-11-16* (saque mínimo e modo farm/loop editáveis por alvo; pesquisa na tabela de alvos; agendar sem hora é recusado. **Falta:** adicionar alvos com frota fora do Combate; hora de saída no modal de ataque. Bloquear 0 navios ficou de fora de propósito: na mesma ilha é legítimo) — `minLoot` e modo (farm/loop) não se editam por alvo;
       alvos com frota só se adicionam pela pesquisa do Combate (sem modo); sem pesquisa/filtro na
       tabela de alvos; sem scan, os alvos do farm ficam invisíveis; agendar "às HH:MM" com a hora
       vazia envia **já**; o modal de ataque não mostra a hora de saída (o backend soma 5-20 min) e
@@ -1339,7 +1339,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
 **F.2 — Definições, transportes e construção** (`SettingsPage`, `TransportTab`, `Construction*`,
 `BuildingsPage`, `WinePanorama`, `AuthGate`)
 
-- [ ] **P13.46 Bugs directos** **[C]**
+- [x] **P13.46 Bugs directos** **[C]** ✅ 2026-11-16 (dias de ignorar gravados; cidade sem vinho como crítica no panorama; origem = destino corrigido; janela horária invertida recusada com 400; agendar "às HH:MM" exige a hora)
   - ✅ (2026-11-14) `Construction.tsx:104` — `nowSecs = now / 1000`, mas o `useLiveClock` já
     devolve segundos: as previsões "pronto às…" do orçamento saíam com data de Janeiro de 1970.
   - `SettingsPage.tsx:754` — `ignoreExpiryDays` e `ignorePermanentAfter` são editáveis e mostram
@@ -1378,7 +1378,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       o `App` mostra o ecrã de erro permanente com o texto `auth_required`; `TransportTab` guarda
       o objecto de erro como lista de cidades e rebenta — não há `ErrorBoundary`, a página fica
       em branco. Um wrapper único de fetch que, ao 401, devolve ao ecrã de login.
-- [ ] **P13.51 Segredos visíveis** **[C]** — token do Telegram e webhook do Discord em campos de
+- [x] **P13.51 Segredos visíveis** **[C]** ✅ 2026-11-16 (o token e o webhook nunca vão para o browser — só `…Set`/`…Hint`/`…Source`; campos tipo password; gravar mantém o valor guardado se o campo ficar vazio; valores do ambiente não são copiados para o ficheiro) — token do Telegram e webhook do Discord em campos de
       texto simples, preenchidos a partir das variáveis de ambiente; gravar copia-os para o
       `telegram_settings.json`. Campo tipo password e valor mascarado vindo do servidor.
 - [ ] **P13.52 Campos numéricos limitados a cada tecla** **[C]** — com mínimo 50, escrever "95"
@@ -1405,7 +1405,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
   - O "preço do ouro por unidade" anula-se nas fórmulas de retorno (não faz nada) e trata todos
     os recursos ao mesmo preço; "disponível" é a soma do império embora a obra precise dos
     recursos numa cidade; nomes de edifícios fixos em português (sem dados → "já está no nível").
-- [ ] **P13.55 Página inicial: o ponto quente de performance** **[C]**
+- [~] **P13.55 Página inicial: o ponto quente de performance** **[C]** *feito 2026-11-16, menos o relógio* (sinal de vida com evento SSE próprio; custos pedidos uma vez; `Tile` fora do render; gráficos carregados só no Histórico; todos os polls param com o separador escondido. **Falta:** o `useLiveClock` ao nível da página e o `Section` do `MovementsPage`)
   - O SSE vigia `last_alive.json`, que o bot reescreve a cada ≤15-60s → o evento `update` dispara
     continuamente, e a cada um o `HomePage` (linhas 251-256) volta a pedir a fila **e a tabela
     completa de custos** (todas as cidades × edifícios × níveis), que muda de 3 em 3 dias.
@@ -1427,19 +1427,19 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       de cidade depressa deixa a resposta antiga sobrepor-se à nova (pode rebentar em
       `h.gold.total`) e o gráfico nunca é destruído ao sair da página. Uma falha passageira no
       `/api/logs` apaga o log do ecrã.
-- [ ] **P13.57 O Início mostra inventário antes de saúde** **[C]** — não há bloco "bot vivo /
+- [x] **P13.57 O Início mostra inventário antes de saúde** **[C]** ✅ 2026-11-16 (faixa de estado no topo do Início: bot vivo/sem sinal, em pausa, subsistemas a falhar com o erro, próxima acção do farm; "API em baixo" tem estado próprio) — não há bloco "bot vivo /
       último sinal / em pausa / último erro": isso está só no rodapé da barra lateral, que no
       telemóvel fica dentro do menu fechado. O cartão de combate dá só contagens; "próximo
       ataque" vem apenas da fila manual (mostra "—" com o farm a trabalhar). Cartões que falham
       desaparecem (`return null`), logo "API em baixo" e "nada a acontecer" são iguais.
       Uma faixa de estado no topo + próxima acção do farm (liga ao P13.34).
-- [ ] **P13.58 Alertas incoerentes entre páginas** **[C]** — "Vinho em risco" lista todas as
+- [~] **P13.58 Alertas incoerentes entre páginas** **[C]** *feito 2026-11-16, menos as fontes novas* (`alerts.ts`: uma definição para a página, o contador e as cores da página das cidades; "Vinho em risco" só lista abaixo do limite de aviso. **Falta:** ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas) — "Vinho em risco" lista todas as
       cidades com autonomia finita (num império sem produção de vinho, as 13, sempre);
       `CitiesPage.tsx:90` usa limites fixos de 4h/12h enquanto o resto usa os configuráveis
       (2h/8h); a página Alertas e o contador da barra lateral têm a lógica duplicada e diferem
       por um; ataques a chegar, bot offline, subsistemas em falha e erros de transporte não
       entram em "Alertas". Um único `computeAlerts()`.
-- [ ] **P13.59 Pequenos, mas visíveis** **[C]** — obra com ETA desconhecido aparece como
+- [~] **P13.59 Pequenos, mas visíveis** **[C]** *parte feita 2026-11-16* (obra sem ETA já não aparece como concluída; o log só segue o fim se o leitor lá estiver; durações longas em dias; pausar pede confirmação. **Falta:** "Actualização em 0:00", foco do `Modal`, cores e eixo do histórico) — obra com ETA desconhecido aparece como
       "concluída" (`HomePage.tsx:278`); os logs puxam a vista para o fim de 5 em 5s enquanto se
       lê; "Actualização em 0:00" para sempre quando o ciclo atrasa; `fmtDuration` não passa a
       dias ("300h 0m"); o `Modal` volta a focar o primeiro campo sempre que a página faz poll;

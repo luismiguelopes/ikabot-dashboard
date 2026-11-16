@@ -24,6 +24,7 @@ export function fmtDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   const s = seconds % 60
+  if (h >= 48) return `${Math.floor(h / 24)}d ${h % 24}h`     // "300h 0m" → "12d 12h"
   if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`

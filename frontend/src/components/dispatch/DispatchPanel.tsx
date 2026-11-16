@@ -48,6 +48,7 @@ export function DispatchPanel() {
   const [spyTargets,     setSpyTargets]     = useState<DispatchTarget[]>([])
   const [totalShips,     setTotalShips]     = useState<number | null>(null)
   const [shipCapacity,   setShipCapacity]   = useState<number | null>(null)
+  const [raidCap,        setRaidCap]        = useState<number | null>(null)
   const [lootByCity,     setLootByCity]     = useState<Record<string, number>>({})
 
   // Form state
@@ -87,6 +88,8 @@ export function DispatchPanel() {
       setTotalShips(data?.statusSummary?.ships?.total ?? null)
       setShipCapacity(data?.statusSummary?.shipCapacity ?? null)
     }).catch(() => {})
+    // what one wave can carry home, whatever the fleet size (learned from real returns)
+    fetch('/api/farm/army').then(r => r.json()).then((d: any) => setRaidCap(d?.lootCapPerRaid ?? null)).catch(() => {})
 
     // Known warehouse loot per target city, from the latest DONE spy report (F3)
     fetch('/api/espionage/missions').then(r => r.json()).then((d: any) => {
@@ -460,8 +463,11 @@ export function DispatchPanel() {
                 {/* F3: capacity vs the target's known warehouse loot */}
                 {(() => {
                   if (!target || target.type !== 'enemy' || !shipCapacity) return null
-                  const loot = lootByCity[target.cityId] ?? 0
-                  if (loot <= 0) return null
+                  const seen = lootByCity[target.cityId] ?? 0
+                  if (seen <= 0) return null
+                  // One wave never brings more than the per-raid ceiling (~207k), however full
+                  // the warehouse: sizing the ships to the whole warehouse asked for thousands.
+                  const loot = raidCap ? Math.min(seen, raidCap) : seen
                   const capacity = transporters * shipCapacity
                   const needed = Math.ceil(loot / shipCapacity)
                   const ok = capacity >= loot

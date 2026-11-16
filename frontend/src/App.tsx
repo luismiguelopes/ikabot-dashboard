@@ -7,6 +7,7 @@ import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
 import { ToastHost } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { computeAlerts } from './alerts'
 import { setApiLang, pollInterval, clearPoll } from './api'
 import { useNotifications, loadBrowserNotifEnabled } from './hooks/useNotifications'
 import { HomePage } from './components/HomePage'
@@ -202,21 +203,8 @@ export default function App() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const alertCount = useMemo(() => {
-    if (!data) return 0
-    let n = 0
-    Object.values(data.resourcesData).forEach((city: CityResources) => {
-      const wt = city.wineRunsOutIn
-      if (wt !== -1 && wt !== undefined && wt < thresholds.wineWarning * 3600) n++
-      const cap = city.storageCapacity
-      if (cap) MATERIALS.forEach(m => {
-        const amount = (city[m.en as keyof CityResources] as number) || 0
-        if (amount / cap >= thresholds.storageWarning / 100) n++
-      })
-    })
-    if (data.statusSummary.gold.production < 0) n++
-    return n
-  }, [data, thresholds])
+  // same list the Alerts page shows — the two used to count differently
+  const alertCount = useMemo(() => (data ? computeAlerts(data, thresholds).length : 0), [data, thresholds])
 
   // Global pause (F11) — fetched from the bot, toggled from the sidebar
   const [paused, setPaused] = useState(false)
@@ -317,8 +305,9 @@ export default function App() {
             {paused && <PausedBanner />}
             <SubsystemHealthBanner />
             <ErrorBoundary key={page} label={page}>
-              {page === 'home'         && <HomePage      data={data} thresholds={thresholds} />}
-              {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} />}
+              {page === 'home'         && <HomePage      data={data} thresholds={thresholds} paused={paused}
+                                                       lastAlive={Math.max(liveAlive ?? 0, data.lastAlive ?? 0) || null} />}
+              {page === 'cities'       && <CitiesPage    data={data} onRefresh={fetchData} thresholds={thresholds} />}
               {page === 'buildings'    && <BuildingsPage data={data} onRefresh={fetchData} />}
               {page === 'movements'    && <MovementsPage />}
               {page === 'alerts'       && <AlertsPage    data={data} thresholds={thresholds} />}

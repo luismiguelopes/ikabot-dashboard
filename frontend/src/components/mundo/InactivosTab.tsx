@@ -28,7 +28,9 @@ function farmLine(f: FarmTarget, t: (k: string, v?: Record<string, string | numb
   else if (f.is_fleet_target === 1) {
     const ships = f.last_enemy_ships || 0
     const back = f.enemy_return_at && f.enemy_return_at > now ? ' ' + t('farm_line_fleet_back', { t: hhmm(f.enemy_return_at) }) : ''
-    why.push((ships > 0 ? t('farm_line_fleet_n', { n: ships }) : t('farm_line_fleet')) + back)
+    // say what the flag rests on: ships seen, or how many clean sweeps it has had since
+    const clean = !ships && f.clean_sweeps ? ' ' + t('farm_line_clean', { n: f.clean_sweeps }) : ''
+    why.push((ships > 0 ? t('farm_line_fleet_n', { n: ships }) : t('farm_line_fleet')) + back + clean)
   }
   if (f.scout_fail_count) why.push(t('farm_line_fails', { n: f.scout_fail_count }))
   if (f.scout_fail_rounds) why.push(t('farm_line_rounds', { n: f.scout_fail_rounds }))
@@ -145,6 +147,7 @@ const _ACTIVE_SPY_STATES = new Set([
 export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCities, spyCounts, spyOriginCityId }: InactivosTabProps) {
   const t = useT()
   const [expandedKey,    setExpandedKey]    = useState<string | null>(null)
+  const [search,         setSearch]         = useState('')
   const [spyTarget,      setSpyTarget]      = useState<EnrichedPlayer | null>(null)
   const [attackTarget,   setAttackTarget]   = useState<EnrichedPlayer | null>(null)
   const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set())
@@ -415,7 +418,10 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     // to the farm-synthesized rows too — a drained, disabled target that dropped out of the scan
     // would otherwise be re-created here with no filter at all. The farm's own figure wins for
     // farm targets (it is updated by every real return); the scout total covers the rest.
+    const needle = search.trim().toLowerCase()
     const visible = enriched.filter(p => {
+      if (needle && !`${p.playerName} ${p.cityName} ${p.islandName ?? ''} ${p.allyTag ?? ''}`.toLowerCase().includes(needle))
+        return false
       const farm = p.cityId ? farmByCity[String(p.cityId)] : undefined
       if (farm?.enabled) return true
       const farmLootKnown = !!farm && ((farm.last_loot || 0) > 0 || (farm.total_raids || 0) > 0)
@@ -440,7 +446,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     })
 
     return visible
-  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos])
+  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos, search])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -471,6 +477,14 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
             <FarmSettings />
           </Card>
         )}
+      </div>
+      <div className="mb-2 relative max-w-xs">
+        <i className="fa-solid fa-magnifying-glass absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-300 text-xs" />
+        <input
+          type="search" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder={t('targets_search')}
+          className="w-full pl-8 pr-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        />
       </div>
       <Card>
         <div className="overflow-x-auto">
@@ -553,7 +567,13 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
                         )}
                         {(() => {
-                          const ls = lootByCity[lootKey(p.playerName, p.cityName)]
+                          // Farm targets: the total the backend matched by CITY ID. The name
+                          // match below mixes same-named cities and misses renamed ones.
+                          const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
+                          const byName = lootByCity[lootKey(p.playerName, p.cityName)]
+                          const ls = f && (f.loot_returns ?? 0) > 0
+                            ? { total: f.total_loot ?? 0, raids: f.loot_returns ?? 0 }
+                            : byName
                           if (!ls || ls.total <= 0) return null
                           return (
                             <div className="text-[10px] text-amber-600 mt-0.5" title={t('farm_loot_brought')}>
@@ -811,6 +831,19 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                                       : t('farm_interval', { n: String(f.interval_hours) }) + ' · ' + t('farm_raids') + ': ' + f.total_raids}
                                   </span>
                                   <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-400">
+                                    <span className="flex items-center gap-1" title={t('farm_minloot_hint')}>
+                                      {t('farm_minloot')}
+                                      <FarmNumInput min={0} max={99999999} value={f.min_loot ?? 50000} className="w-20 border border-slate-200 rounded px-1 py-0.5 text-right"
+                                        onCommit={v => farmAction(String(p.cityId), { minLoot: v })} />
+                                    </span>
+                                    <button
+                                      onClick={() => farmAction(String(p.cityId), { mode: f.mode === 'loop' ? 'farm' : 'loop' })}
+                                      title={t('farm_mode_hint')}
+                                      className="px-1.5 py-0.5 rounded border border-slate-200 hover:bg-slate-50 text-slate-500"
+                                    >
+                                      <i className={`fa-solid ${f.mode === 'loop' ? 'fa-repeat' : 'fa-seedling'} mr-1`} />
+                                      {f.mode === 'loop' ? t('farm_mode_loop') : t('farm_mode_farm')}
+                                    </button>
                                     <span className="flex items-center gap-1" title={t('farm_maxships_hint')}>
                                       {t('farm_maxships')}
                                       <FarmNumInput min={0} max={9999} value={f.max_enemy_ships ?? 0} className="w-14 border border-slate-200 rounded px-1 py-0.5 text-right"

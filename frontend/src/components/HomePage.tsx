@@ -242,7 +242,92 @@ function CombatSummary() {
   )
 }
 
-export function HomePage({ data, thresholds }: { data: ApiData; thresholds: AlertThresholds }) {
+// Health before inventory (P13.57): is the bot alive, is it paused, is anything failing, and
+// what will the farm do next. This lived only in the sidebar footer — inside the closed menu
+// on a phone — and a failing API looked the same as "nothing happening".
+function StatusStrip({ lastAlive, offlineAfterSecs, paused }: {
+  lastAlive: number | null | undefined; offlineAfterSecs?: number; paused?: boolean
+}) {
+  const t = useT()
+  const now = useLiveClock()
+  const [failing, setFailing] = useState<Array<{ name: string; error: string }> | null>(null)
+  const [next, setNext] = useState<{ name: string; state: string; at: number; action: string } | null | undefined>(undefined)
+  const [apiDown, setApiDown] = useState(false)
+
+  useEffect(() => {
+    const load = () => {
+      fetch('/api/health').then(r => { if (!r.ok) throw new Error(); return r.json() })
+        .then((d: { subsystems?: Record<string, { consecutiveFailures?: number; lastError?: string | null }> }) => {
+          setApiDown(false)
+          setFailing(Object.entries(d.subsystems || {})
+            .filter(([, v]) => (v?.consecutiveFailures ?? 0) > 0)
+            .map(([name, v]) => ({ name, error: String(v?.lastError ?? '') })))
+        }).catch(() => setApiDown(true))
+      fetch('/api/farm').then(r => r.json()).then((d: any) => {
+        if (!Array.isArray(d)) return
+        const head = d.filter(f => f.enabled && f.queue_pos).sort((a, b) => a.queue_pos - b.queue_pos)[0]
+        setNext(head ? { name: head.target_city_name || String(head.target_city_id), state: head.state,
+                         at: head.state === 'ATTACKING' ? head.attack_return_at : head.next_run_at,
+                         action: head.next_action } : null)
+      }).catch(() => {})
+    }
+    load()
+    const id = pollInterval(load, 60000)
+    return () => clearPoll(id)
+  }, [])
+
+  const silentFor = lastAlive ? now - lastAlive : null
+  const offline = silentFor === null || silentFor > (offlineAfterSecs ?? 1800)
+  const hhmm = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const pill = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border'
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      {apiDown ? (
+        <span className={`${pill} bg-red-50 text-red-700 border-red-200`}>
+          <i className="fa-solid fa-plug-circle-xmark" />{t('status_api_down')}
+        </span>
+      ) : offline ? (
+        <span className={`${pill} bg-red-50 text-red-700 border-red-200`}>
+          <i className="fa-solid fa-heart-crack" />
+          {silentFor === null ? t('status_no_signal') : t('status_silent', { t: fmtDuration(silentFor) })}
+        </span>
+      ) : (
+        <span className={`${pill} bg-emerald-50 text-emerald-700 border-emerald-200`}>
+          <i className="fa-solid fa-heart-pulse" />{t('status_alive', { t: fmtDuration(silentFor!) })}
+        </span>
+      )}
+      {paused && (
+        <span className={`${pill} bg-amber-50 text-amber-700 border-amber-200`}>
+          <i className="fa-solid fa-pause" />{t('status_paused')}
+        </span>
+      )}
+      {failing && failing.length > 0 && failing.map(f => (
+        <span key={f.name} title={f.error} className={`${pill} bg-red-50 text-red-700 border-red-200 max-w-xs truncate`}>
+          <i className="fa-solid fa-triangle-exclamation" />{f.name}: {f.error || t('status_failing')}
+        </span>
+      ))}
+      {failing && failing.length === 0 && !apiDown && !offline && (
+        <span className={`${pill} bg-white text-slate-500 border-slate-200`}>
+          <i className="fa-solid fa-circle-check text-emerald-500" />{t('status_no_errors')}
+        </span>
+      )}
+      {next !== undefined && (
+        <span className={`${pill} bg-white text-slate-600 border-slate-200`}>
+          <i className="fa-solid fa-seedling text-emerald-600" />
+          {next === null ? t('status_farm_idle')
+            : next.state === 'ATTACKING' ? t('status_farm_out', { city: next.name, t: next.at ? hhmm(next.at) : '—' })
+            : next.state === 'SPYING' ? t('status_farm_spying', { city: next.name })
+            : t(next.action === 'attack' ? 'status_farm_attack' : 'status_farm_scout',
+                { city: next.name, t: next.at && next.at > now ? hhmm(next.at) : t('farm_line_now') })}
+        </span>
+      )}
+    </div>
+  )
+}
+
+export function HomePage({ data, thresholds, lastAlive, paused }: {
+  data: ApiData; thresholds: AlertThresholds; lastAlive?: number | null; paused?: boolean
+}) {
   const t    = useT()
   const lang = useLang() as 'pt' | 'en'
   const now  = useLiveClock()
@@ -313,7 +398,9 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
   const cityCount     = Object.keys(resourcesData).length
 
   const wineAtRisk = Object.entries(resourcesData)
-    .filter(([, d]) => d.wineRunsOutIn !== -1 && d.wineRunsOutIn >= 0)
+    // "at risk" = below the warning threshold. It used to list every city with a finite
+    // runway — in an empire that produces no wine, all of them, always.
+    .filter(([, d]) => d.wineRunsOutIn !== -1 && d.wineRunsOutIn >= 0 && d.wineRunsOutIn < warningSecs)
     .map(([city, d]) => ({ city, seconds: d.wineRunsOutIn,
                             prod: d.wineProductionPerHour, cons: d.wineConsumptionPerHour }))
     .sort((a, b) => a.seconds - b.seconds)
@@ -329,6 +416,7 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
   return (
     <div>
       <PageHeader icon="fa-crown" title={t('home_title')} />
+      <StatusStrip lastAlive={lastAlive ?? data.lastAlive} offlineAfterSecs={data.offlineAfterSecs} paused={paused} />
 
       <CombatSummary />
       <CyclesCard />
@@ -392,7 +480,7 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
             <p className="px-5 pb-4 text-sm text-slate-400">{t('home_no_active_constr')}</p>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {activeConstructions.map(({ city, building, fromLevel, toLevel, timeLeft }) => (
+              {activeConstructions.map(({ city, building, fromLevel, toLevel, timeLeft, eta }) => (
                 <li key={city} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
                   <i className="fa-solid fa-hammer text-orange-400 text-xs w-3 shrink-0" />
                   <span className="font-semibold text-sm text-slate-700 w-28 shrink-0 truncate">{city}</span>
@@ -403,7 +491,8 @@ export function HomePage({ data, thresholds }: { data: ApiData; thresholds: Aler
                     </span>
                   </span>
                   <span className={`text-xs font-mono shrink-0 ${timeLeft === 0 ? 'text-green-600 font-semibold' : 'text-orange-500'}`}>
-                    {timeLeft === 0 ? t('home_constr_done') : fmtDuration(timeLeft)}
+                    {/* an unknown ETA (0) is not "finished" */}
+                    {!eta ? '…' : timeLeft === 0 ? t('home_constr_done') : fmtDuration(timeLeft)}
                   </span>
                 </li>
               ))}

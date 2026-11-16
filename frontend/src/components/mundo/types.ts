@@ -17,6 +17,7 @@ export interface FarmTarget {
   scout_fail_count?: number; scout_fail_rounds?: number
   last_enemy_ships?: number; enemy_return_at?: number
   total_loot?: number; loot_returns?: number
+  clean_sweeps?: number
   queue_pos?: number      // position in the order the bot really works the targets
 }
 export interface LootStat {

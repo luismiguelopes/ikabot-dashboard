@@ -867,6 +867,33 @@ def get_loot_stats():
     return out
 
 
+# Every raid comes home with about the same total whatever the fleet size (a game rule tied to
+# the army). When the best recent returns sit within a few percent of each other, that total
+# is the ceiling of one wave. Shared by the farm (ship sizing) and the dashboard (ship hint).
+LOOT_CAP_WINDOW_SECS = 7 * 86400
+LOOT_CAP_MIN_SAMPLES = 3
+LOOT_CAP_CLUSTER_TOL = 0.05     # top returns within 5% of each other = a hard ceiling
+LOOT_CAP_HEADROOM = 1.25
+
+
+def learned_loot_cap(now=None):
+    """Loot one wave can bring home, learned from the recent real returns, or None."""
+    now = int(now or time.time())
+    try:
+        rows = get_loot_log(limit=200)
+    except Exception:
+        return None
+    totals = sorted((sum(int(r.get(k, 0) or 0) for k in ("wood", "wine", "marble", "crystal", "sulfur"))
+                     for r in rows if now - int(r.get("ts", 0) or 0) <= LOOT_CAP_WINDOW_SECS),
+                    reverse=True)
+    if len(totals) < LOOT_CAP_MIN_SAMPLES or totals[0] <= 0:
+        return None
+    top = totals[:LOOT_CAP_MIN_SAMPLES]
+    if top[-1] < top[0] * (1 - LOOT_CAP_CLUSTER_TOL):
+        return None    # no ceiling visible — returns are just whatever the targets held
+    return int(top[0] * LOOT_CAP_HEADROOM)
+
+
 def get_loot_stats_by_city():
     """Aggregate loot per source CITY: what was actually plundered from each city, not the sum of
     every city its owner has. Keyed by (player, city) because city names repeat across players

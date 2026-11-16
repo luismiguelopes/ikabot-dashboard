@@ -26,6 +26,7 @@ export function LogsPage() {
   const [count, setCount]           = useState(200)
   const [autoScroll, setAutoScroll] = useState(true)
   const boxRef = useRef<HTMLDivElement>(null)
+  const atBottom = useRef(true)
 
   const fetchLogs = useCallback(() => {
     fetch(`/api/logs?lines=${count}`)
@@ -48,8 +49,11 @@ export function LogsPage() {
 
   // Auto-scroll to bottom when new lines arrive
   useEffect(() => {
-    if (autoScroll && boxRef.current) {
-      boxRef.current.scrollTop = boxRef.current.scrollHeight
+    // Follow the tail only while the reader is already at the bottom: every 5s refresh used
+    // to yank the view down while reading something further up.
+    const box = boxRef.current
+    if (autoScroll && box && atBottom.current) {
+      box.scrollTop = box.scrollHeight
     }
   }, [lines, autoScroll])
 
@@ -77,6 +81,10 @@ export function LogsPage() {
       <Card>
         <div
           ref={boxRef}
+          onScroll={e => {
+            const el = e.currentTarget
+            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          }}
           className="bg-slate-900 rounded-lg p-4 font-mono text-xs leading-relaxed overflow-auto"
           style={{ maxHeight: '70vh' }}
         >

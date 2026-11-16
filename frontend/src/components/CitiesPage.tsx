@@ -9,9 +9,10 @@ import { CitySelect } from './ui/CitySelect'
 import { StorageBar } from './StorageBar'
 import { RefreshButton } from './ui/RefreshButton'
 import { useEmpireRefresh } from '../hooks/useEmpireRefresh'
-import type { ApiData } from '../types'
+import { wineLevel } from '../alerts'
+import type { AlertThresholds, ApiData } from '../types'
 
-export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () => void }) {
+export function CitiesPage({ data, onRefresh, thresholds }: { data: ApiData; onRefresh?: () => void; thresholds?: AlertThresholds }) {
   const t = useT()
   const lang = useLang() as 'pt' | 'en'
   const { resourcesData } = data
@@ -87,8 +88,10 @@ export function CitiesPage({ data, onRefresh }: { data: ApiData; onRefresh?: () 
                 const d = resourcesData[city]
                 const cap = d.storageCapacity || 0
                 const wineRunsOut = d.wineRunsOutIn
-                const wineUrgent = wineRunsOut !== -1 && wineRunsOut !== undefined && wineRunsOut < 4 * 3600
-                const wineWarning = wineRunsOut !== -1 && wineRunsOut !== undefined && wineRunsOut < 12 * 3600
+                // the thresholds from Settings — these were fixed at 4h / 12h here
+                const wl = thresholds ? wineLevel(wineRunsOut, thresholds) : null
+                const wineUrgent = wl === 'critical'
+                const wineWarning = wl !== null
 
                 return (
                   <tr key={city} className={`border-b border-slate-100 hover:bg-indigo-50/60 transition-colors ${i % 2 ? 'bg-slate-50/50' : ''}`}>
