@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import { AUTH_EXPIRED_EVENT } from '../api'
+import { useT } from '../i18n'
 
 type Phase = 'loading' | 'offline' | 'need' | 'ok'
 
 /** "Terminar sessão" — renders only when the dashboard has auth enabled. */
 export function LogoutButton() {
+  const t = useT()
   const [enabled, setEnabled] = useState(false)
   useEffect(() => {
     fetch('/api/auth-status').then(r => r.json()).then(d => setEnabled(!!d.enabled)).catch(() => {})
@@ -19,7 +21,7 @@ export function LogoutButton() {
       onClick={logout}
       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:text-red-600 transition-colors"
     >
-      <i className="fa-solid fa-arrow-right-from-bracket" /> Terminar sessão
+      <i className="fa-solid fa-arrow-right-from-bracket" /> {t('logout')}
     </button>
   )
 }

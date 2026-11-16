@@ -100,7 +100,7 @@ function GeralTab({ toggleLang, defaultTab, onSaveDefaultTab }: {
               <option key={key} value={key}>{t(NAV_LABEL_KEYS[key])}</option>
             ))}
           </select>
-          <p className="mt-2 text-xs text-slate-400">Guardado no browser. Activo na próxima vez que abrires o dashboard.</p>
+          <p className="mt-2 text-xs text-slate-400">{t('settings_default_tab_hint')}</p>
         </div>
       </Card>
     </div>
@@ -571,7 +571,8 @@ function TelegramCard() {
           </button>
           <button
             onClick={handleTest}
-            disabled={(!(token && chatId) && !webhook) || status === 'testing'}
+            // a stored secret counts: the fields stay empty once saved (the server never sends them)
+            disabled={(!((token || secretInfo.token) && chatId) && !(webhook || secretInfo.webhook)) || status === 'testing'}
             className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {status === 'testing' && <i className="fa-solid fa-spinner animate-spin text-xs" />}

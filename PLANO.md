@@ -1665,6 +1665,30 @@ Abrir `http://localhost:5001`, entrar, e percorrer esta lista. Qualquer coisa pa
 7. **Calculadoras** — melhoria de edifício com mármore em falta e madeira a sobrar **não** diz
    "tens tudo"; ROI de colónia tem o campo "cidades tuas nesta ilha".
 
+**[x] Verificado no browser a 2026-11-16** — os 7 pontos passam. Corrigido pelo caminho (só frontend):
+- Alvos: pesquisa sem resultados escondia a própria caixa (não dava para a limpar) → a tabela
+  fica com uma linha "nenhum resultado".
+- Notificações: o botão "Testar" nunca ficava activo com token/webhook já guardados (os campos
+  vêm sempre vazios) → conta os segredos guardados.
+- Transportes: escolher como origem a cidade de destino agora **troca** as duas (antes punha a
+  primeira cidade da lista).
+- Horas activas: a dica dizia "só construções e transportes" → descreve a janela única (P13.32).
+- Textos fixos em português na interface inglesa: dica do separador por omissão, "Terminar sessão".
+
+Visto e deixado (anotar, não é erro):
+- "Actividade do bot" no Início mostra só a hora; entradas de dias anteriores parecem fora de
+  ordem → acrescentar o dia quando não é hoje (`HomePage.tsx`, `ActivityCard`). Juntar ao P13.59.
+- Linha do farm: "raids: 7" (vagas despachadas) vs "3 raids" (regressos com saque) — rótulos
+  parecidos para coisas diferentes. Juntar ao P13.39.
+- Ícones `fa-brands` (Telegram/Discord) não aparecem nas Notificações.
+- Cinco confirmações ainda usam o `confirm()` nativo (`Modal.tsx` tem o substituto) — P13.36.
+- Produção 0/h de vinho, cristal e enxofre no Início é real (confirmado pelo utilizador: as
+  cidades só produzem madeira e mármore).
+- **Corrigido (bot):** todos os ataques ficavam "manual" no `attack_log`, incluindo os do farm
+  (o `_log_attack_attempt` nunca recebia a origem). Agora deriva-a do `respectWineReserve`, que
+  só o farm põe — sem tocar no `process_attack_queue` nem no farm. As linhas antigas ficam "manual".
+  Fica para o Fable decidir se o farm deve pôr `source:"farm"` explícito no item.
+
 #### K.4 — O que falta, por ordem
 
 **A. Restos pequenos de itens já começados** (uma sessão cada, ou duas juntas)

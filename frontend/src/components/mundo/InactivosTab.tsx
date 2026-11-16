@@ -457,7 +457,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       </button>
     </Card>
   )
-  if (players.length === 0) return (
+  // Only an empty list WITHOUT a search replaces the page: with a search the box must stay on
+  // screen, or a search that matches nothing hides the only way to clear it.
+  if (players.length === 0 && !search.trim()) return (
     <Card className="p-8 text-center text-slate-400 text-sm">{t('no_players_found')}</Card>
   )
 
@@ -502,6 +504,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
               </tr>
             </thead>
             <tbody>
+              {players.length === 0 && (
+                <tr><td colSpan={10} className="p-8 text-center text-slate-400 text-sm">{t('no_players_found')}</td></tr>
+              )}
               {players.map((p, idx) => {
                 const isExpanded  = expandedKey === p.cKey
                 const hasReport   = p.mission?.state === 'DONE' && !!p.mission.result &&

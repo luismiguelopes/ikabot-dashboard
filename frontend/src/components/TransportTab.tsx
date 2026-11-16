@@ -302,7 +302,9 @@ export function TransportTab() {
                   // same city (the select showed another) → "origin and destination are equal".
                   const next = e.target.value
                   setOriginName(next)
-                  if (next === destName) setDestName(ownCities.find(c => c.name !== next)?.name ?? '')
+                  // Picking the destination as origin swaps the two (the old origin becomes the destination).
+                  if (next === destName) setDestName(originName && originName !== next
+                    ? originName : (ownCities.find(c => c.name !== next)?.name ?? ''))
                 }}>
                   {ownCities.map(c => <option key={c.cityId} value={c.name}>{c.name}</option>)}
                 </select>

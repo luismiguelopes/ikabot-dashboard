@@ -251,8 +251,12 @@ def _parse_attack_feedback(resp, function, ikabot_config):
     return False
 
 
-def _log_attack_attempt(item, ok, source="manual"):
+def _log_attack_attempt(item, ok, source=None):
     """Persist one dispatch attempt in the attack_log table (F1 — attack history)."""
+    if source is None:
+        # Farm items are the only ones flagged respectWineReserve (P11.10); everything else
+        # comes from the UI. Every dispatch used to be logged "manual", farm raids included.
+        source = "farm" if item.get("respectWineReserve") else "manual"
     try:
         from db_manager import log_attack
         log_attack({
