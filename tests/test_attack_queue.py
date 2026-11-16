@@ -25,9 +25,8 @@ import espionage_manager as em
 
 
 def _setup_db(tmp_path):
-    db_manager.DB_PATH = str(tmp_path / "test.db")
-    db_manager._LOGS_DIR = str(tmp_path)
-    db_manager._DB_INIT_DONE = False
+    from conftest import setup_db
+    setup_db(tmp_path, "test.db")
 
 
 def _add_attacks(items):

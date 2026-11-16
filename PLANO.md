@@ -1924,8 +1924,36 @@ com a linha do alvo expandida).
 | Item | Nota |
 |---|---|
 | Verificar no browser | os pontos "não experimentado" acima |
-| P13.60 | ESLint com `react-hooks/exhaustive-deps` — só relatar primeiro |
-| P13.45 | `conftest.py` com o `_setup_db` partilhado; estado global via `monkeypatch` |
+| P13.60 (resto) | Corrigir os 12 avisos do `npm run lint`, **um a um** (lista abaixo) |
+| P13.45 (resto) | Opcional: trocar as atribuições directas que restam (`test_db`, `test_pause`, `test_flask_api`, `test_loot_log`) pelo `setup_db`/fixture `db` do `conftest.py` — já não contaminam (são repostas), é só arrumação |
 | P13.42 | Partir `InactivosTab` (~1000 linhas) e `DispatchPanel`; `types/farm.ts` único (há dois `FarmTarget`: `mundo/types.ts` e `dispatch/shared.ts`) |
 | P13.32 (resto) | Uniformizar logs (`lm()` vs português fixo) — cosmético |
 | Ícones | `fa-brands` (Telegram/Discord) não aparecem nas Notificações |
+
+**P13.45 ✅ (16/11)** — `tests/conftest.py`: `setup_db(tmp_path)` + fixture `db`; uma fixture
+automática repõe os globais do `db_manager` depois de **cada** teste; e o pacote `ikabot` real
+(e os submódulos que os testes substituem por stubs) é carregado antes da colecção. As três
+cópias do `_setup_db` delegam no `conftest`. `test_watchlist.py` deixava `get_all_marks` e
+`is_paused` falsos para o resto da suite — repõe-os agora.
+Antes: a suite só passava por ordem alfabética (10 falhas em ordem inversa, erro de colecção
+noutras). Agora: **693 a verde em 9 ordens** (normal, inversa, 7 baralhadas).
+
+**P13.60 — ESLint instalado, só relatório (16/11)** — `npm run lint` (`eslint.config.js`, só as
+duas regras de hooks). 0 erros, **12 avisos**; nenhum corrigido (mudar dependências de um efeito
+muda quando ele corre):
+
+| Ficheiro:linha | Aviso |
+|---|---|
+| `BuildingsPage.tsx:31`, `:40` | `useMemo` sem `cities` / `buildingNames` nas dependências |
+| `Construction.tsx:265` | `empireData` recriado a cada render → o `useMemo` da linha 278 nunca reutiliza |
+| `Construction.tsx:270`, `:284` | `useEffect` sem `cityNames`, `selCity` / `buildingsInCity` |
+| `ConstructionTemplate.tsx:42` | o mesmo `empireData` (linha 50) |
+| `HistoryPage.tsx:40`, `:133` | `useEffect` sem `metric` / `t` |
+| `HomePage.tsx:359` | `inProgress` recriado a cada render (useMemo da 392) |
+| `dispatch/DispatchPanel.tsx:147` | `useEffect` sem `loadAll` |
+| `mundo/MundoPage.tsx:52` | `useEffect` sem `loadSpyCounts` |
+| `hooks/useEmpireRefresh.ts:40` | `useEffect` sem `onDone` |
+
+Os de `empireData`/`inProgress` são só desempenho (memo que não memoriza) e são seguros de
+corrigir com um `useMemo`. Os de `useEffect` pedem cuidado: acrescentar a dependência pode pôr o
+efeito a correr em ciclo se a função não estiver num `useCallback`.

@@ -22,6 +22,24 @@ import db_manager
 import empire_utils
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_globals():
+    """_setup and a few tests assign module globals directly; put them back, or the fake
+    get_all_marks / is_paused stay in force for every test that runs afterwards (P13.45)."""
+    saved = [(mod, name, getattr(mod, name)) for mod, names in (
+        (sc, ("WATCHLIST_SETTINGS_PATH", "WATCHLIST_STATE_PATH", "_WORLD_SCAN_PATH",
+              "SCAN_CHECKPOINT_PATH", "_scan_one_island")),
+        (empire_utils, ("is_paused",)),
+        (db_manager, ("get_all_marks",)),
+    ) for name in names]
+    yield
+    for mod, name, value in saved:
+        setattr(mod, name, value)
+
+
 def _setup(tmp_path, settings, marks, world_scan):
     sc.WATCHLIST_SETTINGS_PATH = str(tmp_path / "ws.json")
     sc.WATCHLIST_STATE_PATH    = str(tmp_path / "wstate.json")
