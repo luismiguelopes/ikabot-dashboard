@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useT } from '../../i18n'
 import { askConfirm } from './Modal'
-import { fmtCountdown } from '../../utils'
+import { fmtCountdown, fmtDuration } from '../../utils'
 
 function NavItem({ icon, label, active, onClick, badge }: {
   icon: string; label: string; active: boolean; onClick: () => void; badge?: number
@@ -58,9 +58,8 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
     return () => clearInterval(id)
   }, [])
 
-  const secsUntilUpdate = nextCycleAt
-    ? Math.max(0, nextCycleAt - Math.floor(Date.now() / 1000))
-    : null
+  // Signed: once the cycle is late this used to sit at "0:00" for good (P13.59).
+  const secsUntilUpdate = nextCycleAt ? nextCycleAt - Math.floor(Date.now() / 1000) : null
 
   return (
     <>
@@ -145,7 +144,10 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
         {secsUntilUpdate !== null && (
           <p className="text-slate-600 text-xs">
             <i className="fa-solid fa-arrows-rotate mr-1" />
-            {t('refresh_in', { t: fmtCountdown(secsUntilUpdate) })}
+            {secsUntilUpdate > 0
+              ? t('refresh_in', { t: fmtCountdown(secsUntilUpdate) })
+              : secsUntilUpdate > -60 ? t('refresh_due')
+              : t('refresh_late', { t: fmtDuration(-secsUntilUpdate) })}
           </p>
         )}
       </div>

@@ -1,11 +1,11 @@
 import type { Material, AlertThresholds } from './types'
 
 export const MATERIALS: Material[] = [
-  { pt: 'Madeira',  en: 'Wood',    icon: 'fa-tree',        color: 'text-green-500'  },
-  { pt: 'Vinho',    en: 'Wine',    icon: 'fa-wine-bottle', color: 'text-red-400'    },
-  { pt: 'Mármore',  en: 'Marble',  icon: 'fa-mountain',    color: 'text-slate-400'  },
-  { pt: 'Cristal',  en: 'Crystal', icon: 'fa-gem',         color: 'text-cyan-400'   },
-  { pt: 'Enxofre',  en: 'Sulfur',  icon: 'fa-flask',       color: 'text-yellow-400' },
+  { pt: 'Madeira',  en: 'Wood',    icon: 'fa-tree',        color: 'text-green-500',  hex: '#22c55e' },
+  { pt: 'Vinho',    en: 'Wine',    icon: 'fa-wine-bottle', color: 'text-red-400',    hex: '#f87171' },
+  { pt: 'Mármore',  en: 'Marble',  icon: 'fa-mountain',    color: 'text-slate-400',  hex: '#94a3b8' },
+  { pt: 'Cristal',  en: 'Crystal', icon: 'fa-gem',         color: 'text-cyan-400',   hex: '#22d3ee' },
+  { pt: 'Enxofre',  en: 'Sulfur',  icon: 'fa-flask',       color: 'text-yellow-400', hex: '#facc15' },
 ]
 
 export const AUTO_REFRESH_SECONDS = 300

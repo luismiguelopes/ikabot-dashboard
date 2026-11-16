@@ -3,6 +3,7 @@ export interface Material {
   en: string
   icon: string
   color: string
+  hex: string     // same colour as `color`, for charts
 }
 
 export interface AlertThresholds {

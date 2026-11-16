@@ -1419,7 +1419,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
     linhas substituídas de cada vez). `/api/movements` é pedido por dois componentes. Nenhum
     pára com o separador escondido. O SSE não cobre as filas em SQLite nem o `bot.log`.
   - Sem `React.lazy`: o chart.js (207 KB) carrega no arranque para uma página que só o Histórico usa.
-- [~] **P13.56 A app fica em branco com uma resposta inesperada** **[C]** *parte feita 2026-11-15* (`ErrorBoundary` por página; Movimentos só aceita uma lista, actualiza a cada 60s e o erro tem botão de repetir; Histórico ignora respostas atrasadas e destrói o gráfico ao sair; o log não se apaga numa falha passageira. **Falta:** os mesmos cuidados no `HomePage`) — `HomePage`,
+- [x] **P13.56 A app fica em branco com uma resposta inesperada** **[C]** ✅ 2026-11-16 (`ErrorBoundary` por página; Movimentos só aceita uma lista, actualiza a cada 60s e o erro tem botão de repetir; Histórico ignora respostas atrasadas e destrói o gráfico ao sair; o log não se apaga numa falha passageira. 16/11: cada cartão do Início só aceita a forma que espera (`asJson`/`isActivity`/`isQueue`), o `/api/data` sem `statusSummary` conta como erro e não chega às páginas; `/api/health` sem `subsystems` já não diz "sem erros". Testado no browser com respostas 500/corpos estranhos) — `HomePage`,
       `MovementsPage` e `HistoryPage` guardam o JSON directamente no estado; um 401 ou um corpo
       de erro chega a `.filter`/`.map`/`.length` e rebenta, sem `ErrorBoundary` (mesmo problema
       do P13.50). `MovementsPage` fica preso no erro (o botão Actualizar nem é desenhado) e a
@@ -1439,7 +1439,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       (2h/8h); a página Alertas e o contador da barra lateral têm a lógica duplicada e diferem
       por um; ataques a chegar, bot offline, subsistemas em falha e erros de transporte não
       entram em "Alertas". Um único `computeAlerts()`.
-- [~] **P13.59 Pequenos, mas visíveis** **[C]** *parte feita 2026-11-16* (obra sem ETA já não aparece como concluída; o log só segue o fim se o leitor lá estiver; durações longas em dias; pausar pede confirmação. **Falta:** "Actualização em 0:00", foco do `Modal`, cores e eixo do histórico) — obra com ETA desconhecido aparece como
+- [x] **P13.59 Pequenos, mas visíveis** **[C]** ✅ 2026-11-16 (obra sem ETA já não aparece como concluída; o log só segue o fim se o leitor lá estiver; durações longas em dias; pausar pede confirmação. 16/11: rodapé diz "Ciclo a começar"/"Ciclo atrasado Xm" em vez de 0:00; o `Modal` guarda o `onClose` numa ref e só foca ao abrir; Histórico com as cores dos recursos (`Material.hex`), eixo de tempo real (noites offline = falha na linha) e selector 24h/7d/30d/tudo; a Actividade do Início mostra o dia quando não é hoje) — obra com ETA desconhecido aparece como
       "concluída" (`HomePage.tsx:278`); os logs puxam a vista para o fim de 5 em 5s enquanto se
       lê; "Actualização em 0:00" para sempre quando o ciclo atrasa; `fmtDuration` não passa a
       dias ("300h 0m"); o `Modal` volta a focar o primeiro campo sempre que a página faz poll;
@@ -1677,7 +1677,7 @@ Abrir `http://localhost:5001`, entrar, e percorrer esta lista. Qualquer coisa pa
 
 Visto e deixado (anotar, não é erro):
 - "Actividade do bot" no Início mostra só a hora; entradas de dias anteriores parecem fora de
-  ordem → acrescentar o dia quando não é hoje (`HomePage.tsx`, `ActivityCard`). Juntar ao P13.59.
+  ordem → acrescentar o dia quando não é hoje (`HomePage.tsx`, `ActivityCard`). ✅ feito com o P13.59.
 - Linha do farm: "raids: 7" (vagas despachadas) vs "3 raids" (regressos com saque) — rótulos
   parecidos para coisas diferentes. Juntar ao P13.39.
 - Ícones `fa-brands` (Telegram/Discord) não aparecem nas Notificações.
@@ -1699,9 +1699,7 @@ Visto e deixado (anotar, não é erro):
 | P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
 | P13.47 | Aplicar um modelo de construção num único pedido |
 | P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
-| P13.56 | Guardas contra respostas inesperadas no `HomePage` |
 | P13.58 | Ataques a chegar, bot offline, subsistemas e erros de transporte na página de Alertas (acrescentar a `alerts.ts`) |
-| P13.59 | "Actualização em 0:00" quando o ciclo atrasa; foco do `Modal` a cada poll; cores e eixo do Histórico |
 
 **B. Itens inteiros por fazer**
 

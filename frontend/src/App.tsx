@@ -188,7 +188,11 @@ export default function App() {
     fetch('/api/data')
       .then(r => r.json())
       .then((d: ApiData & { error?: string }) => {
-        if (d.error) setError(d.error)
+        if (d?.error) setError(d.error)
+        // only a body with the parts every page reads (P13.56): anything else would reach
+        // the Home page and blank it on `statusSummary.resources`
+        else if (!d || typeof d.statusSummary !== 'object' || !d.statusSummary?.resources
+                 || typeof d.resourcesData !== 'object' || typeof d.empireData !== 'object') setError('unexpected response')
         else { setData(d); setError(null) }   // a later success clears an earlier failure
       })
       .catch(e => setError(e.message))

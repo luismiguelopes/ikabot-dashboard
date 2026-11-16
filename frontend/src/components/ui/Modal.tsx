@@ -22,11 +22,17 @@ interface ModalProps {
 // that every modal used to hand-roll (none of which handled the keyboard).
 export function Modal({ onClose, children, labelledBy, className }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  // Callers pass an inline `onClose`, a new function on every parent render. With it as the
+  // effect's dependency, every poll of the page behind re-ran the effect and pulled the focus
+  // back to the first field mid-typing (P13.59). The latest handler lives in a ref instead,
+  // and the effect runs once, when the dialog opens.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     const panel = panelRef.current
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); onCloseRef.current(); return }
       if (e.key === 'Tab' && panel) {
         const nodes = visibleFocusable(panel)
         if (nodes.length === 0) { e.preventDefault(); return }
@@ -47,7 +53,7 @@ export function Modal({ onClose, children, labelledBy, className }: ModalProps) 
       document.removeEventListener('keydown', onKey, true)
       document.body.style.overflow = prevOverflow
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>

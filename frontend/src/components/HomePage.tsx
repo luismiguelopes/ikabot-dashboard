@@ -26,6 +26,25 @@ interface CycleInfo {
   scan?: { status: string; phase?: string; progress?: number; total?: number }
 }
 
+// Guards (P13.56): a 401, a 500 or an error body ({error: "..."}) used to land straight in the
+// state and crash on `.map`/`.length`. Each card only takes an answer of the shape it expects;
+// anything else keeps what is on screen.
+const asJson = (r: Response) => { if (!r.ok) throw new Error(String(r.status)); return r.json() }
+const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : [])
+const isActivity = (d: any): d is ActivityData =>
+  !!d && Array.isArray(d.pending) && Array.isArray(d.flags) && Array.isArray(d.recent)
+const isQueue = (d: any): d is BuildingQueue =>
+  !!d && typeof d === 'object' && !d.error && (d.queues === undefined || (typeof d.queues === 'object' && d.queues !== null))
+
+// Time of an activity entry; entries from earlier days carry the day too, or they look out of order.
+function whenLabel(ts: number) {
+  const d = new Date(ts * 1000)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`
+}
+
 const CYCLE_META: Record<string, { icon: string; color: string }> = {
   empire:    { icon: 'fa-globe',          color: 'text-indigo-500'  },
   world:     { icon: 'fa-earth-europe',   color: 'text-sky-500'     },
@@ -44,8 +63,8 @@ function CyclesCard() {
   const [busy, setBusy]     = useState<Record<string, boolean>>({})
   const [done, setDone]     = useState<Record<string, number>>({})
 
-  const load = () => fetch('/api/cycles').then(r => r.json())
-    .then(d => setCycles(d.cycles || [])).catch(() => {})
+  const load = () => fetch('/api/cycles').then(asJson)
+    .then(d => { if (Array.isArray(d?.cycles)) setCycles(d.cycles) }).catch(() => {})
   useEffect(() => {
     load()
     const id = pollInterval(load, 15000)
@@ -131,7 +150,8 @@ function ActivityCard() {
   const now = useLiveClock()
   const [data, setData] = useState<ActivityData | null>(null)
   useEffect(() => {
-    const load = () => fetch('/api/activity').then(r => r.json()).then(setData).catch(() => {})
+    const load = () => fetch('/api/activity').then(asJson)
+      .then(d => { if (isActivity(d)) setData(d) }).catch(() => {})
     load()
     const id = pollInterval(load, 15000)
     return () => clearPoll(id)
@@ -169,7 +189,7 @@ function ActivityCard() {
             <i className={`fa-solid ${r.success ? 'fa-check text-emerald-500' : 'fa-xmark text-red-500'} text-[10px]`} />
             <span className="text-slate-500">{r.target_city || r.target_player}{r.source ? ` · ${r.source}` : ''}</span>
             {!r.success && r.error && <span className="text-red-400 truncate max-w-[220px]">{r.error}</span>}
-            <span className="text-slate-400 ml-auto">{new Date(r.ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            <span className="text-slate-400 ml-auto whitespace-nowrap">{whenLabel(r.ts)}</span>
           </div>
         ))}
       </div>
@@ -201,17 +221,21 @@ function CombatSummary() {
 
   useEffect(() => {
     const load = () => {
-      fetch('/api/farm').then(r => r.json()).then(d => { if (Array.isArray(d)) setFarms(d) }).catch(() => {})
-      fetch('/api/espionage/attack-queue').then(r => r.json()).then(d => setPending(d?.pending ?? [])).catch(() => {})
-      fetch('/api/loot-log?limit=300').then(r => r.json()).then((d: any[]) => {
+      fetch('/api/farm').then(asJson).then(d => { if (Array.isArray(d)) setFarms(d) }).catch(() => {})
+      fetch('/api/espionage/attack-queue').then(asJson)
+        .then(d => { if (Array.isArray(d?.pending)) setPending(d.pending) }).catch(() => {})
+      fetch('/api/loot-log?limit=300').then(asJson).then((d: unknown) => {
         if (!Array.isArray(d)) return
         const cut = Date.now() / 1000 - 86400
-        setLoot24(d.filter(e => e.ts > cut).reduce((a, e) => a + e.wood + e.wine + e.marble + e.crystal + e.sulfur, 0))
+        const n = (v: unknown) => (typeof v === 'number' ? v : 0)
+        setLoot24(d.filter(e => e && e.ts > cut)
+                   .reduce((a, e) => a + n(e.wood) + n(e.wine) + n(e.marble) + n(e.crystal) + n(e.sulfur), 0))
       }).catch(() => {})
-      fetch('/api/movements').then(r => r.json()).then((m: any[]) => {
+      fetch('/api/movements').then(asJson).then((m: unknown) => {
         if (!Array.isArray(m)) return
-        const inc = m.filter(x => x.isHostile && x.direction === '->')
-        setIncoming({ count: inc.length, eta: inc.length ? Math.min(...inc.map(x => x.arrivalTime)) : null })
+        const inc = m.filter(x => x && x.isHostile && x.direction === '->')
+        const etas = inc.map(x => Number(x.arrivalTime)).filter(Number.isFinite)
+        setIncoming({ count: inc.length, eta: etas.length ? Math.min(...etas) : null })
       }).catch(() => {})
     }
     load()
@@ -221,7 +245,7 @@ function CombatSummary() {
 
   const enabled   = farms.filter(f => f.enabled)
   const attacking = enabled.filter(f => f.state === 'ATTACKING').length
-  const nextAtk   = pending.map(p => p.dispatchAfter).filter(d => d > now).sort((a, b) => a - b)[0]
+  const nextAtk   = pending.map(p => p?.dispatchAfter).filter(d => d > now).sort((a, b) => a - b)[0]
   if (enabled.length === 0 && pending.length === 0 && loot24 === 0 && incoming.count === 0) return null
 
   return (
@@ -259,11 +283,13 @@ function StatusStrip({ lastAlive, offlineAfterSecs, paused }: {
       fetch('/api/health').then(r => { if (!r.ok) throw new Error(); return r.json() })
         .then((d: { subsystems?: Record<string, { consecutiveFailures?: number; lastError?: string | null }> }) => {
           setApiDown(false)
-          setFailing(Object.entries(d.subsystems || {})
+          // no subsystems in the answer = we do not know, which is not "no errors"
+          if (!d?.subsystems || typeof d.subsystems !== 'object') { setFailing(null); return }
+          setFailing(Object.entries(d.subsystems)
             .filter(([, v]) => (v?.consecutiveFailures ?? 0) > 0)
             .map(([name, v]) => ({ name, error: String(v?.lastError ?? '') })))
         }).catch(() => setApiDown(true))
-      fetch('/api/farm').then(r => r.json()).then((d: any) => {
+      fetch('/api/farm').then(asJson).then((d: any) => {
         if (!Array.isArray(d)) return
         const head = d.filter(f => f.enabled && f.queue_pos).sort((a, b) => a.queue_pos - b.queue_pos)[0]
         setNext(head ? { name: head.target_city_name || String(head.target_city_id), state: head.state,
@@ -331,7 +357,7 @@ function ConstructionsCard({ empireData, queue }: { empireData: ApiData['empireD
   const t   = useT()
   const now = useLiveClock()
   const queues     = queue?.queues      || {}
-  const inProgress = queue?.inProgress  || {}
+  const inProgress = (queue?.inProgress && typeof queue.inProgress === 'object') ? queue.inProgress : {}
 
   // Active constructions — merges empire.json (isBusy flag) with queue inProgress (accurate ETA).
   // empire._constructionEnds is 0 when construction started after the last full empire cycle,
@@ -366,7 +392,7 @@ function ConstructionsCard({ empireData, queue }: { empireData: ApiData['empireD
     return result.sort((a, b) => a.timeLeft - b.timeLeft)
   }, [empireData, inProgress, now])
   const queuedCities = Object.entries(queues)
-    .filter(([city, items]) => items.length > 0 && !inProgress[city])
+    .filter(([city, items]) => Array.isArray(items) && items.length > 0 && !inProgress[city])
     .map(([city, items]) => ({ city, building: items[0].building, targetLevel: items[0].targetLevel, extra: items.length - 1 }))
 
   return (
@@ -426,7 +452,7 @@ export function HomePage({ data, thresholds, lastAlive, paused }: {
   const [costsData, setCostsData] = useState<BuildingCostsData | null>(null)
   // The queue: when the empire data really changed (not on every re-render of `data`).
   useEffect(() => {
-    fetch('/api/building-queue').then(r => r.json()).then(setQueue).catch(() => {})
+    fetch('/api/building-queue').then(asJson).then(d => { if (isQueue(d)) setQueue(d) }).catch(() => {})
   }, [data.lastUpdatedTs])
   // The cost table (every city × building × level) changes every 3 days — fetch it once.
   // It used to be re-fetched on every live update, i.e. on every heartbeat of the bot.
@@ -587,7 +613,7 @@ function ResourceMatrix({ data, queue, costsData }: {
     const out: Record<string, number[]> = {}
     for (const city of cityNames) {
       const res = [0, 0, 0, 0, 0]
-      const items = queue.queues?.[city] || []
+      const items = arr<{ building: string; targetLevel: number }>(queue.queues?.[city])
       const cityBldgs = data.empireData[city] || {}
       const cityCosts = costsData.cities?.[city] || {}
       for (const item of items) {
