@@ -11,6 +11,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
+import settings_registry
 from empire_utils import (
     LOGS_DIR, WORLD_SCAN_RADIUS, WORLD_SCAN_UPDATE_INTERVAL,
     SCAN_CHECKPOINT_PATH, lm, logger,
@@ -24,24 +25,27 @@ _FORCE_FLAG = os.path.join(LOGS_DIR, ".force_world_scan")
 
 # ── State helpers ─────────────────────────────────────────────────────────────
 
-def _world_scan_enabled():
-    settings_path = os.path.join(LOGS_DIR, "world_scan_settings.json")
+def _world_scan_settings_raw():
     try:
-        with open(settings_path) as f:
-            return json.load(f).get("enabled", True)
+        with open(os.path.join(LOGS_DIR, "world_scan_settings.json")) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return True
+        return {}
+
+
+def _world_scan_enabled():
+    # type, default and limits are declared once in settings_registry (P13.30)
+    return settings_registry.value("world_scan", "enabled",
+                                   _world_scan_settings_raw().get("enabled"))
 
 
 def _scan_radius():
     """Scan radius in island units. Editable from the dashboard (world_scan_settings.json
     "radius"); falls back to the WORLD_SCAN_RADIUS env default when unset or invalid."""
-    try:
-        with open(os.path.join(LOGS_DIR, "world_scan_settings.json")) as f:
-            r = int(json.load(f).get("radius"))
-        return max(1, min(60, r))
-    except Exception:
-        return WORLD_SCAN_RADIUS
+    return settings_registry.value("world_scan", "radius",
+                                   _world_scan_settings_raw().get("radius"),
+                                   default=WORLD_SCAN_RADIUS)
 
 
 def should_start_scan():

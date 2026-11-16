@@ -8,6 +8,7 @@ import random
 import time
 import uuid
 
+import settings_registry
 from empire_utils import LOGS_DIR, logger, active_elapsed, save_capture, atomic_write_json
 from espionage_parsers import (
     _parse_safehouse_page, _parse_active_spy_missions, _parse_arrival_countdown,
@@ -30,22 +31,20 @@ MISSION_WAREHOUSE = 5
 MISSION_GARRISON  = 6
 MISSION_MOVEMENTS = 7   # spy on troop/fleet movements (F4.b — enemy fleet return ETA)
 
-_DEFAULT_GARRISON_THRESHOLD_TOTAL = 50000
+# Declared once in settings_registry (shared with the dashboard) — P13.30.
+_ESPIONAGE_DEFAULTS = settings_registry.defaults("espionage")
+_DEFAULT_GARRISON_THRESHOLD_TOTAL = _ESPIONAGE_DEFAULTS["garrisonThresholdTotal"]
 
 # Terminal missions (FAILED/DONE/RECALLED) older than this are history — pruned on every
 # save so spy_missions.json never grows unbounded (it had reached 1261 entries / 1.1 MB,
 # re-parsed on every cycle). In-flight missions are kept regardless of age. Override via
 # espionage_settings.json `missionRetentionDays`.
-_DEFAULT_MISSION_RETENTION_DAYS = 30
+_DEFAULT_MISSION_RETENTION_DAYS = _ESPIONAGE_DEFAULTS["missionRetentionDays"]
 _TERMINAL_STATES = ("FAILED", "DONE", "RECALLED")
 
 
 def _load_espionage_settings():
-    try:
-        with open(ESPIONAGE_SETTINGS_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"garrisonThresholdTotal": _DEFAULT_GARRISON_THRESHOLD_TOTAL}
+    return settings_registry.load("espionage", ESPIONAGE_SETTINGS_PATH)
 
 
 def _check_garrison_threshold(resources, settings):
@@ -56,9 +55,9 @@ def _check_garrison_threshold(resources, settings):
     return total >= settings.get("garrisonThresholdTotal", _DEFAULT_GARRISON_THRESHOLD_TOTAL)
 
 
-_DEFAULT_MIN_LOOT_TOTAL = 50000
-_DEFAULT_IGNORE_EXPIRY_DAYS = 60   # a temporary ignore lifts after this long for re-evaluation
-_DEFAULT_IGNORE_PERMANENT_AFTER = 4  # strikes before an ignore becomes permanent
+_DEFAULT_MIN_LOOT_TOTAL = _ESPIONAGE_DEFAULTS["minLootTotal"]
+_DEFAULT_IGNORE_EXPIRY_DAYS = _ESPIONAGE_DEFAULTS["ignoreExpiryDays"]   # a temporary ignore lifts after this long for re-evaluation
+_DEFAULT_IGNORE_PERMANENT_AFTER = _ESPIONAGE_DEFAULTS["ignorePermanentAfter"]  # strikes before an ignore becomes permanent
 
 
 def _min_loot_total(settings):

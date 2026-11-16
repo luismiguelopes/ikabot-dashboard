@@ -442,13 +442,11 @@ def smart_sleep(last_full_cycle_time, next_full_jitter, session=None):
         # anti-detection delay). Without it, alerts only fire on the hourly cycle.
         if session and _in_scan_hours():
             try:
-                import json as _json
-                from empire_collector import ALERT_SETTINGS_PATH, refresh_movements
+                from empire_collector import _load_alert_settings, refresh_movements
                 from ikabot.helpers.pedirInfo import getIdsOfCities
                 check_min = 0
                 try:
-                    with open(ALERT_SETTINGS_PATH) as _f:
-                        check_min = int(_json.load(_f).get("checkMinutes", 0))
+                    check_min = int(_load_alert_settings().get("checkMinutes", 0))
                 except Exception:
                     check_min = 0
                 if check_min > 0:

@@ -669,16 +669,6 @@ def throttle_session(session):
 CONFIG_WARNINGS_PATH = os.path.join(LOGS_DIR, "config_warnings.json")
 
 _CONFIG_SCHEMAS = {
-    "farm_settings.json": {
-        "army": dict, "fleet": dict, "spyAgents": int, "shipReserveEnabled": bool,
-        "reserveHorizonMin": int, "earlyRespyEnabled": bool, "earlyReportMaxAgeMins": int,
-        "spyFreshnessHours": int, "lootCapPerRaid": int, "fleetDemoteAfterSweeps": int,
-        "minShipFraction": float,
-    },
-    "espionage_settings.json": {"garrisonThresholdTotal": int, "minLootTotal": int,
-                                "processingEnabled": bool, "ignoreExpiryDays": int,
-                                "ignorePermanentAfter": int},
-    "world_scan_settings.json": {"enabled": bool, "radius": int},
     "telegram_settings.json": {"botToken": str, "chatId": str, "discordWebhook": str,
                                "telegramMinLevel": str, "discordMinLevel": str,
                                "telegramMuted": list, "discordMuted": list,
@@ -686,8 +676,8 @@ _CONFIG_SCHEMAS = {
 }
 
 
-# Files declared in the shared registry are validated from it (wine, wine buyer and
-# consolidation used to have no validation at all).
+# Files declared in the shared registry are validated from it: farm, espionage, world scan,
+# alerts, wine, wine buyer, consolidation and spy training.
 try:
     import settings_registry as _settings_registry
     for _name, _spec in _settings_registry.SPECS.items():

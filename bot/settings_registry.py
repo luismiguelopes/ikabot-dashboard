@@ -33,6 +33,22 @@ def _int(default, lo=None, hi=None):
     return {"type": int, "default": default, "min": lo, "max": hi}
 
 
+def _float(default, lo=None, hi=None):
+    return {"type": float, "default": default, "min": lo, "max": hi}
+
+
+def _units():
+    """A unit loadout {unitId: quantity}; only positive quantities are kept."""
+    return {"type": dict, "default": {}}
+
+
+def _env_scan_radius():
+    try:
+        return max(1, min(60, int(os.getenv("WORLD_SCAN_RADIUS", 10))))
+    except ValueError:
+        return 10
+
+
 def _text(default=""):
     return {"type": str, "default": default}
 
@@ -111,6 +127,57 @@ SPECS = {
             "maxCountsAgeMinutes": _int(30, 5, 240),
         },
     },
+    # ── P13.30 (rest, 2026-11-16): farm, espionage, world scan, alerts ──────────────────────
+    "farm": {
+        "file": "farm_settings.json",
+        "fields": {
+            "army":                   _units(),           # empty = every troop in the origin
+            "fleet":                  _units(),           # blockade loadout; empty = whole fleet
+            "spyAgents":              _int(1, 1, 99),
+            "shipReserveEnabled":     _bool(True),
+            "reserveHorizonMin":      _int(45, 0, 720),
+            "earlyRespyEnabled":      _bool(True),
+            "earlyReportMaxAgeMins":  _int(120, 10),      # a fleet target's early report is stale after this
+            "spyFreshnessHours":      _float(24, 0),      # 0 = never re-scout a safe target on age
+            "lootCapPerRaid":         _int(0, 0),         # 0 = learn it from the real returns
+            "fleetDemoteAfterSweeps": _int(3, 0),         # 0 = a fleet target stays one for ever
+            "minShipFraction":        _float(0.5, 0, 1),
+        },
+    },
+    "espionage": {
+        "file": "espionage_settings.json",
+        "fields": {
+            "processingEnabled":      _bool(True),
+            "garrisonThresholdTotal": _int(50000, 0),
+            "minLootTotal":           _int(50000, 0),
+            "ignoreExpiryDays":       _int(60, 1, 365),   # a temporary ignore lifts after this
+            "ignorePermanentAfter":   _int(4, 1, 20),     # strikes before an ignore is permanent
+            "missionRetentionDays":   _int(30, 1),
+        },
+    },
+    "world_scan": {
+        "file": "world_scan_settings.json",
+        "fields": {
+            "enabled": _bool(True),
+            "radius":  _int(_env_scan_radius, 1, 60),     # default: WORLD_SCAN_RADIUS env, else 10
+        },
+    },
+    "alerts": {
+        "file": "alert_settings.json",
+        "fields": {
+            "incomingEnabled": _bool(True),
+            "returnEnabled":   _bool(True),
+            "checkMinutes":    _int(0, 0, 120),           # 0 = only on the hourly cycle
+        },
+    },
+    "alert_thresholds": {                                 # dashboard only (wine / storage alerts)
+        "file": "alert_thresholds.json",
+        "fields": {
+            "wineWarning":    _int(8, 0),
+            "wineCritical":   _int(2, 0),
+            "storageWarning": _int(95, 0),
+        },
+    },
 }
 
 
@@ -118,9 +185,25 @@ def path_of(name):
     return os.path.join(LOGS_DIR, SPECS[name]["file"])
 
 
+def _default(field):
+    d = field["default"]
+    if callable(d):
+        return d()
+    return list(d) if isinstance(d, list) else dict(d) if isinstance(d, dict) else d
+
+
 def defaults(name):
-    return {k: (list(f["default"]) if f["type"] is list else f["default"])
-            for k, f in SPECS[name]["fields"].items()}
+    return {k: _default(f) for k, f in SPECS[name]["fields"].items()}
+
+
+def value(name, key, raw, default=None):
+    """One raw stored value read as its declared field (type and limits); the field's default
+    — or `default` when given — if it cannot be read."""
+    field = SPECS[name]["fields"][key]
+    v = _coerce(field, raw) if raw is not None else None
+    if v is not None:
+        return v
+    return _default(field) if default is None else default
 
 
 def schema(name):
@@ -136,15 +219,23 @@ def _coerce(field, value):
             if isinstance(value, str):
                 return value.strip().lower() in ("1", "true", "yes", "on")
             return bool(value)
-        if kind is int:
+        if kind is int or kind is float:
             if isinstance(value, bool):
                 return None
-            v = int(value)
+            v = kind(value)
+            if v != v:                       # NaN
+                return None
             if field.get("min") is not None:
                 v = max(field["min"], v)
             if field.get("max") is not None:
                 v = min(field["max"], v)
             return v
+        if kind is dict:
+            if value is None:
+                return {}
+            if not isinstance(value, dict):
+                return None
+            return {str(k): int(n) for k, n in value.items() if int(n) > 0}
         if kind is list:
             if value is None:
                 return []

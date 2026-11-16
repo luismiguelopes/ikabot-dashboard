@@ -934,3 +934,40 @@ def test_add_many_rejects_a_body_without_items(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     assert c.post("/api/building-queue/add-many", json={}).status_code == 400
     assert c.post("/api/building-queue/add-many", json={"items": []}).status_code == 400
+
+
+# ── P13.30 (rest): farm / espionage / world scan / alerts go through the shared registry ──
+
+def test_farm_settings_api_stores_the_three_settings_that_had_no_way_in(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "FARM_SETTINGS_PATH", str(tmp_path / "farm_settings.json"))
+    d = c.get("/api/farm/army").get_json()
+    assert (d["spyFreshnessHours"], d["earlyReportMaxAgeMins"], d["lootCapPerRaidManual"]) == (24, 120, 0)
+    c.post("/api/farm/army", json={"army": {"303": 200}, "spyAgents": 4})
+    r = c.post("/api/farm/army", json={"lootCapPerRaid": 250000, "spyFreshnessHours": 12,
+                                       "earlyReportMaxAgeMins": 3}).get_json()
+    assert r["settings"]["lootCapPerRaid"] == 250000
+    assert r["settings"]["earlyReportMaxAgeMins"] == 10          # floor
+    d = c.get("/api/farm/army").get_json()
+    assert d["lootCapPerRaid"] == 250000 and d["lootCapPerRaidManual"] == 250000
+    assert d["spyFreshnessHours"] == 12 and d["army"] == {"303": 200} and d["spyAgents"] == 4
+
+
+def test_alert_settings_save_keeps_what_is_not_sent(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "ALERT_SETTINGS_PATH", str(tmp_path / "alert_settings.json"))
+    c.post("/api/alert-settings", json={"returnEnabled": False, "checkMinutes": 30})
+    r = c.post("/api/alert-settings", json={"checkMinutes": 500}).get_json()
+    assert r["status"] == "ok"
+    assert r["settings"] == {"incomingEnabled": True, "returnEnabled": False, "checkMinutes": 120}
+    assert c.get("/api/alert-settings").get_json() == r["settings"]
+
+
+def test_espionage_settings_junk_is_ignored_not_a_500(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    c.post("/api/espionage/settings", json={"minLootTotal": 12000})
+    r = c.post("/api/espionage/settings", json={"minLootTotal": "abc", "garrisonThresholdTotal": -5})
+    assert r.status_code == 200
+    s = r.get_json()["settings"]
+    assert s["minLootTotal"] == 12000 and s["garrisonThresholdTotal"] == 0
+    assert s["ignoreExpiryDays"] == 60 and s["processingEnabled"] is True

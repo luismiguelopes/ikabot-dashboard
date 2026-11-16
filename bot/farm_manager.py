@@ -24,6 +24,7 @@ import os
 import random
 import time
 
+import settings_registry
 from empire_utils import LOGS_DIR, logger
 
 # P7.1: last-resort backstop, NOT the primary timeout. A live/executing mission is owned by
@@ -72,7 +73,7 @@ _EARLY_RESPY_LEAD = 5 * 60        # spy this long before troops dock, so the rep
 # A fleet target now earns its way back: this many CONSECUTIVE complete live sweeps showing no
 # ship in port and no fleet due back clear the flag. Any sighting or empty return resets the
 # count. `fleetDemoteAfterSweeps` in farm settings overrides; 0 keeps the old ratchet.
-_FLEET_DEMOTE_AFTER_SWEEPS = 3
+_FLEET_DEMOTE_AFTER_SWEEPS = settings_registry.defaults("farm")["fleetDemoteAfterSweeps"]
 _MAX_CONCURRENT_FARM = 2
 _PARALLEL_SHIP_FLOOR = 50
 _PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor / cap just blocked
@@ -82,12 +83,14 @@ FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
 
 
+# Declared once in settings_registry (shared with the dashboard) — P13.30: type, default and
+# limits of every farm setting live there. The readers below keep their own guards only
+# because tests hand them partial dicts.
+_FARM_DEFAULTS = settings_registry.defaults("farm")
+
+
 def _load_farm_settings():
-    try:
-        with open(FARM_SETTINGS_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return settings_registry.load("farm", FARM_SETTINGS_PATH)
 
 
 def get_farm_army():
@@ -110,9 +113,9 @@ _MIN_ARMY_FRACTION = 0.5
 def get_farm_spy_agents():
     """How many spies each farm re-scout sends (from farm settings, default 1)."""
     try:
-        return max(1, int(_load_farm_settings().get("spyAgents", 1)))
+        return max(1, int(_load_farm_settings().get("spyAgents", _FARM_DEFAULTS["spyAgents"])))
     except (ValueError, TypeError):
-        return 1
+        return _FARM_DEFAULTS["spyAgents"]
 
 
 def get_farm_fleet():
@@ -129,7 +132,7 @@ def get_farm_fleet():
 # A raid sized for N trade ships that leaves with a handful sends the whole army on a
 # round trip of hours for a sliver of the loot. Below this fraction of the ships the wave
 # was sized for, wait for the fleet instead (P13.8). `minShipFraction` in farm settings.
-_MIN_SHIP_FRACTION = 0.5
+_MIN_SHIP_FRACTION = _FARM_DEFAULTS["minShipFraction"]
 
 
 def _min_ship_fraction():
@@ -161,7 +164,7 @@ def _fleet_demote_after():
 def early_respy_enabled():
     """Pipelined re-spy: scout while the troops return so a re-spy round doesn't pay the
     spy round-trip after they dock. On by default; kill switch in farm settings."""
-    return bool(_load_farm_settings().get("earlyRespyEnabled", True))
+    return bool(_load_farm_settings().get("earlyRespyEnabled", _FARM_DEFAULTS["earlyRespyEnabled"]))
 
 
 def _early_report_max_age_secs():
@@ -171,9 +174,10 @@ def _early_report_max_age_secs():
     warships are long back — and sending troops on it is a blind raid. Default 2h, override
     via farm settings `earlyReportMaxAgeMins`."""
     try:
-        return max(600, int(_load_farm_settings().get("earlyReportMaxAgeMins", 120)) * 60)
+        return max(600, int(_load_farm_settings().get(
+            "earlyReportMaxAgeMins", _FARM_DEFAULTS["earlyReportMaxAgeMins"])) * 60)
     except Exception:
-        return 7200
+        return _FARM_DEFAULTS["earlyReportMaxAgeMins"] * 60
 
 
 def _spy_freshness_secs():
@@ -186,9 +190,10 @@ def _spy_freshness_secs():
     saves a wasted wave after downtime. 0 disables it. Default 24h, override `spyFreshnessHours`
     in farm settings."""
     try:
-        hours = float(_load_farm_settings().get("spyFreshnessHours", 24))
+        hours = float(_load_farm_settings().get("spyFreshnessHours",
+                                                _FARM_DEFAULTS["spyFreshnessHours"]))
     except (ValueError, TypeError):
-        hours = 24
+        hours = _FARM_DEFAULTS["spyFreshnessHours"]
     return int(hours * 3600) if hours > 0 else 0
 
 
@@ -559,7 +564,7 @@ def _estimated_warehouse(t):
 # reserve of trade ships free for any imminent farm raid. This is the bulletproof part:
 # regardless of cycle ordering, logistics can never take the ships the farm is about to
 # need.
-FARM_RESERVE_HORIZON_MIN = 45    # reserve ships for raids becoming due within this window
+FARM_RESERVE_HORIZON_MIN = settings_registry.defaults("farm")["reserveHorizonMin"]   # reserve ships for raids becoming due within this window
 _MIN_RESERVE_PER_TARGET  = 1
 
 
@@ -570,7 +575,7 @@ def _reserve_settings():
         horizon = max(0, int(s.get("reserveHorizonMin", FARM_RESERVE_HORIZON_MIN)))
     except (ValueError, TypeError):
         horizon = FARM_RESERVE_HORIZON_MIN
-    return bool(s.get("shipReserveEnabled", True)), horizon
+    return bool(s.get("shipReserveEnabled", _FARM_DEFAULTS["shipReserveEnabled"])), horizon
 
 
 def _pending_plunder_transporters(now, horizon_secs):

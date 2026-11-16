@@ -1196,7 +1196,7 @@ Legenda de confiança: **[C]** confirmado no código · **[D]** confirmado tamb�
       de A, com os testes como rede.
 - [x] **P13.29 `total_loot` é fictício** **[D]** ✅ 2026-11-15 (`farm_list`/`farm_get` calculam `total_loot` e `loot_returns` a partir do `loot_log` — por id, e por nome+jogador exactos nas linhas antigas sem id; a coluna deixou de ser escrita) — soma o armazém espiado, só no caminho SPYING
       (Tróia 3: 8,3M em 5 raids com tecto ~207k). Derivar do `loot_log` por `cityId`.
-- [~] **P13.30 Definições duplicadas bot ↔ Flask** **[C]** *registo feito 2026-11-15* (`bot/settings_registry.py`, montado nos dois containers: consolidação, vinho, compra de vinho e treino de espiões declarados uma vez; gravar passou a fundir — o que o formulário não envia mantém-se; os quatro ficheiros entram na validação. **Falta:** passar farm/espionagem/world scan/fila/alertas para o registo e dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap`) — ~10 pares GET/POST copiados, com os
+- [~] **P13.30 Definições duplicadas bot ↔ Flask** **[C]** *lado do bot e API fechados 2026-11-16 (K.8-3): farm, espionagem, world scan, alertas e limiares no registo; falta só a UI* — *registo feito 2026-11-15* (`bot/settings_registry.py`, montado nos dois containers: consolidação, vinho, compra de vinho e treino de espiões declarados uma vez; gravar passou a fundir — o que o formulário não envia mantém-se; os quatro ficheiros entram na validação. **Falta:** passar farm/espionagem/world scan/fila/alertas para o registo e dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap`) — ~10 pares GET/POST copiados, com os
       defaults repetidos no bot. Já divergiram: guardar a consolidação pela UI apaga
       `skipResources`/`respectDestCap`; `lootCapPerRaid`, `spyFreshnessHours` e
       `earlyReportMaxAgeMins` não têm UI; `lootCapPerRaid` nem está no schema (dá aviso falso de
@@ -1705,7 +1705,7 @@ Visto e deixado (anotar, não é erro):
 | Item | Nota |
 |---|---|
 | ~~P13.52~~ | ✅ 16/11 |
-| P13.30 (resto) | Passar farm, espionagem, world scan, fila e alertas para o `settings_registry`; dar UI a `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap` |
+| P13.30 (resto) | ~~Passar farm, espionagem, world scan e alertas para o `settings_registry`~~ ✅ 16/11 (K.8-3). **Falta (Opus):** UI para `lootCapPerRaid`, `spyFreshnessHours`, `earlyReportMaxAgeMins`, `skipResources`, `respectDestCap`; `queue_settings.json` e `watchlist_settings.json` ainda fora do registo |
 | ~~P13.53~~ | ✅ 16/11 |
 | P13.42 | Partir `InactivosTab` e `DispatchPanel`; `types/farm.ts` único; hooks de dados partilhados |
 | P13.60 | ESLint com `react-hooks/exhaustive-deps` — **só relatar** os avisos primeiro; corrigir dependências de efeitos muda comportamento, fazer um a um |
@@ -1801,4 +1801,32 @@ passa campos nomeados). +4 testes.
   de navios de combate (o farm salta o alvo enquanto `maxEnemyShips` for 0). A classificação
   tem de vir do backend (`_garrison_view`), não do browser.
 - Definições do farm: avisar quando `fleet` está vazio ("o bloqueio leva a frota inteira").
+
+**3. P13.30, lado do bot** ✅ `settings_registry` declara agora também `farm`, `espionage`,
+`world_scan`, `alerts` e `alert_thresholds` (tipos novos: número decimal e carga de unidades;
+default do raio vem do env `WORLD_SCAN_RADIUS`). Os leitores do bot (`farm_manager`,
+`espionage_manager`, `scan_collector`, `empire_collector`, a vigia de ataques do `smart_sleep`)
+lêem pelo registo; os esquemas de validação saem dele (o `missionRetentionDays`, lido há muito
+mas fora do esquema, deixou de dar "chave desconhecida"). `tests/test_settings_registry.py`
+(10 testes) foi escrito **contra o código antigo** e fixa que cada leitor devolve o mesmo com
+ficheiro ausente, válido, com lixo e fora dos limites. Única diferença: `fleet`/`army` que não
+seja um objecto dava excepção, agora dá carga vazia.
+No Flask os endpoints destas definições usam o mesmo registo (sem dicionários de defaults no
+`app.py`); as respostas mantêm a forma. Mudou para melhor: `POST /api/alert-settings` e
+`/api/alert-thresholds` passaram a **fundir** (um save sem uma chave repunha o default) e um
+valor ilegível na espionagem é ignorado em vez de dar 500.
+
+**Para o Opus (UI do P13.30) — o API já aceita tudo, falta só o formulário:**
+- `GET /api/farm/army` devolve todas as definições do farm: `spyFreshnessHours` (horas, decimal,
+  0 = desligado), `earlyReportMaxAgeMins` (mín. 10), `minShipFraction` (0–1),
+  `fleetDemoteAfterSweeps` (0 = nunca despromove) e `lootCapPerRaidManual` (0 = aprender).
+  ⚠️ `lootCapPerRaid` no GET continua a ser o tecto **efectivo** (manual ou aprendido) — o
+  campo a editar é `lootCapPerRaidManual`, e grava-se enviando `lootCapPerRaid` no POST.
+- `POST /api/farm/army` devolve `{settings}` → serve o `useSettings('/api/farm/army')`; o
+  `FarmSettings.tsx` ainda usa `fetch` próprio.
+- `skipResources` / `respectDestCap` (consolidação): já estavam no registo, continuam sem UI.
+- `missionRetentionDays` (espionagem) também é aceite pelo POST e não tem campo.
+- Por passar ao registo: `queue_settings.json` (horas activas + buffer de recursos — lido no
+  `smart_sleep`/fila, deixei para não misturar com a janela horária única) e
+  `watchlist_settings.json`.
 

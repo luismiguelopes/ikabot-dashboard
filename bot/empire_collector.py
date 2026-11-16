@@ -14,6 +14,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
+import settings_registry
 from empire_utils import (LOGS_DIR, EMPIRE_SCAN_STATUS_PATH, lm, logger,
                           with_retry, save_capture)
 from empire_utils import atomic_write_json
@@ -25,18 +26,12 @@ from ikabot.config import actionRequest
 
 ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
 _ATTACK_ALERTS_PATH = os.path.join(LOGS_DIR, "attack_alerts.json")
-_DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
+# Declared once in settings_registry (shared with the dashboard) — P13.30.
+_DEFAULT_ALERT_SETTINGS = settings_registry.defaults("alerts")
 
 
 def _load_alert_settings():
-    try:
-        with open(ALERT_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_ALERT_SETTINGS.items():
-            s.setdefault(k, v)
-        return s
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(_DEFAULT_ALERT_SETTINGS)
+    return settings_registry.load("alerts", ALERT_SETTINGS_PATH)
 
 
 def _target_coords(city_name, island_id=""):

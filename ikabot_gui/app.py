@@ -70,13 +70,8 @@ MILITARY_JSON_PATH         = os.path.join(LOGS_DIR, "military.json")
 WORLD_SCAN_SETTINGS_PATH     = os.path.join(LOGS_DIR, "world_scan_settings.json")
 FORCE_IMPORT_REPORTS_FLAG    = os.path.join(LOGS_DIR, ".force_import_reports")
 
-_DEFAULT_ESPIONAGE_SETTINGS = {
-    "garrisonThresholdTotal": 50000,
-    "minLootTotal": 50000,
-    "processingEnabled": True,
-    "ignoreExpiryDays": 60,        # a temporary ignore lifts after this long for re-evaluation
-    "ignorePermanentAfter": 4,     # strikes before an ignore becomes permanent
-}
+# Farm, espionage, world scan and alert settings are declared in settings_registry (P13.30):
+# no default dicts here.
 
 
 def _atomic_write_json(path, data, **dump_kwargs):
@@ -582,12 +577,7 @@ def api_world_scan_mark():
     if _db:
         try:
             if status == "ignorar":
-                esp = dict(_DEFAULT_ESPIONAGE_SETTINGS)
-                try:
-                    with open(ESPIONAGE_SETTINGS_PATH) as f:
-                        esp.update(json.load(f))
-                except (FileNotFoundError, json.JSONDecodeError):
-                    pass
+                esp = settings_registry.load("espionage", ESPIONAGE_SETTINGS_PATH)
                 res = _db.escalate_ignore(
                     mark_key, player_id, island_x, island_y, note or "Ignorado manualmente",
                     int(esp.get("ignoreExpiryDays", 60)),
@@ -1024,25 +1014,11 @@ WORLD_SCAN_RADIUS_MIN, WORLD_SCAN_RADIUS_MAX = 1, 60
 
 
 def _world_scan_default_radius():
-    try:
-        return max(WORLD_SCAN_RADIUS_MIN, min(WORLD_SCAN_RADIUS_MAX,
-                                              int(os.getenv("WORLD_SCAN_RADIUS", 10))))
-    except ValueError:
-        return 10
+    return settings_registry.defaults("world_scan")["radius"]
 
 
 def _read_world_scan_settings():
-    try:
-        with open(WORLD_SCAN_SETTINGS_PATH) as f:
-            s = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        s = {}
-    s.setdefault("enabled", True)
-    try:
-        s["radius"] = max(WORLD_SCAN_RADIUS_MIN, min(WORLD_SCAN_RADIUS_MAX, int(s["radius"])))
-    except (KeyError, TypeError, ValueError):
-        s["radius"] = _world_scan_default_radius()
-    return s
+    return settings_registry.load("world_scan", WORLD_SCAN_SETTINGS_PATH)
 
 
 @app.route("/api/world-scan/settings")
@@ -1055,9 +1031,9 @@ def api_world_scan_settings_post():
     """Partial update: only the keys present in the body change, so toggling `enabled`
     never resets the radius and vice-versa."""
     body = request.get_json(silent=True) or {}
-    settings = _read_world_scan_settings()
+    changes = {}
     if "enabled" in body:
-        settings["enabled"] = bool(body["enabled"])
+        changes["enabled"] = bool(body["enabled"])
     if "radius" in body:
         try:
             radius = int(body["radius"])
@@ -1066,47 +1042,21 @@ def api_world_scan_settings_post():
         if not WORLD_SCAN_RADIUS_MIN <= radius <= WORLD_SCAN_RADIUS_MAX:
             return jsonify({"error": f"radius must be between {WORLD_SCAN_RADIUS_MIN} "
                                      f"and {WORLD_SCAN_RADIUS_MAX}"}), 400
-        settings["radius"] = radius
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(WORLD_SCAN_SETTINGS_PATH, settings, indent=2)
+        changes["radius"] = radius
+    settings = settings_registry.update("world_scan", changes, WORLD_SCAN_SETTINGS_PATH)
     return jsonify({"ok": True, **settings})
 
 
 @app.route("/api/espionage/settings")
 def api_espionage_settings_get():
-    try:
-        with open(ESPIONAGE_SETTINGS_PATH) as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = dict(_DEFAULT_ESPIONAGE_SETTINGS)
-    data.setdefault("processingEnabled", True)
-    data.setdefault("minLootTotal", 50000)
-    return jsonify(data)
+    return jsonify(settings_registry.load("espionage", ESPIONAGE_SETTINGS_PATH))
 
 
 @app.route("/api/espionage/settings", methods=["POST"])
 def api_espionage_settings_post():
     body = request.get_json(silent=True) or {}
-    try:
-        with open(ESPIONAGE_SETTINGS_PATH) as f:
-            existing = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        existing = dict(_DEFAULT_ESPIONAGE_SETTINGS)
-    if "garrisonThresholdTotal" in body:
-        existing["garrisonThresholdTotal"] = max(0, int(body["garrisonThresholdTotal"]))
-    if "minLootTotal" in body:
-        existing["minLootTotal"] = max(0, int(body["minLootTotal"]))
-    if "processingEnabled" in body:
-        existing["processingEnabled"] = bool(body["processingEnabled"])
-    # These two were editable in Settings and showed "saved", but were never stored.
-    for key, lo, hi in (("ignoreExpiryDays", 1, 365), ("ignorePermanentAfter", 1, 20)):
-        if key in body:
-            try:
-                existing[key] = max(lo, min(hi, int(body[key])))
-            except (TypeError, ValueError):
-                pass
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(ESPIONAGE_SETTINGS_PATH, existing, indent=2)
+    # Merge: only the keys sent change; limits live in the registry.
+    existing = settings_registry.update("espionage", body, ESPIONAGE_SETTINGS_PATH)
     return jsonify({"ok": True, "settings": existing})
 
 
@@ -1330,11 +1280,7 @@ FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 
 
 def _load_farm_settings():
-    try:
-        with open(FARM_SETTINGS_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return settings_registry.load("farm", FARM_SETTINGS_PATH)
 
 
 def _loot_cap_per_raid(settings):
@@ -1354,14 +1300,11 @@ def _loot_cap_per_raid(settings):
 def api_farm_army_get():
     s = _load_farm_settings()
     return jsonify({
-        "army": s.get("army", {}),
-        "fleet": s.get("fleet", {}),
-        "spyAgents": int(s.get("spyAgents", 1)),
-        "shipReserveEnabled": bool(s.get("shipReserveEnabled", True)),
-        "reserveHorizonMin": int(s.get("reserveHorizonMin", 45)),
-        "earlyRespyEnabled": bool(s.get("earlyRespyEnabled", True)),
-        # what one wave can carry home (manual setting, else learned from real returns)
+        **{k: s[k] for k in settings_registry.defaults("farm")},
+        # what one wave can carry home (manual setting, else learned from real returns);
+        # the stored manual value (0 = learn) is lootCapPerRaidManual
         "lootCapPerRaid": _loot_cap_per_raid(s),
+        "lootCapPerRaidManual": s["lootCapPerRaid"],
     })
 
 
@@ -1371,36 +1314,19 @@ def api_farm_army_set():
     # Merge so the ship-reserve keys (and any future settings) survive an army save. Each
     # key is only touched when it is SENT: every save used to replace `army` (and reset
     # spyAgents to 1 when absent), so toggling the ship reserve stored a half-typed loadout.
-    s = _load_farm_settings()
-    if "army" in data:
-        try:
-            s["army"] = {str(k): int(v) for k, v in (data.get("army") or {}).items() if int(v) > 0}
-        except (ValueError, TypeError, AttributeError):
-            return jsonify({"error": "loadout inválida"}), 400
-    if "spyAgents" in data:
-        try:
-            s["spyAgents"] = max(1, min(99, int(data.get("spyAgents"))))
-        except (ValueError, TypeError):
-            pass
-    if "fleet" in data:
-        try:
-            s["fleet"] = {str(k): int(v) for k, v in (data.get("fleet") or {}).items() if int(v) > 0}
-        except (ValueError, TypeError):
-            return jsonify({"error": "loadout de frota inválida"}), 400
-    if "shipReserveEnabled" in data:
-        s["shipReserveEnabled"] = bool(data.get("shipReserveEnabled"))
-    if "reserveHorizonMin" in data:
-        try:
-            s["reserveHorizonMin"] = max(0, min(720, int(data.get("reserveHorizonMin"))))
-        except (ValueError, TypeError):
-            pass
-    if "earlyRespyEnabled" in data:
-        s["earlyRespyEnabled"] = bool(data.get("earlyRespyEnabled"))
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(FARM_SETTINGS_PATH, s, indent=2)
-    return jsonify({"ok": True, **{k: s[k] for k in
-                    ("army", "fleet", "spyAgents", "shipReserveEnabled", "reserveHorizonMin",
-                     "earlyRespyEnabled") if k in s}})
+    # A loadout that cannot be read is an error for the user to see (the registry would
+    # silently keep the stored one); everything else — types, limits — is the registry's.
+    for key, msg in (("army", "loadout inválida"), ("fleet", "loadout de frota inválida")):
+        if key in data:
+            try:
+                {str(k): int(v) for k, v in (data.get(key) or {}).items()}
+            except (ValueError, TypeError, AttributeError):
+                return jsonify({"error": msg}), 400
+    s = settings_registry.update("farm", data, FARM_SETTINGS_PATH)
+    return jsonify({"ok": True, "settings": {k: s[k] for k in settings_registry.defaults("farm")},
+                    **{k: s[k] for k in
+                       ("army", "fleet", "spyAgents", "shipReserveEnabled", "reserveHorizonMin",
+                        "earlyRespyEnabled")}})
 
 
 # Naval-unit keywords (accent-stripped, lowercase) — a MIRROR of
@@ -1618,7 +1544,6 @@ def api_farm_remove():
 
 
 ALERT_SETTINGS_PATH = os.path.join(LOGS_DIR, "alert_settings.json")
-_DEFAULT_ALERT_SETTINGS = {"incomingEnabled": True, "returnEnabled": True, "checkMinutes": 0}
 
 # P6.7: real/estimated travel ratio observed by the farm's journey fetches — the ETA
 # preview in the UI multiplies its estimate (same fixed model as the bot) by this.
@@ -1724,57 +1649,38 @@ def api_alerts_extra():
 # P6.4: UI alert thresholds (wine/storage) live on the server, not per-browser localStorage,
 # so every device sees the same configuration.
 ALERT_THRESHOLDS_PATH = os.path.join(LOGS_DIR, "alert_thresholds.json")
-_DEFAULT_ALERT_THRESHOLDS = {"wineWarning": 8, "wineCritical": 2, "storageWarning": 95}
 
 
 @app.route("/api/alert-thresholds")
 def api_alert_thresholds_get():
+    # configured=False lets the frontend migrate its localStorage values on first load
     try:
         with open(ALERT_THRESHOLDS_PATH) as f:
-            data = json.load(f)
-        merged = {k: data.get(k, v) for k, v in _DEFAULT_ALERT_THRESHOLDS.items()}
-        return jsonify({"configured": True, **merged})
+            configured = isinstance(json.load(f), dict)
     except (FileNotFoundError, json.JSONDecodeError):
-        # configured=False lets the frontend migrate its localStorage values on first load
-        return jsonify({"configured": False, **_DEFAULT_ALERT_THRESHOLDS})
+        configured = False
+    s = settings_registry.load("alert_thresholds", ALERT_THRESHOLDS_PATH)
+    return jsonify({"configured": configured,
+                    **{k: s[k] for k in settings_registry.defaults("alert_thresholds")}})
 
 
 @app.route("/api/alert-thresholds", methods=["POST"])
 def api_alert_thresholds_post():
     body = request.get_json(silent=True) or {}
-    data = {}
-    for k, v in _DEFAULT_ALERT_THRESHOLDS.items():
-        try:
-            data[k] = max(0, int(body.get(k, v)))
-        except (TypeError, ValueError):
-            data[k] = v
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(ALERT_THRESHOLDS_PATH, data, indent=2)
-    return jsonify({"ok": True, **data})
+    s = settings_registry.update("alert_thresholds", body, ALERT_THRESHOLDS_PATH)
+    return jsonify({"ok": True, **{k: s[k] for k in settings_registry.defaults("alert_thresholds")}})
 
 
 @app.route("/api/alert-settings")
 def api_alert_settings_get():
-    try:
-        with open(ALERT_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_ALERT_SETTINGS.items():
-            s.setdefault(k, v)
-    except (FileNotFoundError, json.JSONDecodeError):
-        s = dict(_DEFAULT_ALERT_SETTINGS)
-    return jsonify(s)
+    return jsonify(settings_registry.load("alerts", ALERT_SETTINGS_PATH))
 
 
 @app.route("/api/alert-settings", methods=["POST"])
 def api_alert_settings_post():
     data = request.get_json(silent=True) or {}
-    s = {
-        "incomingEnabled": bool(data.get("incomingEnabled", True)),
-        "returnEnabled":   bool(data.get("returnEnabled", True)),
-        "checkMinutes":    max(0, min(120, int(data.get("checkMinutes", 0)))),
-    }
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(ALERT_SETTINGS_PATH, s, indent=2)
+    # Merge (it used to rebuild the file: a save without a key reset it to its default).
+    s = settings_registry.update("alerts", data, ALERT_SETTINGS_PATH)
     return jsonify({"status": "ok", "settings": s})
 
 
