@@ -5,8 +5,17 @@ import { MATERIALS } from '../../constants'
 import { Card } from '../ui/Card'
 import { CardHeader } from '../ui/Card'
 import { NumInput } from './BuildingUpgradeCalc'
+import { useResourcePrices, goldValue, ResourcePricesInput } from './ResourcePrices'
 import { sawmillLevels, quarryLevels, residenceLevels, ISLAND_WORKER_BONUS } from '../../data/buildingData'
 import type { ApiData } from '../../types'
+
+// The palace / governor's residence, by the names the game uses (the cost table is keyed by the
+// game's own building names, in the game's language). They were fixed in Portuguese, and a city
+// where neither was found read as "already at the required level" (P13.54).
+const PALACE_NAMES = ['palácio', 'palacio', 'palace', 'palast', 'palais', 'palazzo']
+const GOVRES_NAMES = ['residência do governador', 'residencia del gobernador', "governor's residence",
+  'governors residence', 'statthalter', 'résidence du gouverneur', 'residenza del governatore']
+const isName = (list: string[], name: string) => list.some(n => name.toLowerCase().startsWith(n))
 
 function LevelSelect({ label, value, onChange, options }: {
   label: string
@@ -33,7 +42,13 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
   const requiredLevel = numCities
 
   const [resType,        setResType]        = useState('wood')
-  const [goldPrice,      setGoldPrice]      = useState(15)
+  const [prices, setPrice] = useResourcePrices()
+  // Founding the colony itself (P13.54): option B used to cost only the residence upgrades and
+  // to produce from hour 0. The gold to found a colony grows with the number of cities — it is
+  // shown in the game when you colonise; the wood is the building material taken along.
+  const [foundGold,  setFoundGold]  = useState(0)
+  const [foundWood,  setFoundWood]  = useState(1250)
+  const [setupHours, setSetupHours] = useState(48)
   const [upFrom,         setUpFrom]         = useState(1)
   const [upTo,           setUpTo]           = useState(2)
   const [newIslandLevel, setNewIslandLevel] = useState(10)
@@ -81,19 +96,21 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
   const upgradeCost = islandLevels
     .filter(r => r[0] > upFrom && r[0] <= upTo)
     .reduce((s, r) => s + r[1], 0)
-  const totalCostAGold = upgradeCost * goldPrice
-
-  const PALACE_NAME = 'Palácio'
-  const GOVRES_NAME = 'Residência do Governador'
+  const totalCostAGold = upgradeCost * prices[0]     // island buildings take wood donations
+  const resIdx = isWood ? 0 : 2
 
   const cityResidences = useMemo(() => {
     if (!costsData?.cities) return []
     return Object.entries(costsData.cities).map(([cityName, buildings]: [string, any]) => {
-      const isPalace = !!buildings[PALACE_NAME]
-      const bname    = isPalace ? PALACE_NAME : GOVRES_NAME
-      const bData    = buildings[bname]
-      const currentLevel = bData ? bData.currentLevel : requiredLevel
-      const needsUpgrade = currentLevel < requiredLevel
+      const names    = Object.keys(buildings || {})
+      const palace   = names.find(n => isName(PALACE_NAMES, n))
+      const govres   = names.find(n => isName(GOVRES_NAMES, n))
+      const isPalace = !!palace
+      const bname    = palace ?? govres ?? ''
+      const bData    = bname ? buildings[bname] : undefined
+      const unknown  = !bData                       // no data for this city: say so, never "ok"
+      const currentLevel = bData ? bData.currentLevel : 0
+      const needsUpgrade = !unknown && currentLevel < requiredLevel
       let upgradeCost5   = [0, 0, 0, 0, 0]
       if (needsUpgrade && bData) {
         for (let lv = currentLevel + 1; lv <= requiredLevel; lv++) {
@@ -108,12 +125,13 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
         }
       }
       return {
-        cityName, bname, isPalace, currentLevel, needsUpgrade,
+        cityName, bname, isPalace, currentLevel, needsUpgrade, unknown,
         upgradeCost5,
-        costGold: upgradeCost5.reduce((s, v) => s + v * goldPrice, 0),
+        costGold: goldValue(upgradeCost5, prices),
       }
     })
-  }, [costsData, requiredLevel, goldPrice])
+  }, [costsData, requiredLevel, prices])
+  const unknownCities = cityResidences.filter(c => c.unknown).length
 
   const newCityResCost5 = useMemo(() =>
     residenceLevels
@@ -121,22 +139,26 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
       .reduce((acc, r) => [acc[0]+r[1], acc[1]+r[2], acc[2]+r[3], acc[3]+r[4], acc[4]+r[5]] as [number,number,number,number,number], [0,0,0,0,0] as [number,number,number,number,number]),
     [requiredLevel]
   )
-  const newCityResGold = newCityResCost5.reduce((s, v) => s + v * goldPrice, 0)
+  const newCityResGold = goldValue(newCityResCost5, prices)
 
   const existingResCost5 = useMemo(() =>
     cityResidences.reduce((acc, c) => acc.map((v, i) => v + c.upgradeCost5[i]) as [number,number,number,number,number], [0,0,0,0,0] as [number,number,number,number,number]),
     [cityResidences]
   )
   const totalResCost5    = existingResCost5.map((v, i) => v + newCityResCost5[i])
-  const totalResCostGold = totalResCost5.reduce((s, v) => s + v * goldPrice, 0)
+  const totalResCostGold = goldValue(totalResCost5, prices)
 
   const newIslandData  = islandLevels.find(r => r[0] === newIslandLevel)
   const gainB          = newIslandData
     ? Math.round(newIslandData[2] * ISLAND_WORKER_BONUS * 10) / 10
     : 0
-  const totalCostBGold = totalResCostGold
-  const amortA = (totalCostAGold > 0 && totalGainA > 0) ? totalCostAGold / (totalGainA * goldPrice) : null
-  const amortB = (totalCostBGold > 0 && gainB       > 0) ? totalCostBGold / (gainB       * goldPrice) : null
+  const foundCostGold  = foundGold + foundWood * prices[0]
+  const totalCostBGold = totalResCostGold + foundCostGold
+  // cost and gain each at their own price (one shared price cancelled out); the colony only
+  // starts producing after it is founded and staffed, so its payback starts later
+  const resPrice = prices[resIdx]
+  const amortA = (totalCostAGold > 0 && totalGainA > 0 && resPrice > 0) ? totalCostAGold / (totalGainA * resPrice) : null
+  const amortB = (totalCostBGold > 0 && gainB > 0 && resPrice > 0) ? setupHours + totalCostBGold / (gainB * resPrice) : null
 
   const aWins      = amortA !== null && (amortB === null || amortA < amortB)
   const bWins      = amortB !== null && (amortA === null || amortB < amortA)
@@ -171,10 +193,7 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
             <span className="font-bold text-indigo-700">{numCities}</span>
             <span className="ml-2 text-xs text-slate-400">({t('required_level_lbl', { n: String(requiredLevel) })})</span>
           </div>
-          <div className="w-44">
-            <NumInput label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
-              value={goldPrice} onChange={setGoldPrice} min={1} />
-          </div>
+          <ResourcePricesInput prices={prices} onChange={setPrice} />
         </div>
       </Card>
 
@@ -252,13 +271,15 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
                 : (
                   <div className="rounded-lg border border-slate-200 overflow-hidden text-xs divide-y divide-slate-100">
                     {cityResidences.map(c => (
-                      <div key={c.cityName} className={`flex items-center justify-between px-3 py-1.5 ${c.needsUpgrade ? 'bg-red-50' : 'bg-emerald-50'}`}>
+                      <div key={c.cityName} className={`flex items-center justify-between px-3 py-1.5 ${c.unknown ? 'bg-amber-50' : c.needsUpgrade ? 'bg-red-50' : 'bg-emerald-50'}`}>
                         <span className="font-medium text-slate-700 truncate mr-2">
                           {c.isPalace ? '🏛 ' : '🏠 '}{c.cityName}
                         </span>
                         <span className="flex items-center gap-2 shrink-0">
-                          <span className="text-slate-400">lv {c.currentLevel}</span>
-                          {c.needsUpgrade
+                          {c.unknown
+                            ? <span className="text-amber-700">{t('colony_res_unknown')}</span>
+                            : <span className="text-slate-400">lv {c.currentLevel}</span>}
+                          {c.unknown ? null : c.needsUpgrade
                             ? <span className="text-red-600 font-semibold">{fmt(c.costGold)} {t('gold_label')}</span>
                             : <i className="fa-solid fa-check-circle text-emerald-500" />
                           }
@@ -272,6 +293,11 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
                   </div>
                 )
               }
+              {!costsLoading && unknownCities > 0 && (
+                <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <i className="fa-solid fa-triangle-exclamation mr-1" />{t('colony_res_unknown_note', { n: String(unknownCities) })}
+                </p>
+              )}
               {!costsLoading && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm space-y-1 mt-2">
                   {MATERIALS.map((m, i) => totalResCost5[i] > 0 && (
@@ -285,6 +311,24 @@ export function ColonyROICalc({ data, islandPreset }: { data: ApiData | null; is
                   <div className="text-xs text-slate-400 italic pt-1">{t('auto_computed_label')}</div>
                 </div>
               )}
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-2">
+                <i className="fa-solid fa-flag text-indigo-500" />{t('colony_found_title')}
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                <NumInput label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('colony_found_gold')}</>}
+                  value={foundGold} onChange={v => setFoundGold(Math.max(0, v))} min={0} step={1000} />
+                <NumInput label={<><i className="fa-solid fa-tree text-green-500" /> {t('colony_found_wood')}</>}
+                  value={foundWood} onChange={v => setFoundWood(Math.max(0, v))} min={0} step={50} />
+                <NumInput label={<><i className="fa-solid fa-hourglass-half text-slate-400" /> {t('colony_setup_hours')}</>}
+                  value={setupHours} onChange={v => setSetupHours(Math.max(0, v))} min={0} />
+              </div>
+              {foundGold <= 0 && (
+                <p className="mt-2 text-xs text-amber-700"><i className="fa-solid fa-triangle-exclamation mr-1" />{t('colony_found_gold_missing')}</p>
+              )}
+              <p className="mt-1 text-[11px] text-slate-400">{t('colony_setup_hint')}</p>
             </div>
 
             <div>

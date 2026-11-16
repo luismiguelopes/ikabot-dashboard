@@ -83,9 +83,10 @@ export function calcUpgradeTime(
   available: number[],
   production: number[],
   gold: number,
-  goldPrice: number
+  prices: number | number[]
 ) {
-  const gp      = goldPrice || 15
+  // gold per unit of each resource; a single number is the same price for all five
+  const gp = (i: number) => (Array.isArray(prices) ? prices[i] : prices) || 15
   const missing = needed.map((n, i) => Math.max(0, n - (available[i] || 0)))
 
   // Each resource is short on its own: surplus wood does not pay for missing marble. (The
@@ -93,7 +94,7 @@ export function calcUpgradeTime(
   // "you have everything" above a table with red rows.)
   const totalMissing    = missing.reduce((s, m) => s + m, 0)
   const totalProduction = production.reduce((s, p) => s + (p || 0), 0)
-  const goldNeededAll   = totalMissing * gp
+  const goldNeededAll   = missing.reduce((s, m, i) => s + m * gp(i), 0)
   const canBuyAll       = gold >= goldNeededAll
 
   // Waiting time = the slowest resource (they accumulate in parallel).
@@ -102,17 +103,17 @@ export function calcUpgradeTime(
 
   // With gold: after waiting T hours, what is still short has to be bought. Find the
   // smallest T the gold can cover.
-  const toBuyAfter = (hours: number) =>
-    missing.reduce((s, m, i) => s + Math.max(0, m - (production[i] || 0) * hours), 0)
-  const canBuyUnits = gold > 0 ? gold / gp : 0
+  const goldToBuyAfter = (hours: number) =>
+    missing.reduce((s, m, i) => s + Math.max(0, m - (production[i] || 0) * hours) * gp(i), 0)
+  const budget = Math.max(0, gold)
   let timeWithGold = 0
   if (!canBuyAll) {
-    if (!isFinite(timeNoGold) && toBuyAfter(1e7) > canBuyUnits) timeWithGold = Infinity
+    if (!isFinite(timeNoGold) && goldToBuyAfter(1e7) > budget) timeWithGold = Infinity
     else {
       let lo = 0, hi = isFinite(timeNoGold) ? timeNoGold : 1e7
       for (let i = 0; i < 60; i++) {
         const mid = (lo + hi) / 2
-        if (toBuyAfter(mid) <= canBuyUnits) hi = mid; else lo = mid
+        if (goldToBuyAfter(mid) <= budget) hi = mid; else lo = mid
       }
       timeWithGold = hi
     }

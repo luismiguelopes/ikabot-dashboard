@@ -1261,7 +1261,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       `App.tsx` nunca limpam `error` após um sucesso: uma falha passageira (restart do Flask,
       ficheiro a meio — P13.14) deixa o ecrã de erro até recarregar a página. A barra de progresso
       do scan só aparece se a página for aberta a meio (linhas 130-137: closure sempre `running`).
-- [~] **P13.39 Dados enganadores** **[C]** *feito 2026-11-16, menos um ponto* (saque real por id da cidade nos alvos do farm; "a cada Nh" passou a "recuo após falha"; o alvo de frota mostra a evidência — navios vistos ou varrimentos limpos; a dica de navios do despacho respeita o tecto por vaga, vindo de `/api/farm/army`; "em campo" → "na cidade". **Falta:** o filtro/pontuação ainda usa `last_loot` espiado)
+- [x] **P13.39 Dados enganadores** **[C]** ✅ 2026-11-16 (filtro e ordenação dos alvos usam o saque real médio por regresso quando há regressos, senão o armazém espiado — já não o `last_loot` do farm; `get_loot_stats_by_city` agrupa pelo id da cidade (cidade renomeada = uma só, com o nome mais recente), só os regressos antigos sem id casam pelo nome; "raids" passou a "vagas enviadas" vs "regressos com saque". Antes: saque real por id da cidade nos alvos do farm; "a cada Nh" passou a "recuo após falha"; o alvo de frota mostra a evidência — navios vistos ou varrimentos limpos; a dica de navios do despacho respeita o tecto por vaga, vindo de `/api/farm/army`; "em campo" → "na cidade". o filtro/pontuação ainda usava `last_loot` espiado)
   - `reportedAt` mostrado como data do relatório e usado para escolher "o mais recente"; o selo
     "verificado há N min" herda o mesmo erro (P13.1).
   - `last_loot` (armazém espiado) tratado como rendimento real no filtro e na pontuação; o saque
@@ -1395,7 +1395,7 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
 **F.3 — Início, cidades, histórico, logs, calculadoras, shell** (`HomePage`, `CitiesPage`,
 `MovementsPage`, `AlertsPage`, `HistoryPage`, `LogsPage`, `calculadoras/*`, `ui/*`, `i18n.tsx`)
 
-- [~] **P13.54 As calculadoras dão respostas erradas com confiança** **[C]** *parte feita 2026-11-16* (`calcUpgradeTime`: falta por recurso, tempo = o recurso mais lento, ouro por bissecção; `ColonyROICalc`: o ganho multiplica pelas cidades **da ilha**, com campo próprio. **Falta:** a opção B ignorar o custo da colónia e creditar a produção desde a hora 0; o preço do ouro que se anula; "disponível" somado pelo império; nomes de edifícios fixos em português)
+- [x] **P13.54 As calculadoras dão respostas erradas com confiança** **[C]** ✅ 2026-11-16 (preço em ouro por recurso, partilhado pelas três calculadoras e guardado no browser — custo e ganho cada um ao seu preço, já não se anulam; colónia: custo de fundar (ouro, que o utilizador indica, com aviso se ficar a 0, + material) e horas até produzir somadas ao retorno; Palácio/Residência reconhecidos pelos nomes em várias línguas, cidade sem dados aparece "sem dados" em vez de "já está no nível"; melhoria de edifício compara com os recursos da cidade escolhida, com opção "império todo". Antes: `calcUpgradeTime`: falta por recurso, tempo = o recurso mais lento, ouro por bissecção; `ColonyROICalc`: o ganho multiplica pelas cidades **da ilha**, com campo próprio. faltava a opção B, o preço que se anula, o "disponível" e os nomes)
   - `utils.ts:90-99` (`calcUpgradeTime`) trata os recursos como intermutáveis: falta de mármore é
     anulada por excedente de madeira → "Tens tudo!" com linhas a vermelho por baixo. Usar a soma
     das faltas por recurso para o custo e o máximo de `falta/produção` para o tempo.
@@ -1679,7 +1679,7 @@ Visto e deixado (anotar, não é erro):
 - "Actividade do bot" no Início mostra só a hora; entradas de dias anteriores parecem fora de
   ordem → acrescentar o dia quando não é hoje (`HomePage.tsx`, `ActivityCard`). ✅ feito com o P13.59.
 - Linha do farm: "raids: 7" (vagas despachadas) vs "3 raids" (regressos com saque) — rótulos
-  parecidos para coisas diferentes. Juntar ao P13.39.
+  parecidos para coisas diferentes. Juntar ao P13.39. ✅ "vagas enviadas" / "regressos com saque".
 - Ícones `fa-brands` (Telegram/Discord) não aparecem nas Notificações.
 - ~~Cinco confirmações ainda usam o `confirm()` nativo~~ — feito 16/11 (`askConfirm`, P13.36).
 - Produção 0/h de vinho, cristal e enxofre no Início é real (confirmado pelo utilizador: as
@@ -1695,10 +1695,10 @@ Visto e deixado (anotar, não é erro):
 
 | Item | O que falta |
 |---|---|
-| P13.39 | Filtro e pontuação dos alvos ainda usam `last_loot` espiado em vez do saque real |
+| ~~P13.39~~ | ✅ 16/11 |
 | ~~P13.41~~ | ✅ 16/11 |
 | ~~P13.47~~ | ✅ 16/11 |
-| P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
+| ~~P13.54~~ | ✅ 16/11 |
 
 **B. Itens inteiros por fazer**
 

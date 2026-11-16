@@ -91,3 +91,19 @@ def test_loot_stats_by_city_sorted_by_total_desc(tmp_path):
     db_manager.log_loot({"ts": 1, "fromCity": "Pobre", "fromPlayer": "A", "resources": [1000, 0, 0, 0, 0], "returnKey": "a"})
     db_manager.log_loot({"ts": 2, "fromCity": "Rica", "fromPlayer": "B", "resources": [9000, 0, 0, 0, 0], "returnKey": "b"})
     assert [r["from_city"] for r in db_manager.get_loot_stats_by_city()] == ["Rica", "Pobre"]
+
+
+def test_loot_stats_by_city_matches_by_city_id(tmp_path):
+    """P13.39: a renamed city is still one city (latest name shown); two cities that share a
+    name and owner but not an id stay apart. Old rows without an id keep the name match."""
+    _setup(tmp_path)
+    db_manager.log_loot({"ts": 1, "fromCity": "Velha", "fromPlayer": "A", "fromCityId": "77", "resources": [1000, 0, 0, 0, 0], "returnKey": "a"})
+    db_manager.log_loot({"ts": 2, "fromCity": "Nova", "fromPlayer": "A", "fromCityId": "77", "resources": [2000, 0, 0, 0, 0], "returnKey": "b"})
+    db_manager.log_loot({"ts": 3, "fromCity": "Nova", "fromPlayer": "A", "fromCityId": "88", "resources": [500, 0, 0, 0, 0], "returnKey": "c"})
+    db_manager.log_loot({"ts": 4, "fromCity": "Antiga", "fromPlayer": "B", "resources": [300, 0, 0, 0, 0], "returnKey": "d"})
+    rows = db_manager.get_loot_stats_by_city()
+    by_id = {r["from_city_id"]: r for r in rows if r["from_city_id"]}
+    assert by_id["77"]["total"] == 3000 and by_id["77"]["raids"] == 2 and by_id["77"]["from_city"] == "Nova"
+    assert by_id["88"]["total"] == 500
+    old = [r for r in rows if not r["from_city_id"]]
+    assert [(r["from_player"], r["from_city"], r["total"]) for r in old] == [("B", "Antiga", 300)]

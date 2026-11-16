@@ -51,6 +51,28 @@ interface EnrichedPlayer extends WorldScanPlayer {
   priority: number
   cKey: string  // cityId (or fallback) — mission/dispatched lookup, unique per city
   pKey: string  // `${playerId}_${islandX}_${islandY}` — mark/ignore key (per player+island)
+  realLoot: LootStat | null      // what raids really brought home from this city
+  realPerRaid: number | null     // realLoot.total / realLoot.raids
+}
+
+const lootKey = (player?: string, city?: string) => `${(player || '').toLowerCase()}|${(city || '').toLowerCase()}`
+
+// One city's real loot from its id-matched row plus any older name-matched row.
+function mergeLoot(a?: LootStat, b?: LootStat): LootStat | null {
+  if (!a) return b ?? null
+  if (!b) return a
+  return {
+    ...a,
+    raids: a.raids + b.raids, total: a.total + b.total, last_ts: Math.max(a.last_ts, b.last_ts),
+    wood: a.wood + b.wood, wine: a.wine + b.wine, marble: a.marble + b.marble,
+    crystal: a.crystal + b.crystal, sulfur: a.sulfur + b.sulfur,
+  }
+}
+
+// The loot figure used to filter and rank targets (P13.39): the real average per raid when
+// raids have come home, otherwise the scouted warehouse; null = unknown.
+function lootScore(p: EnrichedPlayer): number | null {
+  return p.realPerRaid ?? p.totalResources
 }
 
 // ── MissionStatePill ──────────────────────────────────────────────────────────
@@ -182,9 +204,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   const [farmIds,     setFarmIds]     = useState<Set<string>>(new Set())
   const [farmByCity,  setFarmByCity]  = useState<Record<string, FarmTarget>>({})
   // Real loot per source CITY (not per player): an owner with several cities must not show the sum
-  // of all of them on each row. Keyed by player + city because city names repeat across players.
-  const lootKey = (player?: string, city?: string) => `${(player || '').toLowerCase()}|${(city || '').toLowerCase()}`
-  const [lootByCity, setLootByCity] = useState<Record<string, LootStat>>({})
+  // of all of them on each row. Matched by city id (P13.39); returns logged before ids were
+  // recorded fall back to player + city name, like the farm's own figure (db _farm_real_loot).
+  const [lootStats, setLootStats] = useState<LootStat[]>([])
   const [showFarmSettings, setShowFarmSettings] = useState(false)
   const loadFarm = () => fetch('/api/farm').then(r => r.json())
     .then((d: FarmTarget[]) => {
@@ -194,7 +216,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     }).catch(() => {})  // background poll — stays silent on failure
   const loadLoot = () => fetch('/api/loot-stats?by=city').then(r => r.json())
     .then((d: LootStat[]) => {
-      if (Array.isArray(d)) setLootByCity(Object.fromEntries(d.map(s => [lootKey(s.from_player, s.from_city), s])))
+      if (Array.isArray(d)) setLootStats(d)
     }).catch(() => {})
   useEffect(() => { loadFarm(); loadLoot() }, [])
   useLiveRefresh(() => { loadFarm(); loadLoot() }, ['db'], { minGapMs: 10000 })
@@ -308,6 +330,20 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     return pos
   }, [farmByCity])
 
+  const realLootOf = useMemo(() => {
+    const byId: Record<string, LootStat> = {}
+    const byName: Record<string, LootStat> = {}
+    for (const ls of lootStats) {
+      if (ls.from_city_id) byId[ls.from_city_id] = ls
+      else byName[lootKey(ls.from_player, ls.from_city)] = ls
+    }
+    return (p: WorldScanPlayer): LootStat | null => {
+      const a = p.cityId ? byId[String(p.cityId)] : undefined
+      const b = byName[lootKey(p.playerName, p.cityName)]
+      return mergeLoot(a, b)
+    }
+  }, [lootStats])
+
   const players = useMemo((): EnrichedPlayer[] => {
     const enriched: EnrichedPlayer[] = []
     const seenCityIds = new Set<string>()
@@ -349,7 +385,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         }
       }
 
-      return { ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey }
+      const realLoot = realLootOf(p)
+      const realPerRaid = realLoot && realLoot.raids > 0 ? Math.round(realLoot.total / realLoot.raids) : null
+      return { ...p, mission, totalResources, hasTroops, hasShips, priority, cKey, pKey, realLoot, realPerRaid }
     }
 
     // 1) Inactive players discovered by the world scan.
@@ -412,17 +450,17 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
     // Below-minimum-loot cities are noise: keep a row only if the farm is actively working it,
     // or its known loot reaches the minimum. Unknown loot (never scouted) stays. This must apply
     // to the farm-synthesized rows too — a drained, disabled target that dropped out of the scan
-    // would otherwise be re-created here with no filter at all. The farm's own figure wins for
-    // farm targets (it is updated by every real return); the scout total covers the rest.
+    // would otherwise be re-created here with no filter at all. What raids really brought home
+    // (average per return) wins over the scouted warehouse (P13.39): the farm's `last_loot` is a
+    // spy estimate, not a yield.
     const needle = search.trim().toLowerCase()
     const visible = enriched.filter(p => {
       if (needle && !`${p.playerName} ${p.cityName} ${p.islandName ?? ''} ${p.allyTag ?? ''}`.toLowerCase().includes(needle))
         return false
       const farm = p.cityId ? farmByCity[String(p.cityId)] : undefined
       if (farm?.enabled) return true
-      const farmLootKnown = !!farm && ((farm.last_loot || 0) > 0 || (farm.total_raids || 0) > 0)
-      const known = farmLootKnown ? (farm!.last_loot || 0) : p.totalResources
-      return known === null || known === undefined || known >= minLootTotal
+      const known = lootScore(p)
+      return known === null || known >= minLootTotal
     })
 
     visible.sort((a, b) => {
@@ -433,16 +471,17 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       if (qa && !qb) return -1
       if (!qa && qb) return 1
       if (b.priority !== a.priority) return b.priority - a.priority
-      if (a.totalResources !== null && b.totalResources !== null && a.totalResources !== b.totalResources)
-        return b.totalResources - a.totalResources
-      if (a.totalResources !== null && b.totalResources === null) return -1
-      if (a.totalResources === null && b.totalResources !== null) return 1
+      // within a priority: real yield per raid when known, else the scouted warehouse
+      const la = lootScore(a), lb = lootScore(b)
+      if (la !== null && lb !== null && la !== lb) return lb - la
+      if (la !== null && lb === null) return -1
+      if (la === null && lb !== null) return 1
       if (a.distance !== b.distance) return a.distance - b.distance
       return a.cKey.localeCompare(b.cKey)
     })
 
     return visible
-  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos, search])
+  }, [scanData, ignoredKeys, latestMissionByCityId, minLootTotal, farmByCity, queuePos, search, realLootOf])
 
   if (loading) return <Card className="p-8 text-center text-slate-400 text-sm">{t('loading')}</Card>
   if (error) return (
@@ -568,13 +607,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-xs font-mono">{p.allyTag}</span>
                         )}
                         {(() => {
-                          // Farm targets: the total the backend matched by CITY ID. The name
-                          // match below mixes same-named cities and misses renamed ones.
-                          const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
-                          const byName = lootByCity[lootKey(p.playerName, p.cityName)]
-                          const ls = f && (f.loot_returns ?? 0) > 0
-                            ? { total: f.total_loot ?? 0, raids: f.loot_returns ?? 0 }
-                            : byName
+                          // matched by city id (name only for returns logged before ids)
+                          const ls = p.realLoot
                           if (!ls || ls.total <= 0) return null
                           return (
                             <div className="text-[10px] text-amber-600 mt-0.5" title={t('farm_loot_brought')}>
@@ -790,7 +824,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
 
                             {/* Real loot brought home from THIS city (F1.b) */}
                             {(() => {
-                              const ls = lootByCity[lootKey(p.playerName, p.cityName)]
+                              const ls = p.realLoot
                               if (!ls || ls.total <= 0) return null
                               const vals = [ls.wood, ls.wine, ls.marble, ls.crystal, ls.sulfur]
                               const icons = ['fa-tree', 'fa-wine-bottle', 'fa-mountain', 'fa-gem', 'fa-flask']

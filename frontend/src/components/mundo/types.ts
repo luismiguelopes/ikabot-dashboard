@@ -21,7 +21,7 @@ export interface FarmTarget {
   queue_pos?: number      // position in the order the bot really works the targets
 }
 export interface LootStat {
-  from_player: string; from_city?: string; raids: number; last_ts: number; total: number
+  from_player: string; from_city?: string; from_city_id?: string; raids: number; last_ts: number; total: number
   wood: number; wine: number; marble: number; crystal: number; sulfur: number
 }
 

@@ -4,6 +4,7 @@ import { fmt, fmtHours, fmtTs, calcUpgradeTime } from '../../utils'
 import { MATERIALS, COST_KEYS } from '../../constants'
 import { Card, CardHeader } from '../ui/Card'
 import { Th, Td } from '../ui/TableCells'
+import { useResourcePrices, ResourcePricesInput } from './ResourcePrices'
 import type { ApiData, BuildingCostsData } from '../../types'
 
 export function NumInput({ label, value, onChange, min = 0, step = 1 }: {
@@ -30,11 +31,14 @@ export function BuildingUpgradeCalc({ data }: { data: ApiData }) {
   const lang = useLang() as 'pt' | 'en'
   const { statusSummary } = data
   const gold       = statusSummary.gold.total
-  const available  = statusSummary.resources.available
-  const production = statusSummary.resources.production
+  const empireAvailable  = statusSummary.resources.available
+  const empireProduction = statusSummary.resources.production
 
   const [needed,    setNeeded]    = useState([0, 0, 0, 0, 0])
-  const [goldPrice, setGoldPrice] = useState(15)
+  const [prices, setPrice] = useResourcePrices()
+  // The work needs the resources IN the city that builds (P13.54): with a city picked, compare
+  // against what that city holds; the empire total (what transports could bring) is an option.
+  const [scope, setScope] = useState<'city' | 'empire'>('city')
 
   const [costsData,    setCostsData]    = useState<BuildingCostsData | null>(null)
   const [costsLoading, setCostsLoading] = useState(true)
@@ -84,7 +88,15 @@ export function BuildingUpgradeCalc({ data }: { data: ApiData }) {
   const autoFilled       = selTargetLevel !== ''
 
   const setRes = (i: number, v: number) => setNeeded(prev => { const n = [...prev]; n[i] = v; return n })
-  const r = calcUpgradeTime(needed, available, production, gold, goldPrice)
+  const cityRes = selCity ? data.resourcesData?.[selCity] : undefined
+  const useCity = scope === 'city' && !!cityRes
+  const available = useCity
+    ? [cityRes!.Wood, cityRes!.Wine, cityRes!.Marble, cityRes!.Crystal, cityRes!.Sulfur].map(v => Number(v) || 0)
+    : empireAvailable
+  // per-city production is not in the empire data: the empire's production is what transports
+  // can bring to the city over time
+  const production = empireProduction
+  const r = calcUpgradeTime(needed, available, production, gold, prices)
   const hasInput = needed.some(n => n > 0)
 
   const selectCls = "border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -208,25 +220,30 @@ export function BuildingUpgradeCalc({ data }: { data: ApiData }) {
               />
             ))}
           </div>
-          <div className="w-44">
-            <NumInput
-              label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
-              value={goldPrice}
-              onChange={setGoldPrice}
-              min={1}
-            />
-          </div>
+          <ResourcePricesInput prices={prices} onChange={setPrice} />
         </div>
       </Card>
 
       {hasInput && (
         <Card>
-          <CardHeader icon="fa-table-list" title={t('resource_status')} />
+          <CardHeader icon="fa-table-list" title={t('resource_status')}>
+            {cityRes && (
+              <div className="flex gap-1" role="group" aria-label={t('calc_available_scope')}>
+                {(['city', 'empire'] as const).map(s => (
+                  <button key={s} onClick={() => setScope(s)} aria-pressed={scope === s}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${scope === s
+                      ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                    {s === 'city' ? t('calc_scope_city', { city: selCity }) : t('calc_scope_empire')}
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardHeader>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                  <Th align="text-left" className="px-5">Resource</Th>
+                  <Th align="text-left" className="px-5">{t('calc_resource_col')}</Th>
                   <Th>{t('col_needed')}</Th>
                   <Th>{t('col_available')}</Th>
                   <Th>{t('col_missing')}</Th>

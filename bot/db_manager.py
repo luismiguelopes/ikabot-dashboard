@@ -896,13 +896,17 @@ def learned_loot_cap(now=None):
 
 def get_loot_stats_by_city():
     """Aggregate loot per source CITY: what was actually plundered from each city, not the sum of
-    every city its owner has. Keyed by (player, city) because city names repeat across players
-    ("Polis" is everywhere). Sorted by total desc."""
+    every city its owner has. Rows are matched by the city id (P13.39) — a renamed city stays one
+    city and shows its latest name; rows logged before ids were recorded fall back to
+    (player, city), because city names repeat across players ("Polis" is everywhere).
+    Sorted by total desc."""
     init_db()
     conn = _connect()
     try:
+        # bare from_player/from_city next to MAX(ts): SQLite takes them from the newest row
         rows = conn.execute("""
-            SELECT from_player, from_city,
+            SELECT COALESCE(from_city_id, '') AS from_city_id,
+                   from_player, from_city,
                    COUNT(*)        AS raids,
                    MAX(ts)         AS last_ts,
                    SUM(wood)       AS wood,
@@ -911,7 +915,8 @@ def get_loot_stats_by_city():
                    SUM(crystal)    AS crystal,
                    SUM(sulfur)     AS sulfur
             FROM loot_log
-            GROUP BY from_player, from_city
+            GROUP BY CASE WHEN COALESCE(from_city_id, '') <> '' THEN 'id:' || from_city_id
+                          ELSE 'name:' || from_player || '|' || from_city END
         """).fetchall()
     finally:
         conn.close()

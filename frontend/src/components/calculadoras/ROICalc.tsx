@@ -4,6 +4,7 @@ import { fmt, fmtTime } from '../../utils'
 import { MATERIALS } from '../../constants'
 import { Card, CardHeader } from '../ui/Card'
 import { NumInput } from './BuildingUpgradeCalc'
+import { useResourcePrices, goldValue, ResourcePricesInput } from './ResourcePrices'
 import { sawmillLevels, quarryLevels, forestWardenLevels, stoneMasonLevels, ISLAND_WORKER_BONUS } from '../../data/buildingData'
 import type { ApiData } from '../../types'
 
@@ -12,7 +13,7 @@ export function ROICalc({ data: _data }: { data: ApiData }) {
   const lang = useLang() as 'pt' | 'en'
   const [resType,    setResType]    = useState('wood')
   const [numCities,  setNumCities]  = useState(2)
-  const [goldPrice,  setGoldPrice]  = useState(15)
+  const [prices, setPrice] = useResourcePrices()
   const [sawmillFrom, setSawmillFrom] = useState(1)
   const [sawmillTo,   setSawmillTo]   = useState(2)
   const [quarryFrom,  setQuarryFrom]  = useState(1)
@@ -51,11 +52,13 @@ export function ROICalc({ data: _data }: { data: ApiData }) {
   const totalIslandGain = effGainIsland * numCities
   const totalCityGain   = effGainCity
 
-  const costIslandGold = effCostIsland.reduce((s, v) => s + v * goldPrice, 0)
-  const costCityGold   = effCostCity.reduce((s, v) => s + v * goldPrice, 0)
+  // cost and gain each at their own resource's price — one shared price cancelled out (P13.54)
+  const resPrice = prices[isWood ? 0 : 2]
+  const costIslandGold = goldValue(effCostIsland, prices)
+  const costCityGold   = goldValue(effCostCity, prices)
 
-  const amortIsland = (costIslandGold > 0 && totalIslandGain > 0) ? costIslandGold / (totalIslandGain * goldPrice) : null
-  const amortCity   = (costCityGold   > 0 && totalCityGain   > 0) ? costCityGold   / (totalCityGain   * goldPrice) : null
+  const amortIsland = (costIslandGold > 0 && totalIslandGain > 0 && resPrice > 0) ? costIslandGold / (totalIslandGain * resPrice) : null
+  const amortCity   = (costCityGold   > 0 && totalCityGain   > 0 && resPrice > 0) ? costCityGold   / (totalCityGain   * resPrice) : null
 
   const islandWins = amortIsland !== null && (amortCity === null || amortIsland < amortCity)
   const cityWins   = amortCity   !== null && (amortIsland === null || amortCity < amortIsland)
@@ -94,14 +97,7 @@ export function ROICalc({ data: _data }: { data: ApiData }) {
           <div className="w-36">
             <NumInput label={t('cities_on_island')} value={numCities} onChange={setNumCities} min={1} />
           </div>
-          <div className="w-44">
-            <NumInput
-              label={<><i className="fa-solid fa-coins text-yellow-500" /> {t('gold_price')}</>}
-              value={goldPrice}
-              onChange={setGoldPrice}
-              min={1}
-            />
-          </div>
+          <ResourcePricesInput prices={prices} onChange={setPrice} />
         </div>
       </Card>
 
