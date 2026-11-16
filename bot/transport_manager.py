@@ -775,9 +775,25 @@ def _wine_buy_deficit(resources, own, settings):
 
 
 def _write_wine_buy_status(status):
+    """Write the status of this pass. A preview or an empty pass replaces the visible
+    status, but the last purchase that really happened is kept in `lastPurchase` — it is
+    only replaced by a newer live run that bought something (P13.48)."""
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
         status["now"] = int(time.time())
+        if not status.get("dryRun") and status.get("bought", 0) > 0:
+            status["lastPurchase"] = {
+                "at": status["now"], "bought": status["bought"], "spent": status.get("spent", 0),
+                "avgPrice": status.get("avgPrice", 0), "buys": status.get("buys", [])[:20],
+            }
+        else:
+            try:
+                with open(WINE_BUY_STATUS_PATH) as f:
+                    prev = json.load(f).get("lastPurchase")
+                if isinstance(prev, dict):
+                    status["lastPurchase"] = prev
+            except (FileNotFoundError, json.JSONDecodeError, AttributeError):
+                pass
         atomic_write_json(WINE_BUY_STATUS_PATH, status, indent=2)
     except Exception:
         logger.error("[wine-buy] falha a escrever status", exc_info=True)

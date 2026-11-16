@@ -3,7 +3,7 @@ import { useT } from '../../i18n'
 import { fmt } from '../../utils'
 import { Card } from '../ui/Card'
 import { Td } from '../ui/TableCells'
-import { ConfirmModal } from '../ui/Modal'
+import { ConfirmModal, askConfirm } from '../ui/Modal'
 import { pushToast } from '../ui/Toast'
 import { apiAction, pollInterval, clearPoll } from '../../api'
 import { SpyModal } from './SpyModal'
@@ -222,7 +222,7 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
   async function farmAction(cityId: string, body: Record<string, unknown>, remove = false) {
     // Removing wipes the target's history (sweep, counters, tunables) and forces a new first
     // full sweep if it is added again — one click used to do it.
-    if (remove && !confirm(t('farm_remove_confirm'))) return
+    if (remove && !(await askConfirm(t('farm_remove_confirm')))) return
     await apiAction(remove ? '/api/farm/remove' : '/api/farm/update', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetCityId: cityId, ...body }),

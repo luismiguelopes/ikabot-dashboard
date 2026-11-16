@@ -5,6 +5,7 @@ import { useLiveClock } from '../hooks/useLiveClock'
 import { MATERIALS } from '../constants'
 import { Card } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
+import { askConfirm } from './ui/Modal'
 import { ConstructionTemplate } from './ConstructionTemplate'
 import { apiAction, pollInterval, clearPoll } from '../api'
 import type { ApiData, BuildingQueue, BuildingCostsData, Movement, QueueItem } from '../types'
@@ -242,8 +243,8 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
     }).then(fetchQueue)
   }
 
-  const handleClearCity = (city: string) => {
-    if (!confirm(t('queue_clear_confirm', { city }))) return
+  const handleClearCity = async (city: string) => {
+    if (!(await askConfirm(t('queue_clear_confirm', { city })))) return
     fetch('/api/building-queue/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -251,8 +252,8 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
     }).then(fetchQueue)
   }
 
-  const handleClearAll = () => {
-    if (!confirm(t('queue_clear_all_confirm'))) return
+  const handleClearAll = async () => {
+    if (!(await askConfirm(t('queue_clear_all_confirm')))) return
     fetch('/api/building-queue/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

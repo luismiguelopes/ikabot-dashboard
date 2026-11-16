@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useT } from '../../i18n'
 
@@ -107,5 +107,49 @@ export function ConfirmModal({ title, body, confirmLabel, cancelLabel, tone = 'i
         </button>
       </div>
     </Modal>
+  )
+}
+
+// ── askConfirm(): promise-based confirm, drop-in for window.confirm() ─────────
+// `if (!(await askConfirm({ title: '…' }))) return` — rendered by the single <ConfirmHost/>
+// mounted at the app root, so any handler can ask without holding modal state itself.
+interface ConfirmRequest {
+  title: string
+  body?: ReactNode
+  confirmLabel?: string
+  cancelLabel?: string
+  tone?: ConfirmTone
+}
+type Pending = ConfirmRequest & { resolve: (ok: boolean) => void }
+let _show: ((p: Pending) => void) | null = null
+
+export function askConfirm(req: ConfirmRequest | string): Promise<boolean> {
+  const r = typeof req === 'string' ? { title: req } : req
+  // no host mounted (should not happen) → fall back to the native dialog, never skip the question
+  if (!_show) return Promise.resolve(window.confirm(r.title))
+  return new Promise(resolve => _show!({ ...r, resolve }))
+}
+
+export function ConfirmHost() {
+  const [pending, setPending] = useState<Pending | null>(null)
+  useEffect(() => {
+    _show = p => setPending(prev => { prev?.resolve(false); return p })
+    return () => { _show = null }
+  }, [])
+  const close = useCallback((ok: boolean) => {
+    setPending(prev => { prev?.resolve(ok); return null })
+  }, [])
+  const onCancel = useCallback(() => close(false), [close])
+  if (!pending) return null
+  return (
+    <ConfirmModal
+      title={pending.title}
+      body={pending.body}
+      confirmLabel={pending.confirmLabel}
+      cancelLabel={pending.cancelLabel}
+      tone={pending.tone ?? 'red'}
+      onConfirm={() => close(true)}
+      onCancel={onCancel}
+    />
   )
 }

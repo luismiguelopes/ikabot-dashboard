@@ -3,6 +3,8 @@ import { useT, useLang } from '../../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../../utils'
 import { useLiveClock } from '../../hooks/useLiveClock'
 import { Card, CardHeader } from '../ui/Card'
+import { askConfirm } from '../ui/Modal'
+import { apiAction } from '../../api'
 import type { OwnCity, WorldScanPlayer } from '../../types'
 import { selectClass, btnClass, travelSecs } from './shared'
 import type { MilitaryData, MilitaryUnit, FarmTarget } from './shared'
@@ -31,7 +33,15 @@ interface PendingAttack {
   missionType:      string
   addedAt:          number
   dispatchAfter:    number
+  waitsForFleet?:   string
 }
+
+// Mirrors ATTACK_DISPATCH_GRACE_SECS in app.py: for this long after its dispatch time the bot
+// may be sending the attack, so it can no longer be cancelled (the backend refuses with 409).
+const DISPATCH_GRACE_SECS = 5 * 60
+const beingDispatched = (item: PendingAttack, now: number) =>
+  !item.waitsForFleet && now >= item.dispatchAfter && now - item.dispatchAfter < DISPATCH_GRACE_SECS
+
 
 export function DispatchPanel() {
   const t    = useT()
@@ -302,11 +312,19 @@ export function DispatchPanel() {
 
   // ── Cancel pending ──────────────────────────────────────────────────────────
 
-  async function handleCancel(id: string) {
-    await fetch('/api/espionage/attack-queue/cancel', {
+  async function handleCancel(item: PendingAttack) {
+    const coupled = pending.some(p => p.waitsForFleet === item.id)
+    const ok = await askConfirm({
+      title: t('dispatch_cancel_confirm', { target: `${item.targetCityName} · ${item.targetPlayerName}` }),
+      body: coupled ? t('dispatch_cancel_coupled') : undefined,
+      confirmLabel: t('dispatch_cancel_yes'),
+      cancelLabel: t('dispatch_cancel_keep'),
+    })
+    if (!ok) return
+    await apiAction('/api/espionage/attack-queue/cancel', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ id }),
+      body:    JSON.stringify({ id: item.id }),
     })
     loadAll()
   }
@@ -680,6 +698,7 @@ export function DispatchPanel() {
             {pending.map(item => {
               const secsLeft  = Math.max(0, item.dispatchAfter - now)
               const dispatched = item.dispatchAfter <= now
+              const busy = beingDispatched(item, now)
               return (
                 <div key={item.id} className="px-5 py-3 flex items-center gap-4">
                   <div className="flex-1 min-w-0">
@@ -717,9 +736,10 @@ export function DispatchPanel() {
                     )}
                   </div>
                   <button
-                    onClick={() => handleCancel(item.id)}
-                    className={btnClass('danger')}
-                    title={t('cancel')}
+                    onClick={() => handleCancel(item)}
+                    disabled={busy}
+                    className={`${btnClass('danger')} disabled:opacity-40 disabled:cursor-not-allowed`}
+                    title={busy ? t('dispatch_cancel_busy') : t('cancel')}
                   >
                     <i className="fa-solid fa-xmark" />
                   </button>

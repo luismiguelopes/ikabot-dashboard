@@ -1894,6 +1894,25 @@ def api_attack_queue_add():
     return jsonify({"status": "queued", "item": item})
 
 
+# How long after its dispatch time an attack counts as "being dispatched". The bot looks at
+# the queue at least once a minute, and spaces several due attacks 30-90 s apart; past this
+# window an item still in the queue is stuck (bot paused / outside active hours) and may go.
+ATTACK_DISPATCH_GRACE_SECS = 5 * 60
+
+
+def _attack_being_dispatched(item, now=None):
+    """True while the bot may be sending this attack right now. A troop wave held by its
+    blockade (`waitsForFleet`) is not sent at its dispatch time, so it can always be cancelled."""
+    if item.get("waitsForFleet"):
+        return False
+    now = time.time() if now is None else now
+    try:
+        late = now - float(item.get("dispatchAfter", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= late < ATTACK_DISPATCH_GRACE_SECS
+
+
 @app.route("/api/espionage/attack-queue/cancel", methods=["POST"])
 def api_attack_queue_cancel():
     data = request.get_json(silent=True) or {}
@@ -1902,6 +1921,15 @@ def api_attack_queue_cancel():
         return jsonify({"error": "id obrigatório"}), 400
     if not _db:
         return jsonify({"error": "Base de dados indisponível"}), 503
+    try:
+        item = next((it for it in _db.queue_items("attack") if it.get("id") == attack_id), None)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if item and _attack_being_dispatched(item):
+        # The bot reads the queue once per pass and dispatches from that copy: removing the row
+        # now would say "cancelled" while the attack still leaves (P13.36).
+        return jsonify({"error": "O bot está a despachar este ataque — já não dá para cancelar",
+                        "code": "dispatching"}), 409
     try:
         removed = _db.queue_remove("attack", [attack_id])
     except Exception as e:

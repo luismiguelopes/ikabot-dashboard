@@ -6,6 +6,7 @@ import type { ApiData, AlertThresholds, CityResources } from './types'
 import type { IslandPreset } from './components/calculadoras/CalculadorasPage'
 import { Sidebar } from './components/ui/Sidebar'
 import { ToastHost } from './components/ui/Toast'
+import { ConfirmHost } from './components/ui/Modal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { computeAlerts } from './alerts'
 import { setApiLang, pollInterval, clearPoll } from './api'
@@ -323,6 +324,7 @@ export default function App() {
         </div>
       </div>
       <ToastHost />
+      <ConfirmHost />
     </LangContext.Provider>
   )
 }

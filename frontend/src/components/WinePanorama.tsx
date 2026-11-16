@@ -2,7 +2,13 @@ import { useT } from '../i18n'
 import { Card, CardHeader } from './ui/Card'
 
 interface WineNums { targetHours?: number; thresholdHours?: number }
-interface BuyStatus { deficit?: number; spent?: number; bought?: number; dryRun?: boolean; critical?: boolean }
+interface BuyStatus {
+  deficit?: number; spent?: number; bought?: number; dryRun?: boolean; critical?: boolean
+  lastPurchase?: { at: number; bought: number; spent: number }
+}
+
+export const fmtStamp = (sec: number) =>
+  new Date(sec * 1000).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 
 /**
  * B6 — one-glance view of the empire's wine strategy: per-city runway against the
@@ -64,8 +70,10 @@ export function WinePanorama({ resourcesData, wine, buyStatus }: {
           <Tile label={t('winepanorama_runway')} value={fmtH(empireRunway)}
                 sub={empireRunway != null && empireRunway < threshold ? t('winepanorama_crit') : ''} accent={empireRunway != null && empireRunway < threshold} />
           <Tile label={t('winepanorama_buyer')}
-                value={buyStatus ? nf(buyStatus.spent ?? 0) : '—'}
-                sub={buyStatus ? `${t('winepanorama_deficit')} ${nf(buyStatus.deficit ?? 0)}${buyStatus.dryRun ? ' · dry' : ''}` : t('winepanorama_nobuy')} />
+                value={buyStatus?.lastPurchase ? `${nf(buyStatus.lastPurchase.spent)} 🪙` : '—'}
+                sub={buyStatus?.lastPurchase
+                  ? `${nf(buyStatus.lastPurchase.bought)} 🍷 · ${fmtStamp(buyStatus.lastPurchase.at)}`
+                  : buyStatus ? t('winepanorama_noreal') : t('winepanorama_nobuy')} />
         </div>
 
         {/* Legend */}

@@ -799,3 +799,46 @@ def test_notify_secrets_survive_a_save_and_env_values_are_not_copied(monkeypatch
     assert d["botToken"] == "" and d["botTokenSet"] is True and d["botTokenSource"] == "env"
     c.post("/api/telegram-settings", json={"chatId": "7"})
     assert json.load(open(flask_app.TELEGRAM_SETTINGS_PATH))["botToken"] == ""
+
+
+# ── P13.36: cancelling an attack the bot is sending right now ───────────────────
+
+def _queue_attack(**kw):
+    item = {"targetCityName": "T", "targetPlayerName": "P", "missionType": "army",
+            "dispatchAfter": int(time.time()) + 600}
+    item.update(kw)
+    return db_manager.queue_add("attack", item)
+
+
+def test_cancel_attack_scheduled_for_later(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    aid = _queue_attack()
+    r = c.post("/api/espionage/attack-queue/cancel", json={"id": aid})
+    assert r.status_code == 200 and db_manager.queue_items("attack") == []
+
+
+def test_cancel_refused_while_being_dispatched(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    aid = _queue_attack(dispatchAfter=int(time.time()) - 30)
+    r = c.post("/api/espionage/attack-queue/cancel", json={"id": aid})
+    assert r.status_code == 409 and r.get_json()["code"] == "dispatching"
+    assert len(db_manager.queue_items("attack")) == 1
+
+
+def test_cancel_allowed_for_a_stuck_due_attack(monkeypatch, tmp_path):
+    """Due long ago and still queued (bot paused / outside active hours) → can go."""
+    c = _client(monkeypatch, tmp_path)
+    aid = _queue_attack(dispatchAfter=int(time.time()) - 3600)
+    assert c.post("/api/espionage/attack-queue/cancel", json={"id": aid}).status_code == 200
+
+
+def test_cancel_allowed_for_a_wave_waiting_for_its_blockade(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    fid = _queue_attack(missionType="fleet", dispatchAfter=int(time.time()) + 600)
+    aid = _queue_attack(dispatchAfter=int(time.time()) - 30, waitsForFleet=fid)
+    assert c.post("/api/espionage/attack-queue/cancel", json={"id": aid}).status_code == 200
+
+
+def test_cancel_unknown_attack_is_404(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/espionage/attack-queue/cancel", json={"id": "nope"}).status_code == 404

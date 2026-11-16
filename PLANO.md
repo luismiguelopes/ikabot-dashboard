@@ -1242,7 +1242,7 @@ Lido na íntegra por subagentes (achados conferidos por amostragem no código). 
       os parâmetros vivem lá dentro. Com o espião em viagem ou FAILED não há controlos, e um painel
       aberto fecha-se sozinho quando o poll de 30s muda o estado. Tornar a linha expansível sempre
       que o alvo esteja no farm.
-- [~] **P13.36 Acções destrutivas sem confirmação nem guarda** **[C]** *parte feita 2026-11-15* (remover do farm pede confirmação; ignorar é recusado num alvo activo do farm; "correr agora" desactivado com tropas fora e recusado pelo backend. **Falta:** confirmação ao cancelar ataque)
+- [x] **P13.36 Acções destrutivas sem confirmação nem guarda** **[C]** ✅ 2026-11-16 (remover do farm pede confirmação; ignorar é recusado num alvo activo do farm; "correr agora" desactivado com tropas fora e recusado pelo backend; cancelar ataque pede confirmação (avisa quando a vaga de tropas acoplada vai junto) e fica inactivo nos 5 min a seguir à hora de despacho — o backend recusa com 409 (`_attack_being_dispatched`); um ataque vencido há mais tempo (bot em pausa/fora de horas) pode sair. Os 6 `confirm()` nativos passaram a `askConfirm()` + `ConfirmHost` em `Modal.tsx`)
   - Remover do farm (linhas 649 e 819): um clique, apaga a linha (`swept_at`, contagens,
     parâmetros) e obriga a novo primeiro varrimento.
   - 🚫 Ignorar (linhas 259-267): esconde uma cidade na UI mas o backend marca **jogador+ilha** e
@@ -1361,13 +1361,13 @@ de H, com `test_smart_sleep_steps.py` e `test_spy_reports_real.py` novos).
       item e recusar com 409 se não bater (resolve-se com o P13.12). O "+" rápido em
       `BuildingsPage` só aparece em hover (inalcançável em ecrã táctil) e enfileira sem aviso;
       aplicar um modelo faz um POST por linha e não actualiza a fila.
-- [x] **P13.48 Acções que gastam recursos sem confirmação** **[C]** ✅ 2026-11-15 (sair do modo de teste pede confirmação no treino de espiões e no comprador de vinho; aviso vermelho enquanto está ao vivo; o toggle do comprador fica verde em teste e vermelho ao vivo. **Falta só:** o preview deixar de substituir o status da última compra real) — desligar o `dryRun` do
+- [x] **P13.48 Acções que gastam recursos sem confirmação** **[C]** ✅ 2026-11-16 (sair do modo de teste pede confirmação no treino de espiões e no comprador de vinho; aviso vermelho enquanto está ao vivo; o toggle do comprador fica verde em teste e vermelho ao vivo; a última compra real fica em `lastPurchase` no `wine_buy_status.json` — só uma corrida ao vivo que compre a substitui — e aparece no cartão e no panorama do vinho) — desligar o `dryRun` do
       treino de espiões faz POST imediato (150 ouro + 40 cristal por espião, até `maxPerPass` por
       passagem). No comprador de vinho o toggle fica **cinzento quando está a gastar ouro** e
       âmbar quando é seguro — o contrário de um sinal de perigo — e não há aviso de "ao vivo".
       Confirmar a passagem para ao vivo e mostrar um aviso vermelho enquanto estiver ligado.
       Cada gravação do comprador dispara um preview que **substitui** o status da última compra real.
-- [~] **P13.49 "Guardado" sem verificar a resposta** **[C]** *parte feita 2026-11-15* (`SettingsPage`: as 5 gravações passam pelo `apiAction` e só dizem "guardado" com 2xx; `TransportTab`: vinho, compra de vinho e consolidação mostram o erro a vermelho e ficam com o valor que o servidor limitou. **Falta:** o erro das notificações mostrado como "webhook inválido") — nenhum destes ficheiros usa o
+- [x] **P13.49 "Guardado" sem verificar a resposta** **[C]** ✅ 2026-11-16 (`SettingsPage`: as 5 gravações passam pelo `apiAction` e só dizem "guardado" com 2xx; `TransportTab`: vinho, compra de vinho e consolidação mostram o erro a vermelho e ficam com o valor que o servidor limitou; notificações: só `invalid_discord_webhook` mostra "webhook inválido", qualquer outro erro vai para um toast com o texto — confirmado) — nenhum destes ficheiros usa o
       `apiAction`; quase todas as gravações mostram sucesso com 400/401/500 (`TransportTab`
       142-161, `SettingsPage` 190, 307, 580, 755, 885). O feedback da consolidação aparece
       sempre a verde, mesmo quando é um erro. Um erro qualquer ao gravar notificações é mostrado
@@ -1681,7 +1681,7 @@ Visto e deixado (anotar, não é erro):
 - Linha do farm: "raids: 7" (vagas despachadas) vs "3 raids" (regressos com saque) — rótulos
   parecidos para coisas diferentes. Juntar ao P13.39.
 - Ícones `fa-brands` (Telegram/Discord) não aparecem nas Notificações.
-- Cinco confirmações ainda usam o `confirm()` nativo (`Modal.tsx` tem o substituto) — P13.36.
+- ~~Cinco confirmações ainda usam o `confirm()` nativo~~ — feito 16/11 (`askConfirm`, P13.36).
 - Produção 0/h de vinho, cristal e enxofre no Início é real (confirmado pelo utilizador: as
   cidades só produzem madeira e mármore).
 - **Corrigido (bot):** todos os ataques ficavam "manual" no `attack_log`, incluindo os do farm
@@ -1695,13 +1695,10 @@ Visto e deixado (anotar, não é erro):
 
 | Item | O que falta |
 |---|---|
-| P13.36 | Confirmação ao cancelar um ataque; botão inactivo quando já está "a despachar" |
 | P13.37 | `apiAction` em `FarmSettings.tsx`, "adicionar ao farm" do `DispatchPanel`, toggles do `MundoPage`, "des-ignorar" |
 | P13.39 | Filtro e pontuação dos alvos ainda usam `last_loot` espiado em vez do saque real |
 | P13.41 | Adicionar alvos com frota fora do Combate; mostrar a hora de saída no modal de ataque |
 | P13.47 | Aplicar um modelo de construção num único pedido |
-| P13.48 | O preview do comprador de vinho não deve substituir o status da última compra real |
-| P13.49 | Erro ao gravar notificações mostrado como "webhook inválido" — **já corrigido em 16/11, confirmar** |
 | P13.54 | Opção B da colónia (custo de fundar, produção desde a hora 0); preço do ouro que se anula; "disponível" por cidade; nomes de edifícios por idioma |
 | P13.55 | `useLiveClock` ao nível da página; `Section` declarado dentro do render no `MovementsPage` |
 | P13.56 | Guardas contra respostas inesperadas no `HomePage` |

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { pushToast } from './ui/Toast'
+import { askConfirm } from './ui/Modal'
 import { apiAction } from '../api'
 import { useT, useLang } from '../i18n'
 import { saveBrowserNotifEnabled } from '../hooks/useNotifications'
@@ -355,9 +356,9 @@ function SpyBuildCard() {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-600">{t('spybuild_dry')}</span>
-            <Toggle on={s.dryRun} onClick={() => {
+            <Toggle on={s.dryRun} onClick={async () => {
               // leaving dry-run spends gold and crystal on the very next pass → ask first
-              if (s.dryRun && !confirm(t('spybuild_live_confirm'))) return
+              if (s.dryRun && !(await askConfirm(t('spybuild_live_confirm')))) return
               save({ ...s, dryRun: !s.dryRun })
             }} />
           </div>

@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { pushToast } from './ui/Toast'
+import { askConfirm } from './ui/Modal'
 import { useT, useLang } from '../i18n'
 import { fmt, fmtDuration, fmtArrival } from '../utils'
 import { useLiveClock } from '../hooks/useLiveClock'
 import { MATERIALS } from '../constants'
 import { Card, CardHeader } from './ui/Card'
 import { PageHeader } from './ui/PageHeader'
-import { WinePanorama } from './WinePanorama'
+import { WinePanorama, fmtStamp } from './WinePanorama'
 import type { OwnCity } from '../types'
 
 interface PendingTransport {
@@ -66,6 +67,8 @@ interface WineBuyStatus {
   note?: string
   buys?: { seller: string; fromCity: string; toCity: string; amount: number; price: number; cost: number }[]
   topCities?: [string, number][]
+  // the last purchase that really happened — a preview never replaces it (P13.48)
+  lastPurchase?: { at: number; bought: number; spent: number; avgPrice: number }
 }
 
 function selectClass() {
@@ -727,9 +730,9 @@ export function TransportTab() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       // leaving dry-run means real purchases with gold → ask first
-                      if (wineBuy.dryRun && !confirm(t('winebuy_live_confirm'))) return
+                      if (wineBuy.dryRun && !(await askConfirm(t('winebuy_live_confirm')))) return
                       setWineBuy({ ...wineBuy, dryRun: !wineBuy.dryRun })
                     }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
@@ -818,6 +821,18 @@ export function TransportTab() {
                     <div><span className="text-slate-400">{t('winebuy_spent')}: </span><b>{(wineBuyStatus.spent ?? 0).toLocaleString()}</b> <i className="fa-solid fa-coins text-amber-400" /></div>
                     <div><span className="text-slate-400">{t('winebuy_avgprice')}: </span><b>{wineBuyStatus.avgPrice ?? 0}</b>{wineBuyStatus.cheapest != null && <span className="text-slate-400"> ({t('winebuy_cheapest')} {wineBuyStatus.cheapest})</span>}</div>
                   </div>
+                  {wineBuyStatus.lastPurchase && (wineBuyStatus.dryRun || wineBuyStatus.lastPurchase.at !== wineBuyStatus.now) && (
+                    <div className="text-xs text-slate-600 pt-1 border-t border-slate-200">
+                      <i className="fa-solid fa-receipt text-emerald-600 mr-1.5" />
+                      <span className="font-medium">{t('winebuy_last_real')}: </span>
+                      {t('winebuy_last_real_line', {
+                        n: wineBuyStatus.lastPurchase.bought.toLocaleString(),
+                        g: wineBuyStatus.lastPurchase.spent.toLocaleString(),
+                        p: wineBuyStatus.lastPurchase.avgPrice,
+                        at: fmtStamp(wineBuyStatus.lastPurchase.at),
+                      })}
+                    </div>
+                  )}
                   {wineBuyStatus.topCities && wineBuyStatus.topCities.length > 0 && (
                     <div className="text-xs text-slate-500 pt-1">
                       {wineBuyStatus.topCities.slice(0, 6).map(([n, d]) => (

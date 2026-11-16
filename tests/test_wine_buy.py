@@ -213,3 +213,36 @@ def test_unreadable_answer_is_settled_by_the_gold(monkeypatch, tmp_path):
     calls, status = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False},
                          answer="<html>", gold=1_000_000, gold_after=1_000_000)
     assert status["bought"] == 0 and status["failedBuys"] == 1
+
+
+# ── P13.48: a preview never wipes the last real purchase ────────────────────────
+
+def test_preview_keeps_the_last_real_purchase(monkeypatch, tmp_path):
+    resources = {"A": _city(300, 0)}
+    offers = [_offer("Seller", "A", 50000, 8)]
+    _, live = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False})
+    assert live["lastPurchase"]["bought"] == 21600
+    assert live["lastPurchase"]["spent"] == 21600 * 8
+    # a dry-run plan replaces the visible status, but the real purchase survives
+    _, plan = _run(monkeypatch, tmp_path, resources, [_offer("Seller", "A", 50000, 9)],
+                   {"dryRun": True})
+    assert plan["dryRun"] is True and plan["avgPrice"] == 9
+    assert plan["lastPurchase"] == live["lastPurchase"]
+    # so does a pass with nothing to buy
+    _, idle = _run(monkeypatch, tmp_path, {"A": _city(300, 300 * 100)}, offers, {"dryRun": False})
+    assert idle["deficit"] == 0 and idle["lastPurchase"] == live["lastPurchase"]
+
+
+def test_failed_live_pass_keeps_the_previous_purchase(monkeypatch, tmp_path):
+    resources = {"A": _city(300, 0)}
+    offers = [_offer("Seller", "A", 50000, 8)]
+    _, live = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False})
+    refused = json.dumps([["provideFeedback", [{"type": 11, "text": "A oferta já não existe"}]]])
+    _, failed = _run(monkeypatch, tmp_path, resources, offers, {"dryRun": False}, answer=refused)
+    assert failed["bought"] == 0 and failed["lastPurchase"] == live["lastPurchase"]
+
+
+def test_no_purchase_yet_has_no_last_purchase(monkeypatch, tmp_path):
+    resources = {"A": _city(300, 0)}
+    _, plan = _run(monkeypatch, tmp_path, resources, [_offer("Seller", "A", 50000, 8)], {"dryRun": True})
+    assert "lastPurchase" not in plan

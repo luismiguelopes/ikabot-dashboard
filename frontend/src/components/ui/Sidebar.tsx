@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useT } from '../../i18n'
+import { askConfirm } from './Modal'
 import { fmtCountdown } from '../../utils'
 
 function NavItem({ icon, label, active, onClick, badge }: {
@@ -100,9 +101,9 @@ export function Sidebar({ active, setActive, lastUpdated, lastUpdatedTs, nextCyc
       {/* Pause toggle + Settings — separated, above status footer */}
       <div className="px-3 py-2 border-t border-slate-700/60 space-y-1">
         <button
-          onClick={() => {
+          onClick={async () => {
             // pausing stops every game action — one stray tap used to do it
-            if (!paused && !confirm('Pausar o bot? Deixa de construir, espiar, atacar e transportar até ser retomado.')) return
+            if (!paused && !(await askConfirm({ title: t('pause_confirm'), tone: 'amber' }))) return
             onTogglePause()
           }}
           title={t('pause_tooltip')}
