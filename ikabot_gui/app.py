@@ -1252,9 +1252,26 @@ def api_farm_list():
     if not _db:
         return jsonify([])
     try:
-        return jsonify(_farm_empty_returns(_farm_queue_positions(_db.farm_list())))
+        return jsonify(_farm_port_blocked(_farm_empty_returns(_farm_queue_positions(_db.farm_list()))))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _farm_port_blocked(targets):
+    """Add `port_blocked_by`: the foreign player whose fleet holds the target's port, as the bot
+    last saw it on the island view (farm_port_blocked.json). The farm neither scouts nor raids
+    such a target; the page says so."""
+    try:
+        with open(os.path.join(LOGS_DIR, "farm_port_blocked.json")) as f:
+            blocked = json.load(f)
+        if not isinstance(blocked, dict):
+            blocked = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        blocked = {}
+    for t in targets:
+        e = blocked.get(str(t.get("target_city_id")))
+        t["port_blocked_by"] = e.get("blocker") if isinstance(e, dict) else None
+    return targets
 
 
 def _farm_empty_returns(targets):

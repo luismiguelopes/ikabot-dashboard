@@ -587,6 +587,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
                           {(() => {
                             const f = p.cityId ? farmByCity[String(p.cityId)] : undefined
                             if (!f) return null
+                            // another player's fleet holds the port: the farm does nothing here
+                            if (f.port_blocked_by)
+                              return <span className="text-[10px] text-red-600 leading-tight max-w-[11rem]">{t('farm_line_port_blocked', { p: f.port_blocked_by })}</span>
                             // a target switched off after waves that came home empty says so
                             if (!f.enabled) return f.empty_returns
                               ? <span className="text-[10px] text-red-600 leading-tight max-w-[11rem]">{t('farm_line_paused_empty', { n: f.empty_returns })}</span>

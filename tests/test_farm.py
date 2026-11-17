@@ -2544,3 +2544,78 @@ def test_empty_return_strikes_zero_never_pauses(monkeypatch, tmp_path):
     fm.process_farm_targets(session=object(), in_active_hours=True)
 
     assert db_manager.farm_get("100")["enabled"] == 1
+
+
+# ── Port held by another player's fleet (ATHLÉTICO 16/11) ───────────────────────
+# City entry exactly as the island view returned it (names changed).
+_BLOCKED_CITY = {
+    "type": "city", "name": "PORTO ALVO", "id": 29717, "level": 34, "ownerId": "1",
+    "ownerName": "DONO", "state": "inactive", "viewAble": 2,
+    "infos": {"fleetAction": {"id": "100844", "name": "Terceiro[TAG]",
+                              "tooltip": "Este porto de PORTO ALVO está bloqueado pelo jogador "
+                                         "Terceiro[TAG]", "color": "foreignBlocker"}},
+}
+
+
+def _island_session(monkeypatch, city):
+    import ikabot.helpers.getJson as gj
+    monkeypatch.setattr(gj, "getIsland", lambda html: {"cities": [city]}, raising=False)
+
+    class S:
+        def get(self, url):
+            return ""
+    return S()
+
+
+def test_foreign_port_blocker_read_from_island_city():
+    assert fm._foreign_port_blocker(_BLOCKED_CITY) == "Terceiro[TAG]"
+    assert fm._foreign_port_blocker({"id": 1, "state": "inactive"}) is None
+    assert fm._foreign_port_blocker({"infos": {"armyAction": "fight"}}) is None
+    own = {"infos": {"fleetAction": {"id": "9", "name": "Eu", "color": "ownBlocker"}}}
+    assert fm._foreign_port_blocker(own) is None
+
+
+def test_confirm_inactive_reports_blocked_port(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    _common_patches(monkeypatch, tmp_path)
+    s = _island_session(monkeypatch, _BLOCKED_CITY)
+    t = {"target_city_id": "29717", "island_id": "857", "target_city_name": "PORTO ALVO"}
+    assert fm._confirm_inactive(s, t) == "blocked"
+    assert fm._port_blockers["29717"] == "Terceiro[TAG]"
+    # blockade lifted → farmable again, blocker forgotten
+    fm._inactive_memo.clear()
+    free = {k: v for k, v in _BLOCKED_CITY.items() if k != "infos"}
+    assert fm._confirm_inactive(_island_session(monkeypatch, free), t) is True
+    assert "29717" not in fm._port_blockers
+
+
+def test_blocked_port_is_skipped_without_scout_or_raid(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "29717", "targetCityName": "PORTO ALVO", "islandX": 52,
+                         "islandY": 30, "islandId": "857", "minLoot": 30000})
+    db_manager.farm_update("29717", {"next_run_at": 0, "last_loot": 500000})
+    added = _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: "blocked")
+    monkeypatch.setitem(fm._port_blockers, "29717", "Terceiro[TAG]")
+    before = int(time.time())
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    t = db_manager.farm_get("29717")
+    assert t["state"] == "IDLE"
+    assert t["next_run_at"] >= before + fm._BLOCKED_SKIP_SECS
+    assert added == []          # nothing queued: no spies, no waves
+
+
+def test_blocked_port_is_recorded_for_the_dashboard(monkeypatch, tmp_path):
+    _setup_db(tmp_path)
+    _common_patches(monkeypatch, tmp_path)
+    path = tmp_path / "farm_port_blocked.json"
+    monkeypatch.setattr(fm, "_PORT_BLOCKED_PATH", str(path))
+    t = {"target_city_id": "29717", "island_id": "857", "target_city_name": "PORTO ALVO"}
+    fm._confirm_inactive(_island_session(monkeypatch, _BLOCKED_CITY), t)
+    assert json.load(open(path))["29717"]["blocker"] == "Terceiro[TAG]"
+    fm._inactive_memo.clear()
+    free = {k: v for k, v in _BLOCKED_CITY.items() if k != "infos"}
+    fm._confirm_inactive(_island_session(monkeypatch, free), t)
+    assert json.load(open(path)) == {}

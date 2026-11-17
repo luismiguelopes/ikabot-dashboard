@@ -405,6 +405,15 @@ def notify_farm_empty_returns(target_city: str, player: str, count: int) -> None
           level="warning", category="farm")
 
 
+def notify_farm_port_blocked(target_id: str, target_city: str, player: str, blocker: str) -> None:
+    """Once per blockade episode (farm_manager clears the key when the port is free again)."""
+    notify_once(f"farm-port-blocked:{target_id}",
+                f"⚓ <b>Porto bloqueado por terceiros</b>\n{_esc(target_city)} ({_esc(player)}): "
+                f"o porto está bloqueado por {_esc(blocker)}. Tropas sozinhas fariam ricochete — "
+                f"o farm salta o alvo enquanto o bloqueio durar.",
+                level="warning", category="farm")
+
+
 def notify_farm_active(target_city: str, player: str) -> None:
     _send(f"🟢 <b>Alvo já não inactivo</b>\n{_esc(target_city)} ({_esc(player)}) deixou de estar "
           f"inactivo — desactivado do farm (já não é seguro atacar às cegas).",

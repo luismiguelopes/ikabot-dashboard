@@ -381,13 +381,72 @@ _INACTIVE_MEMO_SECS = 120
 _inactive_memo = {}   # tid -> (checked_at, True/False)
 
 
+# tid -> name of the foreign player whose fleet holds the target's port (from the island view).
+_port_blockers = {}
+
+
+def _foreign_port_blocker(city):
+    """Name of ANOTHER player whose fleet blocks this city's port, or None. The island view
+    carries it as infos.fleetAction = {id, name, tooltip, color: "foreignBlocker"} (seen live on
+    ATHLÉTICO 16/11: "Este porto de … está bloqueado pelo jogador …"). That fleet is invisible
+    to the spy reports (the garrison lists only the owner's ships, the movements only fleets in
+    transit), yet unescorted troops bounce off it — two empty 4h raids after clean full sweeps.
+    Our own blockade (colour not "foreign…") is not a blocker."""
+    infos = city.get("infos")
+    fa = infos.get("fleetAction") if isinstance(infos, dict) else None
+    if not isinstance(fa, dict):
+        return None
+    if str(fa.get("color", "")).lower().startswith("own"):
+        return None
+    return str(fa.get("name") or "?")
+
+
+_PORT_BLOCKED_PATH = os.path.join(LOGS_DIR, "farm_port_blocked.json")
+
+
+def _record_port_blocked(tid, blocker):
+    """Keep farm_port_blocked.json ({cityId: {blocker, since, checkedAt}}) in step with what the
+    island view shows, so the dashboard can say why the farm leaves a target alone. blocker
+    None = the port is free → entry removed. Best effort: never breaks the farm pass."""
+    try:
+        from empire_utils import atomic_write_json
+        try:
+            with open(_PORT_BLOCKED_PATH) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        now = int(time.time())
+        if blocker is None:
+            if tid not in data:
+                return
+            data.pop(tid)
+        else:
+            prev = data.get(tid) if isinstance(data.get(tid), dict) else {}
+            since = prev.get("since", now) if prev.get("blocker") == blocker else now
+            data[tid] = {"blocker": blocker, "since": since, "checkedAt": now}
+        atomic_write_json(_PORT_BLOCKED_PATH, data)
+    except Exception:
+        logger.warning("[farm] não consegui gravar farm_port_blocked.json", exc_info=True)
+
+
+def _clear_blocked_alert(tid):
+    try:
+        from telegram_notifier import clear_once
+        clear_once(f"farm-port-blocked:{tid}")
+    except Exception:
+        pass
+
+
 def _confirm_inactive(session, t):
     """Real-time confirmation that the target's owner is still inactive, done immediately
     before EVERY farm action (scout or attack): fetches the island view live and reads the
     city's state at the coordinates. The cached world scan is only a fallback when the live
     fetch fails. Returns True (inactive → farmable), "vacation" (the game REFUSES attacks
-    on vacation players — skip the target), False (active again → unsafe), or None
-    (couldn't tell — caller decides: scout instead of attacking blind)."""
+    on vacation players — skip the target), "blocked" (inactive, but another player's fleet
+    holds the port — skip the target, see _foreign_port_blocker), False (active again →
+    unsafe), or None (couldn't tell — caller decides: scout instead of attacking blind)."""
     tid = str(t["target_city_id"])
     now = time.time()
     hit = _inactive_memo.get(tid)
@@ -403,6 +462,15 @@ def _confirm_inactive(session, t):
                 if str(c.get("id", "")) == tid:
                     st = c.get("state")
                     res = "vacation" if st == "vacation" else (st == "inactive")
+                    blocker = _foreign_port_blocker(c)
+                    if blocker and res is True:
+                        _port_blockers[tid] = blocker
+                        _record_port_blocked(tid, blocker)
+                        res = "blocked"
+                    else:
+                        _port_blockers.pop(tid, None)
+                        _record_port_blocked(tid, None)
+                        _clear_blocked_alert(tid)
                     _inactive_memo[tid] = (now, res)
                     return res
         except Exception:
@@ -441,6 +509,30 @@ def _skip_vacation_target(t):
     from db_manager import farm_update
     farm_update(t["target_city_id"], {"state": "IDLE",
                 "next_run_at": int(time.time()) + _VACATION_SKIP_SECS,
+                "next_action": "spy"})
+
+
+_BLOCKED_SKIP_SECS = 6 * 3600
+
+
+def _skip_blocked_target(t):
+    """Another player's fleet holds the port: troops alone bounce, and clearing it means a naval
+    battle with an active third player — never the farm's call. Neither scout nor raid; look
+    again in a few hours (the island is read anyway before the next action). One alert per
+    blockade episode."""
+    tid = str(t["target_city_id"])
+    nm = t.get("target_city_name", tid)
+    blocker = _port_blockers.get(tid, "?")
+    logger.warning("[farm] %s: porto bloqueado por %s — tropas fariam ricochete; alvo saltado "
+                   "por %dh", nm, blocker, _BLOCKED_SKIP_SECS // 3600)
+    try:
+        from telegram_notifier import notify_farm_port_blocked
+        notify_farm_port_blocked(tid, nm, t.get("target_player", ""), blocker)
+    except Exception:
+        pass
+    from db_manager import farm_update
+    farm_update(t["target_city_id"], {"state": "IDLE",
+                "next_run_at": int(time.time()) + _BLOCKED_SKIP_SECS,
                 "next_action": "spy"})
 
 
@@ -1451,6 +1543,9 @@ def process_farm_targets(session, in_active_hours=True):
         if confirmed == "vacation":
             _skip_vacation_target(t)
             return "skip"
+        if confirmed == "blocked":
+            _skip_blocked_target(t)
+            return "skip"
         if _never_swept(t) or int(t.get("is_fleet_target", 0)) == 1:
             return "garrison"
         if confirmed is not True:
@@ -1626,6 +1721,9 @@ def process_farm_targets(session, in_active_hours=True):
                     continue
                 if confirmed == "vacation":
                     _skip_vacation_target(t)
+                    continue
+                if confirmed == "blocked":
+                    _skip_blocked_target(t)
                     continue
                 if confirmed is None:
                     logger.info("[farm] %s: inactividade não confirmada em tempo real — "
@@ -1996,6 +2094,9 @@ def process_farm_targets(session, in_active_hours=True):
                 continue
             if confirmed == "vacation":
                 _skip_vacation_target(t)
+                continue
+            if confirmed == "blocked":
+                _skip_blocked_target(t)
                 continue
 
             res = _enqueue_attack(t, loot, enemy_ships, combat_ships)

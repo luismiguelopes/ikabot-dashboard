@@ -19,6 +19,7 @@ export interface FarmTarget {
   total_loot?: number; loot_returns?: number
   clean_sweeps?: number
   queue_pos?: number      // position in the order the bot really works the targets
+  port_blocked_by?: string | null  // foreign player whose fleet holds the port (farm leaves it alone)
   empty_returns?: number  // latest returns in a row that came home with nothing
 }
 export interface LootStat {
