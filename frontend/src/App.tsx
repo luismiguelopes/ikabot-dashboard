@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
-import { LangContext, loadLang, useT } from './i18n'
+import { LangContext, loadLang, useT, baseLang, setUiLang, LANGS } from './i18n'
 import { loadThresholds } from './utils'
 import { AUTO_REFRESH_SECONDS, MATERIALS } from './constants'
 import type { ApiData, AlertThresholds, CityResources } from './types'
@@ -126,10 +126,11 @@ function ErrorScreen({ message }: { message: string }) {
 export default function App() {
   const [lang, setLang] = useState(loadLang)
   // Keep the (non-React) apiAction helper's default error text in the active language.
-  useEffect(() => { setApiLang(lang as 'pt' | 'en') }, [lang])
-  const toggleLang = useCallback(() => {
+  useEffect(() => { setApiLang(baseLang(lang) as 'pt' | 'en'); setUiLang(lang) }, [lang])
+  const toggleLang = useCallback((target?: string) => {
     setLang(prev => {
-      const next = prev === 'en' ? 'pt' : 'en'
+      const i = LANGS.indexOf(prev as typeof LANGS[number])
+      const next = target ?? LANGS[(i + 1) % LANGS.length]
       try { localStorage.setItem('ikabot_lang', next) } catch {}
       return next
     })

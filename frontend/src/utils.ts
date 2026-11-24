@@ -1,9 +1,9 @@
-import { getLocale } from './i18n'
+import { getLocale, thousandsSep } from './i18n'
 
 export function fmt(n: number | string | null | undefined): string {
   const num = Number(n)
   if (n === null || n === undefined || isNaN(num)) return '—'
-  return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, thousandsSep())
 }
 
 export function fmtTime(hours: number | null): string {

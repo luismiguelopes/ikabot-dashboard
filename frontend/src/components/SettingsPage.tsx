@@ -14,7 +14,7 @@ import type { AlertThresholds } from '../types'
 export function SettingsPage({ thresholds, onSaveThresholds, toggleLang, defaultTab, onSaveDefaultTab, notifEnabled, onToggleNotif }: {
   thresholds: AlertThresholds
   onSaveThresholds: (t: AlertThresholds) => void
-  toggleLang: () => void
+  toggleLang: (target?: string) => void
   defaultTab: string
   onSaveDefaultTab: (tab: string) => void
   notifEnabled: boolean
