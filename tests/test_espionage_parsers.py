@@ -64,6 +64,33 @@ def test_safehouse_live_markup_free_slots_are_not_training():
     assert c["orderMax"] == 18
 
 
+# Brazilian server (br), trimmed from a live safehouse view (2026-11-24); the mission list
+# below the stats repeats "N estão em uso" per target, so the first match must win.
+_SAFEHOUSE_BR = """
+<div class="spy_stats_content">
+    <b>Pode treinar 35</b>
+    <ul class="disc-list">
+        <li>0 esperam por treino</li>
+        <li>6 estão trabalhando na defesa</li>
+        <li>29 estão em uso</li>
+    </ul>
+</div>
+<div class="contentBox01h"><h3 class="header">Espião em Missão</h3>
+<div class="spyinfo"><ul>
+    <li class="user"><a href="#">Player</a></li>
+    <li class="city"><a href="#">Town (10:20)</a></li>
+    <li class="spycount">6 estão em uso</li>
+</ul></div></div>
+"""
+
+
+def test_safehouse_br_markup():
+    """br wording: 'Pode treinar' and 'estão trabalhando na defesa'."""
+    c = em._parse_safehouse_page(_SAFEHOUSE_BR, "Cidade")
+    assert (c["trainable"], c["freeSlots"], c["inDefense"], c["deployed"]) == (35, 0, 6, 29)
+    assert c["inTraining"] == 0
+
+
 def test_safehouse_empty_html():
     counts = em._parse_safehouse_page("", "Cidade")
     assert all(v is None for v in counts.values())
