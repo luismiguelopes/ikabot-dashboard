@@ -269,7 +269,7 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
         losses, executeMission refused, report never arrived). These spies ARE known: seeing
         them in the safehouse must not register a "new manual spy" — that created a fresh
         synthetic mission on every hourly sync, and each one ran a warehouse inspection on
-        its own, outside the farm's control and on top of its backoff (Tróia 3, 15/11)."""
+        its own, outside the farm's control and on top of its backoff (target A, 15/11)."""
         return m.get("state") == "FAILED" and not _spy_pool_gone(m.get("error"))
 
     for entry in active_entries:
@@ -1209,7 +1209,7 @@ def _enemy_return_from_movements(html, city_name, now=None):
 
 # A spy reaches its target in minutes. One that is still not found in the safehouse after this much
 # ACTIVE time (downtime is discounted) was caught or lost; waiting longer only leaves the farm
-# target stuck in SPYING for hours (Indiota / Lançassolar / Porto Real sat 4-9h on 07/11).
+# target stuck in SPYING for hours (target C / target D / target E sat 4-9h on 07/11).
 _SPY_ARRIVAL_TIMEOUT_SECS = 3 * 3600
 
 
@@ -1922,7 +1922,7 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
     # view is per origin+target), so only the NEWEST mission of each origin tells whether that
     # pool is still alive: an older DONE from the same origin is superseded by a later capture
     # or recall. Among the live pools, the newest wins. Iterating in file order instead re-armed
-    # weeks-old ghosts first (Tróia 3, 09/11: three "espião desapareceu" in a row, round skipped,
+    # weeks-old ghosts first (target A, 09/11: three "espião desapareceu" in a row, round skipped,
     # while the previous evening's full sweep sat unused further down the list).
     newest_by_origin = {}
     for i, m in enumerate(missions):

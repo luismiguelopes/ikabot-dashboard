@@ -176,7 +176,7 @@ def _run_migrations(conn):
         # v13 = scout_fail_count: consecutive garrison scouts that came back rejected/without
         # fleet intel on a fleet target. The farm re-scouts instead of raiding blind while this
         # is non-zero, and skips the round once it hits the cap (troops bounce off an unscouted
-        # fleet — seen live at Lançassolar).
+        # fleet — seen live at target D).
         _add_column(conn, "ALTER TABLE farm_targets ADD COLUMN scout_fail_count INTEGER DEFAULT 0")
         conn.execute("INSERT INTO schema_version (version) VALUES (13)")
     if current < 14:
@@ -203,7 +203,7 @@ def _run_migrations(conn):
         # success + completed movements leg) through the farm's SPYING gate. "First contact"
         # used to be last_spy_at == 0, but last_spy_at is stamped at DISPATCH — a first scout
         # that failed left it non-zero and the target dropped straight into the direct-raid
-        # path without ever being swept (Esparta bounce, 10/11). swept_at is only ever written
+        # path without ever being swept (target G bounce, 10/11). swept_at is only ever written
         # by a verified sweep, so a direct raid now requires one. Backfill: a target whose
         # total_loot > 0 already passed the SPYING gate at least once (that path is the only
         # one that adds to total_loot) — keep it raidable; everything else re-sweeps once.
@@ -213,7 +213,7 @@ def _run_migrations(conn):
         conn.execute("INSERT INTO schema_version (version) VALUES (16)")
     if current < 17:
         # v17 = city ids on the logs, so the farm matches a return / a dispatch to its target
-        # by id instead of by name substring (names collide: "Castle-V" ⊂ "Castle-VII", and one
+        # by id instead of by name substring (names collide: "Town-V" ⊂ "Town-VII", and one
         # player owns several targets). Old rows keep '' and fall back to an exact name match.
         for ddl in (
             "ALTER TABLE loot_log ADD COLUMN from_city_id TEXT DEFAULT ''",
@@ -703,7 +703,7 @@ def farm_add(target):
 def _farm_real_loot(conn, targets):
     """Fill total_loot / loot_returns on each target dict from what actually came home
     (loot_log). The stored total_loot column summed the SCOUTED warehouse of every
-    spy-then-raid round — Tróia 3 showed 8.3M after 5 raids capped at ~207k each.
+    spy-then-raid round — target A showed 8.3M after 5 raids capped at ~207k each.
     A row is matched by city id; rows from before ids were logged (no from_city_id) fall back
     to the exact city name + player."""
     if not targets:

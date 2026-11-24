@@ -399,8 +399,8 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
       const pKey = `${p.playerId}_${p.islandX}_${p.islandY}`
       const ignoreKey = p.cityId ? `${p.playerId}_${p.cityId}` : pKey
       // An ENABLED farm target is never hidden: the ignore mark is keyed per player+island, so
-      // draining one city (Castle-V) auto-ignored every city of that owner on the island and hid
-      // Castle-VIV / Castle-VII while the farm was still raiding them.
+      // draining one city (Town-V) auto-ignored every city of that owner on the island and hid
+      // Town-VIV / Town-VII while the farm was still raiding them.
       const farmOn = !!(p.cityId && farmByCity[String(p.cityId)]?.enabled)
       if (!farmOn && (ignoredKeys.has(ignoreKey) || ignoredKeys.has(pKey))) {
         // Ignored (e.g. auto-ignored after the farm drained it): keep it out of the active list

@@ -132,7 +132,7 @@ def _collect_movements(session, city_id):
                     m["target"]["name"], m["target"]["avatarName"]
                 ),
                 # City ids let consumers (the farm) match a movement to a target EXACTLY —
-                # names collide ("Castle-V" ⊂ "Castle-VII") and one player owns many targets.
+                # names collide ("Town-V" ⊂ "Town-VII") and one player owns many targets.
                 "originCityId": str(m["origin"].get("cityId", "") or ""),
                 "targetCityId": str(m["target"].get("cityId", "") or ""),
                 "direction": "<-" if is_returning else "->",

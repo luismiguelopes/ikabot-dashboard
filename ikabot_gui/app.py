@@ -1425,7 +1425,7 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
 
     It does NOT seed any clean-port / fleet-free confirmation (P12.2): an old garrison report is
     a point-in-time snapshot and can read 0 ships while a fleet is merely out at sea and due
-    back, so trusting it to unlock a direct raid sent troops into a defended port (the Tróia 3
+    back, so trusting it to unlock a direct raid sent troops into a defended port (the target A
     bounce, 05/11). last_spy_at is left at 0 so the farm always runs its own first live full
     sweep (garrison + movements) before raiding a brand-new target; only a clean live sweep
     confirms it safe. Only fills fields still at 0: re-adding never overwrites measured
@@ -1477,7 +1477,7 @@ def _seed_farm_target_intel(city_id, island_x, island_y):
         # point-in-time snapshot — if the fleet was out at sea (raiding, or bounced out by another
         # attacker and still sailing back), the harbour read empty while a fleet was due home. A
         # seed that unlocked direct-attack on that basis sent troops into a defended port (the
-        # Tróia 3 bounce, 05/11). last_spy_at is left at 0 so the farm runs its OWN first live
+        # target A bounce, 05/11). last_spy_at is left at 0 so the farm runs its OWN first live
         # full sweep (garrison + movements) before ever raiding; only a clean live sweep confirms
         # a target safe. The loot/journey seed above stays — it only feeds ranking, not safety.
         if updates:

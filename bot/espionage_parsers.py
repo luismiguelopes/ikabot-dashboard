@@ -367,7 +367,7 @@ def _parse_reports_from_html(html):
                                  chunk, re.IGNORECASE))
 
         # Header fields, from a real capture of the tab (2026-11-14):
-        #   <td class="subject …">Recursos em Tróia 3</td>
+        #   <td class="subject …">Recursos em Alvo 1</td>
         #   <td class="resultImage"><img alt="Missão falhada!" …></td>
         #   <td class="lostAgents" …> 0 /4 </td>      (lost / sent)
         #   <td class="date" …>14.11.2026 13:33:43 </td>   (game-server clock)

@@ -184,7 +184,7 @@ export function DispatchPanel() {
         }))
     }
     // The world scan only covers islands within its radius, so it is NOT the full list of
-    // known targets: farm targets and spied cities further out (e.g. Tróia 3 once the radius
+    // known targets: farm targets and spied cities further out (e.g. target A once the radius
     // dropped 10 → 5) vanished from this search. Merge all three, scan first (it carries the
     // player state), de-duplicated by city id.
     const fromScan: DispatchTarget[] = scanPlayers.map(p => ({

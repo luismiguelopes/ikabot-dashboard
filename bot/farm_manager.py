@@ -538,7 +538,7 @@ def _skip_blocked_target(t):
 
 # ── Exact target matching ───────────────────────────────────────────────────────
 # Loot returns, dispatches and fleet movements used to be tied to a target by name SUBSTRING
-# (city OR player). That collides: "Castle-V" is inside "Castle-VII"/"Castle-VIII"/"Castle-VIV",
+# (city OR player). That collides: "Town-V" is inside "Town-VII"/"Town-VIII"/"Town-VIV",
 # and one player owns several targets — so with two raids in flight a target adopted another
 # target's return time / loot, which could even read as a naval bounce. Match by city id when
 # the record carries one; otherwise (older rows) by the exact city name plus the player.
@@ -573,7 +573,7 @@ def _is_target(t, city_id, city, player):
 def _target_loot_rows(t, limit):
     """Loot-log rows that came from this exact target, newest first."""
     # No name pre-filter in SQL: it would hide a renamed city's rows (same id, new name) and let
-    # same-named siblings ("Castle-VII" for "Castle-V") eat the row limit. Read the recent log
+    # same-named siblings ("Town-VII" for "Town-V") eat the row limit. Read the recent log
     # and match here; `limit` caps the rows RETURNED for this target.
     from db_manager import get_loot_log
     rows = [r for r in get_loot_log(limit=1000)
@@ -640,7 +640,7 @@ def _returned_since_scout(t):
 
 # ── Per-raid loot ceiling ─────────────────────────────────────────────────────
 # Seen live (07-09/11): EVERY raid comes home with ~206-207k whatever the ship count —
-# 6016 ships on Castle-VIII, 217 on Indiota, 1459 on Tróia 5 all returned ~207k. The game
+# 6016 ships on Town-VIII, 217 on target C, 1459 on target B all returned ~207k. The game
 # caps what one wave carries off (tied to the army sent), so sizing transporters on the
 # scouted warehouse (3.5M → ~6000 ships) only parked thousands of trade ships at sea for
 # nothing, starving the parallel slot and logistics for hours. When the recent returns
@@ -988,7 +988,7 @@ def _spy_is_stuck(t, now):
         # ANY live mission on the target counts, whenever it was dispatched: the farm may be
         # waiting on spies sent earlier (re-arming parked spies defers to a mission already
         # in flight). Counting only missions dispatched after this round began called that
-        # wait "stuck" and restarted the round every ~25 min (Tróia 3, 15/11).
+        # wait "stuck" and restarted the round every ~25 min (target A, 15/11).
         return not has_live_mission(t["target_city_id"], 0)
     except Exception:
         return False
@@ -1062,7 +1062,7 @@ def _never_swept(t):
     success + completed movements leg) through the SPYING gate. Deliberately NOT
     last_spy_at == 0: last_spy_at is stamped when a scout is DISPATCHED, so a first scout that
     failed left it non-zero and the target fell straight into the direct-raid path with no
-    sweep at all — unescorted troops bounced off the local fleet (Esparta, 10/11)."""
+    sweep at all — unescorted troops bounced off the local fleet (target G, 10/11)."""
     return int(t.get("swept_at", 0) or 0) == 0
 
 
@@ -1493,7 +1493,7 @@ def process_farm_targets(session, in_active_hours=True):
         # P12.2: the FIRST live scout of ANY target is a full sweep — garrison AND movements —
         # not just a garrison snapshot. A fleet out at sea (raiding, or bounced out by another
         # attacker and still sailing home) reads 0 ships in the harbour, so a garrison-only
-        # first scout would seal a defended port as "clean" (the Tróia 3 bounce, 05/11). The
+        # first scout would seal a defended port as "clean" (the target A bounce, 05/11). The
         # movements leg reveals any enemy fleet due back, so a target is confirmed safe only
         # once BOTH legs come back clean.
         first_contact = _never_swept(t)
@@ -1821,7 +1821,7 @@ def process_farm_targets(session, in_active_hours=True):
                     # re-arming spies every few minutes — that starves every other farm target
                     # (seen live: Jardim De Cima looped ~12h, Valíria/Braavos never ran). Past
                     # the cap, skip the round — each consecutive skipped round waits twice as
-                    # long (Tróia 3: warehouse failed 3× a day, every day) — and send FRESH
+                    # long (target A: warehouse failed 3× a day, every day) — and send FRESH
                     # spies next time instead of the parked ones.
                     kept = failure_kept_agents(failed)
                     fails = int(t.get("scout_fail_count", 0) or 0) + 1
@@ -1921,7 +1921,7 @@ def process_farm_targets(session, in_active_hours=True):
             # same as "scouted and saw an empty port". A report only confirms a clean port when
             # it actually COMPLETED ("completada com sucesso" → success=True); a success=False
             # report with an empty troops {} is a failed/suspect scout, NOT a clean port. Reading
-            # that {} as "0 enemy" sent unescorted troops into Tróia 3's fleet (06/11 bounce).
+            # that {} as "0 enemy" sent unescorted troops into target A's fleet (06/11 bounce).
             # (Imported reports carry no success key but are built only from successful reports
             # → default True.)
             garrison_known = (bool(gres.get("success", True))
@@ -1930,7 +1930,7 @@ def process_farm_targets(session, in_active_hours=True):
             # (needMovements) to catch a fleet that is out at sea and due back. If that leg never
             # ran (spy returned first → movementsResult is None), the port is NOT confirmed — a
             # patrolling fleet could still be out. Only a COMPLETED movements report (a dict,
-            # clean or carrying an ETA) confirms it. This was the second hole at Tróia 3.
+            # clean or carrying an ETA) confirms it. This was the second hole at target A.
             never_swept = _never_swept(t)
             movements_ok = ((m.get("movementsResult") is not None)
                             if (m.get("needMovements") or never_swept) else True)
@@ -1987,7 +1987,7 @@ def process_farm_targets(session, in_active_hours=True):
             # queued. The flag used to be written only with the queued waves: a sweep that saw
             # ships but had to hold the raid (slot busy, ships out) left a sealed sweep on a
             # "safe" target, and the next round took the safe shortcut — warehouse-only scout,
-            # troops-only wave into 22 warships (CT DO CAJU 16/11, stopped only by a lack of
+            # troops-only wave into 22 warships (target F 16/11, stopped only by a lack of
             # trade ships). Same for a target last seen with ships whose flag is unset for any
             # reason: a report without a garrison leg says nothing about that harbour.
             seen_ships = enemy_ships if garrison_known else 0
@@ -2006,8 +2006,8 @@ def process_farm_targets(session, in_active_hours=True):
             # troops sail: a completed garrison AND (when requested) a completed movements leg.
             # This fires for a fleet target, or ANY first-contact scout — both set needMovements.
             # A failed garrison (success=False) or a movements leg that never ran = incomplete
-            # intel; unescorted troops bounce off the local fleet and sail home empty (Lançassolar
-            # 29/10 "regressam porque perderiam num combate marítimo"; Tróia 3 06/11, troops sent
+            # intel; unescorted troops bounce off the local fleet and sail home empty (target D
+            # 29/10 "regressam porque perderiam num combate marítimo"; target A 06/11, troops sent
             # on a success=False garrison {} + null movements). Re-scout instead; after a few
             # straight failures skip the round rather than loop forever.
             needs_full_sweep = (int(t.get("is_fleet_target", 0)) == 1
