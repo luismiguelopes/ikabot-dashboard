@@ -23,8 +23,8 @@ def test_loot_message_names_city_player_and_island():
 
 
 def test_loot_message_skips_empty_resources_and_unknown_coords():
-    msg = tn.format_returned_loot("Tróia 3", "MARCOS LIMA", "Baphomet", [1000, 0, 0, 0, 0])
-    assert "Tróia 3 (MARCOS LIMA) → Baphomet" in msg
+    msg = tn.format_returned_loot("Target 3", "TARGET PLAYER", "Homeport", [1000, 0, 0, 0, 0])
+    assert "Target 3 (TARGET PLAYER) → Homeport" in msg
     assert "🍷" not in msg and "[" not in msg.split("\n")[1]
 
 

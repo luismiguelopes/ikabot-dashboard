@@ -108,10 +108,10 @@ def _movements(monkeypatch, tmp_path, rows):
 def test_return_eta_ignores_other_targets_of_the_same_player(monkeypatch, tmp_path):
     _movements(monkeypatch, tmp_path, [
         {"isOwn": True, "direction": "<-", "arrivalTime": 500,
-         "origin": "Home (Me)", "destination": "Tróia 5 (MARCOS LIMA)"},
+         "origin": "Home (Me)", "destination": "Target 5 (TARGET PLAYER)"},
     ])
-    t3 = {"target_city_id": "3", "target_city_name": "Tróia 3", "target_player": "MARCOS LIMA"}
-    t5 = {"target_city_id": "5", "target_city_name": "Tróia 5", "target_player": "MARCOS LIMA"}
+    t3 = {"target_city_id": "3", "target_city_name": "Target 3", "target_player": "TARGET PLAYER"}
+    t5 = {"target_city_id": "5", "target_city_name": "Target 5", "target_player": "TARGET PLAYER"}
     assert fm._real_return_eta(t3) is None
     assert fm._raid_in_flight(t3) is False
     assert fm._real_return_eta(t5) == 500

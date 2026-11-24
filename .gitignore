@@ -22,3 +22,8 @@ ikabot_gui/__pycache__/
 
 # Daily SQLite backups (P6.3)
 backups/
+
+# Internal planning notes (local only)
+PLANO.md
+FEATURES.md
+frontend/FEATURES.md

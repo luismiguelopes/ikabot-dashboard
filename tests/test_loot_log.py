@@ -19,7 +19,7 @@ def _setup(tmp_path):
 def test_log_and_get_loot(tmp_path):
     _setup(tmp_path)
     db_manager.log_loot({
-        "ts": 1000, "fromCity": "AlvoCity", "fromPlayer": "JogadorX", "toCity": "Baphomet",
+        "ts": 1000, "fromCity": "AlvoCity", "fromPlayer": "JogadorX", "toCity": "Homeport",
         "resources": [50000, 0, 12000, 0, 3000], "returnKey": "k1",
     })
     log = db_manager.get_loot_log()

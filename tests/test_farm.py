@@ -301,7 +301,7 @@ def test_movements_eta_feeds_enemy_return_at(monkeypatch, tmp_path):
 def test_first_contact_scout_requests_movements(monkeypatch, tmp_path):
     """P12.2: the FIRST live scout of a target (last_spy_at=0) is a full sweep — garrison AND
     movements — not just a garrison snapshot, so a fleet out at sea is caught before the target
-    is ever trusted as safe (the Tróia 3 bounce, 05/11)."""
+    is ever trusted as safe (the Target 3 bounce, 05/11)."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Novo", "islandX": 48, "islandY": 44,
                          "islandId": "7", "minLoot": 30000, "respyEvery": 3})
@@ -325,7 +325,7 @@ def test_clean_garrison_but_returning_fleet_marks_fleet_target(monkeypatch, tmp_
     _setup_db(tmp_path)
     now = int(time.time())
     eta = now + 10000           # fleet back in ~2.7h — troops land & return well before
-    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia X", "islandX": 40, "islandY": 50,
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Target X", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
     db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
                                    "is_fleet_target": 0, "last_troop_journey": 600,
@@ -347,11 +347,11 @@ def test_clean_garrison_but_returning_fleet_marks_fleet_target(monkeypatch, tmp_
 
 
 def test_fleet_target_failed_garrison_not_attacked(monkeypatch, tmp_path):
-    """Tróia 3 06/11: a FLEET target whose garrison report came back success=False with an
+    """Target 3 06/11: a FLEET target whose garrison report came back success=False with an
     empty troops {} must NOT be raided — a failed scout is not a confirmed clean port. The bot
     re-scouts instead of sending unescorted troops into the local fleet."""
     _setup_db(tmp_path)
-    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Target 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
     db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1})
     missions = [{
@@ -375,9 +375,9 @@ def test_fleet_target_failed_garrison_not_attacked(monkeypatch, tmp_path):
 def test_fleet_target_movements_not_run_not_attacked(monkeypatch, tmp_path):
     """A FLEET target with a CLEAN garrison but whose movements leg never ran (spy returned
     first → movementsResult=None) is NOT confirmed clean: a fleet could be out at sea. The bot
-    re-scouts rather than raid on half a sweep (second Tróia 3 hole)."""
+    re-scouts rather than raid on half a sweep (second Target 3 hole)."""
     _setup_db(tmp_path)
-    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Target 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
     db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1})
     missions = [{
@@ -423,7 +423,7 @@ def test_full_clean_sweep_fleet_target_still_attacks(monkeypatch, tmp_path):
     troops AND a completed movements report showing no returning fleet — IS raided directly.
     The guard blocks only incomplete sweeps, never a confirmed-clean one."""
     _setup_db(tmp_path)
-    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Tróia 3", "islandX": 41, "islandY": 43,
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Target 3", "islandX": 41, "islandY": 43,
                          "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
     db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000, "is_fleet_target": 1,
                                    "enemy_return_at": 0})
@@ -773,7 +773,7 @@ def test_drained_by_real_return_respies_not_direct(monkeypatch, tmp_path):
                                    "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
-                         "toCity": "Baphomet", "resources": [3000, 2101, 0, 0, 0], "returnKey": "k1"})
+                         "toCity": "Homeport", "resources": [3000, 2101, 0, 0, 0], "returnKey": "k1"})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
@@ -794,7 +794,7 @@ def test_healthy_real_return_still_direct_attacks(monkeypatch, tmp_path):
                                    "last_enemy_ships": 0, "raids_since_spy": 1, "last_spy_at": int(time.time()), "swept_at": 1,
                                    "is_fleet_target": 0, "last_attack_at": now - 100})
     db_manager.log_loot({"ts": now - 10, "fromCity": "Pais da Grama", "fromPlayer": "Pacheco III",
-                         "toCity": "Baphomet", "resources": [100000, 0, 0, 0, 0], "returnKey": "k1"})
+                         "toCity": "Homeport", "resources": [100000, 0, 0, 0, 0], "returnKey": "k1"})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
@@ -1089,7 +1089,7 @@ def test_no_ships_schedules_for_real_return(monkeypatch, tmp_path):
     arrival = now + 3600
     with open(tmp_path / "movements.json", "w") as f:
         json.dump([{"isOwn": True, "direction": "<-", "arrivalTime": arrival,
-                    "origin": "Baphomet (Vempire)",
+                    "origin": "Homeport (PlayerOne)",
                     "destination": "Δ The Rock Δ (Cap Almighty)"}], f)
 
     fm.process_farm_targets(session=object(), in_active_hours=True)
@@ -1424,7 +1424,7 @@ def test_drained_by_estimate_respies_even_if_last_return_healthy(monkeypatch, tm
     # four healthy returns since the scout summing to 260k → est = 8k (< 50k); newest is 60k (healthy)
     for i, amt in enumerate([70000, 70000, 60000, 60000]):
         db_manager.log_loot({"ts": now - 40 + i, "fromCity": "Pais da Grama", "fromPlayer": "P",
-                             "toCity": "Baphomet", "resources": [amt, 0, 0, 0, 0], "returnKey": "k%d" % i})
+                             "toCity": "Homeport", "resources": [amt, 0, 0, 0, 0], "returnKey": "k%d" % i})
     added = _common_patches(monkeypatch, tmp_path)
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
 
@@ -1579,7 +1579,7 @@ def test_clean_failure_waits_for_the_risk_to_decay(monkeypatch, tmp_path):
 
 def test_skipped_scout_rounds_back_off_exponentially(monkeypatch, tmp_path):
     """P13.63: every consecutive round skipped for failed scouts doubles the wait (capped),
-    instead of three more attempts every interval forever (Tróia 3)."""
+    instead of three more attempts every interval forever (Target 3)."""
     _setup_db(tmp_path)
     db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40, "islandY": 50,
                          "islandId": "7", "minLoot": 30000, "intervalHours": 3})
@@ -2016,11 +2016,11 @@ def test_not_hardcoded_to_one_city(monkeypatch, tmp_path):
     """Same rule, army elsewhere: when the units are in another city, THAT city is used."""
     _setup_db(tmp_path)
     added = _common_patches(monkeypatch, tmp_path, missions=_spying_target_with_clean_report())
-    _cities_setup(tmp_path, {"Polis": {"s305": 3}, "Baphomet": {"s303": 140, "s305": 22}})
+    _cities_setup(tmp_path, {"Polis": {"s305": 3}, "Homeport": {"s303": 140, "s305": 22}})
     monkeypatch.setattr(fm, "get_farm_army", lambda: {"s303": 140, "s305": 22})
     monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
     fm.process_farm_targets(session=object(), in_active_hours=True)
-    assert _army_items(added)[0]["originCityName"] == "Baphomet"
+    assert _army_items(added)[0]["originCityName"] == "Homeport"
 
 
 def test_stale_cache_does_not_hide_the_army(monkeypatch, tmp_path):
@@ -2471,7 +2471,7 @@ def test_total_loot_comes_from_the_loot_log(monkeypatch, tmp_path):
 def test_waiting_on_spies_sent_earlier_is_not_a_stuck_round(monkeypatch):
     """Re-arming parked spies defers to a mission already in flight — one dispatched BEFORE
     this round began. That wait used to be read as "the spy never left" and the round was
-    restarted every ~25 minutes (Tróia 3, 15/11)."""
+    restarted every ~25 minutes (Target 3, 15/11)."""
     import espionage_manager as em
     now = int(time.time())
     missions = [{"state": "TRAVELING", "targetCityId": "100", "dispatchedAt": now - 2 * 3600}]

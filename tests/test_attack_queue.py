@@ -196,12 +196,12 @@ def test_failed_dispatch_removed_after_third_attempt(monkeypatch, tmp_path):
 def test_log_attack_roundtrip(tmp_path):
     _setup_db(tmp_path)
     db_manager.log_attack({
-        "originCity": "Baphomet", "targetCity": "AlvoCity", "targetPlayer": "JogadorX",
+        "originCity": "Homeport", "targetCity": "AlvoCity", "targetPlayer": "JogadorX",
         "islandX": 43, "islandY": 57, "missionType": "army", "targetType": "enemy",
         "source": "manual", "units": {"303": 100}, "transporters": 50, "success": True,
     })
     db_manager.log_attack({
-        "originCity": "Baphomet", "targetCity": "OutraCity", "targetPlayer": "JogadorY",
+        "originCity": "Homeport", "targetCity": "OutraCity", "targetPlayer": "JogadorY",
         "missionType": "fleet", "success": False, "error": "types=[11]",
     })
     log = db_manager.get_attack_log()
@@ -226,7 +226,7 @@ def test_process_attack_queue_writes_log(monkeypatch, tmp_path):
     _setup_db(tmp_path)
     now = int(time.time())
     _add_attacks([{"id": "due1", "dispatchAfter": now - 10, "missionType": "army",
-                   "originCityName": "Baphomet", "targetCityName": "AlvoCity",
+                   "originCityName": "Homeport", "targetCityName": "AlvoCity",
                    "targetPlayerName": "JogadorX", "units": {"303": 10}}])
     monkeypatch.setattr(am, "_dispatch_attack", lambda s, i: True)
 
@@ -234,7 +234,7 @@ def test_process_attack_queue_writes_log(monkeypatch, tmp_path):
 
     log = db_manager.get_attack_log()
     assert len(log) == 1
-    assert log[0]["origin_city"] == "Baphomet"
+    assert log[0]["origin_city"] == "Homeport"
     assert log[0]["target_player"] == "JogadorX"
     assert log[0]["source"] == "manual"
     assert log[0]["success"] is True

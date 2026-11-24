@@ -520,7 +520,7 @@ def test_sync_does_not_duplicate_known_stationed_spies(monkeypatch):
 
 
 def test_sync_does_not_reregister_spies_parked_after_a_failed_mission(monkeypatch):
-    """Tróia 3, 15/11: the parked spy's last mission was FAILED with every agent kept. Each
+    """Target 3, 15/11: the parked spy's last mission was FAILED with every agent kept. Each
     hourly safehouse sync then took it for a new manual spy, created a synthetic mission and
     ran a warehouse inspection on its own — outside the farm's control, during its backoff."""
     h = _patch(monkeypatch, [
@@ -581,7 +581,7 @@ def test_reexecute_waits_when_another_mission_for_target_is_active(monkeypatch):
 
 
 def test_reexecute_prefers_newest_pool_over_older_ghost(monkeypatch):
-    """Tróia 3 (09/11): an old mission listed first in the file must not be re-armed ahead of
+    """Target 3 (09/11): an old mission listed first in the file must not be re-armed ahead of
     the previous evening's full sweep from another origin — the newest live pool wins."""
     old = _mission(state="DONE", originCityId="1", dispatchedAt=1000)
     new = _mission(state="DONE", originCityId="2", dispatchedAt=5000)

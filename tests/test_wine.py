@@ -115,7 +115,7 @@ def test_emptied_city_never_donates(monkeypatch, tmp_path):
     """A non-consuming city is never used as a source — the old code treated runway -1
     as a 'producer' and could ship away the last drops of an already-dry city."""
     resources = {
-        "Vampiria": _city(292, 292 * 8),         # needy, still draining
+        "Dryport": _city(292, 292 * 8),         # needy, still draining
         "Emperor":  _emptied(5000),              # cons 0, prod 0 — must NOT be drained
     }
     sent, _ = _run(monkeypatch, tmp_path, resources)
