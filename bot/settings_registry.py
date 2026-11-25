@@ -158,6 +158,9 @@ SPECS = {
             # espionage_manager.spy_odds): the smallest loadout reaching this success chance.
             "spyTargetSuccess":       _int(90, 50, 99),
             "spyMaxDecoys":           _int(2, 0, 10),     # 0 = never use decoys
+            # The movements leg is not rolled below this success (0 = always run it): it costs
+            # half the pool when it fails, and the farm skips the round instead.
+            "spyMinMovementsSuccess": _int(60, 0, 99),
         },
     },
     "world_scan": {
