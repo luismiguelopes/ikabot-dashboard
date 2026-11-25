@@ -33,6 +33,11 @@ keep it private.
 
 ### Before opening a PR
 
+Install the test dependencies with `pip install -r requirements-dev.txt`, and clone the
+upstream [ikabot](https://github.com/Ikabot-Collective/ikabot) into `./ikabot` (the tag CI uses
+is `IKABOT_REF` in `.github/workflows/ci.yml`). CI runs the same checks on every pull request,
+and a PR can only be merged once they pass.
+
 - **Tests pass**: `python -m pytest tests/ -q` (`pytest.ini` already sets the paths).
 - **No new lint errors**: run `pyflakes` on the Python modules you touched.
 - **Frontend builds**: `cd frontend && npm run build` (this also runs the TypeScript check).
