@@ -81,6 +81,21 @@ def test_espionage_settings_roundtrip_with_min_loot(monkeypatch, tmp_path):
     assert d["garrisonThresholdTotal"] == 15000 and d["minLootTotal"] == 60000
 
 
+def test_espionage_loadout_settings_saved_apart_and_clamped(monkeypatch, tmp_path):
+    """The decoy card posts only its own keys; the thresholds card's values stay, and the
+    registry limits apply (success 50-99, decoys 0-10)."""
+    c = _client(monkeypatch, tmp_path)
+    d = c.get("/api/espionage/settings").get_json()
+    assert d["spyTargetSuccess"] == 90 and d["spyMaxDecoys"] == 2
+    c.post("/api/espionage/settings", json={"garrisonThresholdTotal": 15000})
+    r = c.post("/api/espionage/settings", json={"spyTargetSuccess": 95, "spyMaxDecoys": 0}).get_json()
+    assert r["settings"]["spyTargetSuccess"] == 95 and r["settings"]["spyMaxDecoys"] == 0
+    assert r["settings"]["garrisonThresholdTotal"] == 15000
+    d = c.post("/api/espionage/settings", json={"spyTargetSuccess": 150,
+                                                "spyMaxDecoys": 50}).get_json()["settings"]
+    assert d["spyTargetSuccess"] <= 99 and d["spyMaxDecoys"] <= 10
+
+
 # ── /api/travel-calibration (P6.7) ───────────────────────────────────────────
 
 def test_travel_calibration_empty_then_served(monkeypatch, tmp_path):

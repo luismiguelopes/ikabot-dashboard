@@ -14,6 +14,8 @@ interface EspionageSettings {
   ignoreExpiryDays?: number
   ignorePermanentAfter?: number
   missionRetentionDays?: number
+  spyTargetSuccess?: number
+  spyMaxDecoys?: number
 }
 
 // Same defaults as the server (app.py `_DEFAULT_ESPIONAGE_SETTINGS` / `_auto_mark_ignored`).
@@ -146,7 +148,58 @@ function ThresholdsCard() {
         </div>
       </Card>
       <div className="flex items-center gap-3">
-        <SaveButton onClick={() => settings.save({ ...s, ...v })} saving={settings.saving} />
+        {/* Only this card's keys: the loadout card saves the rest of the same file. */}
+        <SaveButton onClick={() => settings.save(pick(v, Object.keys(DEFAULTS)) as EspionageSettings)} saving={settings.saving} />
+        <SavedBadge show={settings.saved} />
+      </div>
+    </>
+  )
+}
+
+function pick<T extends object>(obj: T, keys: string[]): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => keys.includes(k))) as Partial<T>
+}
+
+// Same defaults and limits as the server (settings_registry "espionage").
+const LOADOUT_DEFAULTS = { spyTargetSuccess: 90, spyMaxDecoys: 2 }
+
+function LoadoutCard() {
+  const t = useT()
+  const settings = useSettings<EspionageSettings>('/api/espionage/settings')
+  const s = settings.data
+  if (!s) return null
+  const v = {
+    spyTargetSuccess: s.spyTargetSuccess ?? LOADOUT_DEFAULTS.spyTargetSuccess,
+    spyMaxDecoys: s.spyMaxDecoys ?? LOADOUT_DEFAULTS.spyMaxDecoys,
+  }
+  return (
+    <>
+      <Card>
+        <div className="px-5 py-4">
+          <CardTitle icon="fa-masks-theater text-indigo-400" className="mb-1">{t('spy_loadout_title')}</CardTitle>
+          <p className="text-xs text-slate-400 mb-4">{t('spy_loadout_desc')}</p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3">
+              <span className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('spy_target_success_label')}</span>
+              <NumberField value={v.spyTargetSuccess} min={50} max={99} size="lg" className="w-20"
+                onCommit={x => settings.set({ spyTargetSuccess: x })} />
+              <span className="text-[10px] text-slate-400">%</span>
+            </label>
+            <label className="flex items-center gap-3">
+              <span className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('spy_max_decoys_label')}</span>
+              <NumberField value={v.spyMaxDecoys} min={0} max={10} size="lg" className="w-20"
+                onCommit={x => settings.set({ spyMaxDecoys: x })} />
+              <span className="text-[10px] text-slate-400">{t('spy_max_decoys_hint')}</span>
+            </label>
+            <div className="bg-slate-50 rounded-lg px-3 py-2.5 space-y-1">
+              <p className="text-[11px] text-slate-500">{t('spy_decoy_cost_hint')}</p>
+              <p className="text-[11px] text-slate-500">{t('spy_decoy_budget_hint')}</p>
+            </div>
+          </div>
+        </div>
+      </Card>
+      <div className="flex items-center gap-3">
+        <SaveButton onClick={() => settings.save(v)} saving={settings.saving} />
         <SavedBadge show={settings.saved} />
       </div>
     </>
@@ -157,6 +210,7 @@ export function EspionagemTab() {
   return (
     <div className="grid gap-4 max-w-lg">
       <SpyDefaultsCard />
+      <LoadoutCard />
       <ThresholdsCard />
       <WatchlistCard />
     </div>
