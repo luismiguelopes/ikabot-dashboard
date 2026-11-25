@@ -358,26 +358,16 @@ def scan_next_island(session):
 WATCHLIST_SETTINGS_PATH = os.path.join(LOGS_DIR, "watchlist_settings.json")
 WATCHLIST_STATE_PATH    = os.path.join(LOGS_DIR, "watchlist_state.json")
 _WORLD_SCAN_PATH        = os.path.join(LOGS_DIR, "world_scan.json")
-_DEFAULT_WATCHLIST = {"enabled": False, "intervalHours": 12}
 
 
 def get_watchlist_settings():
-    try:
-        with open(WATCHLIST_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_WATCHLIST.items():
-            s.setdefault(k, v)
-        return s
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(_DEFAULT_WATCHLIST)
+    # type, default and limits are declared once in settings_registry
+    return settings_registry.load("watchlist", WATCHLIST_SETTINGS_PATH)
 
 
 def save_watchlist_settings(data):
-    s = {"enabled": bool(data.get("enabled", False)),
-         "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    atomic_write_json(WATCHLIST_SETTINGS_PATH, s, indent=2)
-    return s
+    """Merge: a key that is not sent keeps what is stored."""
+    return settings_registry.update("watchlist", data, WATCHLIST_SETTINGS_PATH)
 
 
 def _scan_one_island(session, island_id, x, y, own_cities, resource_type=0):

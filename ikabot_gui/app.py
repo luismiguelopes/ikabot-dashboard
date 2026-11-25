@@ -1743,28 +1743,18 @@ def api_alert_settings_post():
 
 
 WATCHLIST_SETTINGS_PATH = os.path.join(LOGS_DIR, "watchlist_settings.json")
-_DEFAULT_WATCHLIST = {"enabled": False, "intervalHours": 12}
 
 
 @app.route("/api/watchlist")
 def api_watchlist_get():
-    try:
-        with open(WATCHLIST_SETTINGS_PATH) as f:
-            s = json.load(f)
-        for k, v in _DEFAULT_WATCHLIST.items():
-            s.setdefault(k, v)
-    except (FileNotFoundError, json.JSONDecodeError):
-        s = dict(_DEFAULT_WATCHLIST)
-    return jsonify(s)
+    return jsonify(settings_registry.load("watchlist", WATCHLIST_SETTINGS_PATH))
 
 
 @app.route("/api/watchlist", methods=["POST"])
 def api_watchlist_post():
     data = request.get_json(silent=True) or {}
-    s = {"enabled": bool(data.get("enabled", False)),
-         "intervalHours": max(1, min(168, int(data.get("intervalHours", 12))))}
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    _atomic_write_json(WATCHLIST_SETTINGS_PATH, s, indent=2)
+    # Merge (it used to rebuild the file: a save without intervalHours reset it to 12).
+    s = settings_registry.update("watchlist", data, WATCHLIST_SETTINGS_PATH)
     return jsonify({"status": "ok", "settings": s})
 
 

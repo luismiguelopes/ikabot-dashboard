@@ -170,6 +170,13 @@ SPECS = {
             "radius":  _int(_env_scan_radius, 1, 60),     # default: WORLD_SCAN_RADIUS env, else 10
         },
     },
+    "watchlist": {                                        # periodic re-scan of "alvo"-marked islands
+        "file": "watchlist_settings.json",
+        "fields": {
+            "enabled":       _bool(False),
+            "intervalHours": _int(12, 1, 168),
+        },
+    },
     "alerts": {
         "file": "alert_settings.json",
         "fields": {

@@ -61,6 +61,20 @@ def test_settings_defaults_and_save(tmp_path, monkeypatch):
     assert sc.get_watchlist_settings()["enabled"] is True
 
 
+def test_settings_read_junk_and_out_of_range_values(tmp_path, monkeypatch):
+    p = tmp_path / "ws.json"
+    monkeypatch.setattr(sc, "WATCHLIST_SETTINGS_PATH", str(p))
+    p.write_text(json.dumps({"enabled": True, "intervalHours": "abc"}))
+    assert sc.get_watchlist_settings() == {"enabled": True, "intervalHours": 12}
+    p.write_text(json.dumps({"enabled": True, "intervalHours": 500}))
+    assert sc.get_watchlist_settings()["intervalHours"] == 168
+    p.write_text("{broken")
+    assert sc.get_watchlist_settings() == {"enabled": False, "intervalHours": 12}
+    # a save keeps what it is not sent
+    sc.save_watchlist_settings({"enabled": False, "intervalHours": 6})
+    assert sc.save_watchlist_settings({"enabled": True}) == {"enabled": True, "intervalHours": 6}
+
+
 def test_disabled_does_nothing(tmp_path):
     _setup(tmp_path, {"enabled": False, "intervalHours": 12}, {}, {"players": [], "islands": []})
     calls = []

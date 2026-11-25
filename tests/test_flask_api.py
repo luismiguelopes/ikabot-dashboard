@@ -968,6 +968,22 @@ def test_farm_settings_api_stores_the_three_settings_that_had_no_way_in(monkeypa
     assert d["spyFreshnessHours"] == 12 and d["army"] == {"303": 200} and d["spyAgents"] == 4
 
 
+def test_watchlist_settings_save_merges(monkeypatch, tmp_path):
+    """A save used to rebuild the file: a POST without intervalHours reset it to 12, and a
+    value that was not a number answered 500."""
+    c = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(flask_app, "WATCHLIST_SETTINGS_PATH", str(tmp_path / "watchlist_settings.json"))
+    assert c.get("/api/watchlist").get_json() == {"enabled": False, "intervalHours": 12}
+    c.post("/api/watchlist", json={"enabled": False, "intervalHours": 8})
+    r = c.post("/api/watchlist", json={"enabled": True})
+    assert r.status_code == 200 and r.get_json()["settings"] == {"enabled": True, "intervalHours": 8}
+    r = c.post("/api/watchlist", json={"intervalHours": "abc"})
+    assert r.status_code == 200 and r.get_json()["settings"]["intervalHours"] == 8
+    assert c.post("/api/watchlist", json={"intervalHours": 999}).get_json()["settings"]["intervalHours"] == 168
+    assert c.post("/api/watchlist", json={"intervalHours": 0}).get_json()["settings"]["intervalHours"] == 1
+    assert c.get("/api/watchlist").get_json() == {"enabled": True, "intervalHours": 1}
+
+
 def test_alert_settings_save_keeps_what_is_not_sent(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(flask_app, "ALERT_SETTINGS_PATH", str(tmp_path / "alert_settings.json"))
