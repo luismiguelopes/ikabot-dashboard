@@ -1,0 +1,5 @@
+# Test and lint dependencies (CI and local development).
+# The bot itself runs from the pinned Docker image; see docker-compose.yml.
+flask==3.1.3
+pytest==9.0.3
+pyflakes==4.1.0

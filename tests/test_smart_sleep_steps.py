@@ -54,13 +54,16 @@ def test_fatal_exits_are_not_swallowed(monkeypatch, tmp_path):
 
 def test_broken_due_check_means_no_work_but_is_reported(monkeypatch, caplog):
     monkeypatch.setattr(qp._is_due, "_logged", {})
+    # Attach caplog's handler straight to the bot logger (which does not propagate) instead
+    # of toggling propagation: newer pytest also attaches it to the named logger, so
+    # propagating would capture each record twice.
     with caplog.at_level("WARNING", logger="ikabot"):
-        eu.logger.propagate = True
+        eu.logger.addHandler(caplog.handler)
         try:
             assert qp._is_due("farm", lambda: 1 / 0) is False
             assert qp._is_due("farm", lambda: 1 / 0) is False      # second one is throttled
         finally:
-            eu.logger.propagate = False
+            eu.logger.removeHandler(caplog.handler)
     assert sum("verificação" in r.getMessage() for r in caplog.records) == 1
     assert qp._is_due("farm", lambda: True) is True
 
