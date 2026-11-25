@@ -764,9 +764,21 @@ def apply_ship_reserve(ships_available, label, now=None):
     return usable
 
 
-def _pick_spy_origin(own_cities, spy_counts, target, want=1):
+def _movements_decoys_ok(city):
+    """True when `city` can pay the decoys the movements leg would use (sulfur, read locally)."""
+    try:
+        from espionage_manager import decoys_affordable, MISSION_MOVEMENTS, _load_espionage_settings
+        wanted = int(_load_espionage_settings().get("spyMaxDecoys", 2))
+        return wanted > 0 and decoys_affordable(city.get("cityId"), MISSION_MOVEMENTS, wanted) >= wanted
+    except Exception:
+        return False
+
+
+def _pick_spy_origin(own_cities, spy_counts, target, want=1, need_movements=False):
     """Closest own city that has a safehouse and spies available to send — preferring one that
-    can field all `want` spies (a short scout runs every leg on worse odds).
+    can field all `want` spies (a short scout runs every leg on worse odds), then, when the scout
+    reads movements, one that can pay that leg's decoys: without them the leg is a coin flip
+    that costs half the pool (target J, 25/11: 49% from a city with no sulfur).
 
     Ties on distance (all own cities often share one island, hence identical
     coordinates) go to the city with the MOST spies at home — never just the first in
@@ -785,7 +797,8 @@ def _pick_spy_origin(own_cities, spy_counts, target, want=1):
         if not avail or avail <= 0:
             continue
         d = (c.get("x", 0) - tx) ** 2 + (c.get("y", 0) - ty) ** 2
-        key = (int(avail) < want, d, -int(avail))
+        no_decoys = bool(need_movements) and not _movements_decoys_ok(c)
+        key = (int(avail) < want, no_decoys, d, -int(avail))
         if best_key is None or key < best_key:
             best_key, best = key, c
     return best
@@ -1596,7 +1609,8 @@ def process_farm_targets(session, in_active_hours=True):
                                        min_agents=_min_stationed_pool(spy_agents)):
                 _adopt_estimate()
                 return "stationed"
-        origin = _pick_spy_origin(own_cities, spy_counts, t, want=spy_agents)
+        origin = _pick_spy_origin(own_cities, spy_counts, t, want=spy_agents,
+                                  need_movements=need_movements)
         if not origin:
             return None
         queue_add("spy_dispatch", {
@@ -2124,6 +2138,13 @@ def process_farm_targets(session, in_active_hours=True):
             if needs_full_sweep and not (garrison_known and movements_ok):
                 tries = int(t.get("scout_fail_count", 0)) + 1
                 why = ("guarnição rejeitada" if not garrison_known else "movimentos não corridos")
+                if garrison_known and m.get("movementsSkipped") == "low_odds":
+                    # The movements leg was held back on poor odds. Re-scouting at once only
+                    # helps if some city can send spies WITH decoys; otherwise skip the round.
+                    why = "hipóteses dos movimentos abaixo do mínimo"
+                    if not any(_movements_decoys_ok(c) and c.get("safehousePosition") is not None
+                               for c in own_cities):
+                        tries = _MAX_SCOUT_FAILS
                 if tries >= _MAX_SCOUT_FAILS:
                     rounds, wait = _scout_round_backoff(t, interval)
                     farm_update(tid, {"state": "IDLE", "next_run_at": now + wait,

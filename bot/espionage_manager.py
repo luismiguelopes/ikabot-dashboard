@@ -976,11 +976,29 @@ def _decoys_affordable(origin_id, params, mission_type, wanted):
     return n
 
 
+# Decoy costs when no view of the origin has been read yet (the spyMissions view carries the
+# real ones): warehouse 100 gold, garrison 70 wine, movements 100 sulfur.
+_DEFAULT_DECOY_PARAMS = {
+    "cGold": 5, "cEspionageDecoy": 301,
+    "missionData": {"5": {"301": {"5": 100}}, "6": {"301": {"1": 70}}, "7": {"301": {"4": 100}}},
+}
+
+
+def decoys_affordable(origin_id, mission_type, wanted):
+    """How many of `wanted` decoys `origin_id` can pay for on `mission_type`, with the costs of
+    the last view read from that origin (or the known defaults). No request."""
+    params = next((p for (o, _t), p in _view_params.items() if o == str(origin_id)
+                   and str(mission_type) in (p.get("missionData") or {})), None)
+    return _decoys_affordable(origin_id, params or _DEFAULT_DECOY_PARAMS, mission_type, wanted)
+
+
 def _mission_loadout(m, spy_count, mission_type, leg):
-    """(agents, decoys) for this leg. Never more spies than the game says are stationed
-    (spy_count = the slider max) — asking for more is what it flags as cheating. With the
-    view's odds, the smallest loadout reaching the target success (decoys only if the origin
-    can pay for them); without them, the mission's agents capped to what is there."""
+    """(agents, decoys, success %) for this leg. Never more spies than the game says are
+    stationed (spy_count = the slider max) — asking for more is what it flags as cheating.
+    With the view's odds, the smallest loadout reaching the target success (decoys only if the
+    origin can pay for them), and the plan is kept on the mission (legOdds) so a re-run can
+    tell whether a smaller pool would do worse; without odds, the mission's agents capped to
+    what is there and success None."""
     want = max(1, int(m.get("numAgents") or 1))
     params = _view_params.get((str(m.get("originCityId")), str(m.get("targetCityId"))))
     plan = None
@@ -995,12 +1013,15 @@ def _mission_loadout(m, spy_count, mission_type, leg):
         logger.info("[espionage] %s: %s com %d agente(s)%s — sucesso %d%%, risco %.1f%% "
                     "(%d estacionado(s))", m.get("targetCityName", "?"), leg, agents,
                     (" + %d isca(s)" % decoys) if decoys else "", round(success), risk, spy_count)
-        return agents, decoys
+        odds = dict(m.get("legOdds") or {})
+        odds[str(mission_type)] = {"success": round(success), "stationed": int(spy_count)}
+        m["legOdds"] = odds
+        return agents, decoys, success
     if spy_count >= want:
-        return want, 0
+        return want, 0, None
     logger.warning("[espionage] %s: %s com %d agente(s) em vez de %d — só %d estacionado(s)",
                    m.get("targetCityName", "?"), leg, spy_count, want, spy_count)
-    return spy_count, 0
+    return spy_count, 0, None
 
 
 def _alert_cheat_flag(m, leg):
@@ -1593,7 +1614,7 @@ def execute_waiting_missions(session):
         missions[i]["reportBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
-        agents, decoys = _mission_loadout(m, spy_count, MISSION_WAREHOUSE, "armazém")
+        agents, decoys, _success = _mission_loadout(m, spy_count, MISSION_WAREHOUSE, "armazém")
         ok, reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
             spy_id, agents, MISSION_WAREHOUSE, num_decoys=decoys,
@@ -1841,7 +1862,7 @@ def execute_garrison_missions(session):
         missions[i]["garrisonBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
-        agents, decoys = _mission_loadout(m, spy_count, MISSION_GARRISON, "guarnição")
+        agents, decoys, _success = _mission_loadout(m, spy_count, MISSION_GARRISON, "guarnição")
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
             spy_id, agents, MISSION_GARRISON, num_decoys=decoys,
@@ -2027,11 +2048,26 @@ def execute_movements_missions(session):
             changed = True
             continue
 
+        agents, decoys, success = _mission_loadout(m, spy_count, MISSION_MOVEMENTS, "movimentos")
+        floor = int(_load_espionage_settings().get("spyMinMovementsSuccess", 60) or 0)
+        if success is not None and success < floor:
+            # The lowest-odds leg (20% a spy, no decoys without sulfur at the origin): a coin
+            # flip that costs half the pool when it fails (target J, 25/11: 10 → 5 → 2 in
+            # 11 minutes). Don't roll it — the sweep stays incomplete, the spies stay stationed,
+            # and the farm skips the round instead of re-scouting into the same odds.
+            missions[i]["state"] = "DONE"
+            missions[i]["movementsSkipped"] = "low_odds"
+            logger.warning("[espionage] %s: movimentos não executados — sucesso %d%% abaixo do "
+                           "mínimo de %d%% (espiões ficam estacionados)",
+                           m["targetCityName"], round(success), floor)
+            changed = True
+            continue
+        missions[i]["movementsSkipped"] = None
+
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
         missions[i]["movementsBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
-        agents, decoys = _mission_loadout(m, spy_count, MISSION_MOVEMENTS, "movimentos")
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
             spy_id, agents, MISSION_MOVEMENTS, num_decoys=decoys,
@@ -2190,6 +2226,45 @@ def _garrison_leg_ok(m, now):
             and now - _leg_time(g, m.get("garrisonExecutedAt")) <= _LEG_REUSE_MAX_AGE)
 
 
+def _pool_odds_too_low(m, mission_type):
+    """True when re-running `mission_type` on this parked pool would roll worse odds than the
+    attempt that just failed — the caller then sends a fresh batch (or skips the round).
+
+    - The movements leg was not run for low odds and the origin still can't pay its decoys:
+      nothing has changed, the same pool would get the same verdict.
+    - The pool lost agents since the leg was planned: a smaller pool never does better (the plan
+      is the best loadout over the pool). With the view's odds still in memory the new plan is
+      compared with the old one; without them, a leg that already missed the target success is
+      not retried on fewer spies (target J, 25/11: 49% on 10, then 36% on the 5 left)."""
+    settings = _load_espionage_settings()
+    origin, target = str(m.get("originCityId")), str(m.get("targetCityId"))
+    max_decoys = int(settings.get("spyMaxDecoys", 2))
+    if mission_type == MISSION_MOVEMENTS and m.get("movementsSkipped") == "low_odds":
+        if max_decoys <= 0 or decoys_affordable(origin, MISSION_MOVEMENTS, max_decoys) < max_decoys:
+            logger.info("[espionage] %s: espiões estacionados sem hipóteses nos movimentos "
+                        "(origem sem iscas) — não reutilizo", m.get("targetCityName", "?"))
+            return True
+        return False
+    prev = (m.get("legOdds") or {}).get(str(mission_type))
+    pool = int(m.get("numAgents") or 0)
+    if not isinstance(prev, dict) or pool >= int(prev.get("stationed") or 0):
+        return False
+    target_success = int(settings.get("spyTargetSuccess", 90))
+    params = _view_params.get((origin, target))
+    if params and pool > 0:
+        plan = plan_spy_loadout(params, mission_type, pool, target_success,
+                                _decoys_affordable(origin, params, mission_type, max_decoys))
+        worse = plan is None or plan[2] < min(float(prev.get("success") or 0), target_success)
+    else:
+        worse = float(prev.get("success") or 0) < target_success
+    if worse:
+        logger.info("[espionage] %s: só %d espião(ões) estacionado(s) (eram %d) — hipóteses "
+                    "piores que os %d%% da última tentativa, não reutilizo",
+                    m.get("targetCityName", "?"), pool, int(prev.get("stationed") or 0),
+                    int(prev.get("success") or 0))
+    return worse
+
+
 def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_movements=False,
                             need_warehouse=True, min_agents=0):
     """Reuse spies already stationed at the target instead of sending fresh ones: a real
@@ -2260,6 +2335,10 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
             keep_wh = need_g and _warehouse_leg_ok(m, now)
             keep_g = keep_wh and bool(need_movements) and _garrison_leg_ok(m, now)
             skip_wh = need_g and not need_warehouse and not keep_wh
+            resume_type = (MISSION_MOVEMENTS if keep_g else
+                           MISSION_GARRISON if (keep_wh or skip_wh) else MISSION_WAREHOUSE)
+            if _pool_odds_too_low(m, resume_type):
+                continue
             if keep_g:
                 start, reset = "WAITING_FOR_MOVEMENTS", ("movementsResult", "movementsExecutedAt",
                                                          "movementsCollectAfter")

@@ -2734,3 +2734,50 @@ def test_skipped_warehouse_raids_on_the_estimate(monkeypatch, tmp_path):
     assert t["enabled"] == 1
     assert int(t.get("scout_fail_count") or 0) == 0   # not an incomplete sweep
     assert int(t["swept_at"]) > 1                      # sealed as a complete sweep
+
+
+def _low_odds_sweep(monkeypatch, tmp_path, decoys_ok):
+    _setup_db(tmp_path)
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Target 3", "islandX": 41, "islandY": 43,
+                         "islandId": "7", "minLoot": 30000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": 1000,
+                                   "is_fleet_target": 1})
+    missions = [{
+        "state": "DONE", "targetCityId": "100", "needMovements": True,
+        "result": {"resources": {"wood": 4000000, "wine": 1500000}, "reportedAt": 2000},
+        "garrisonResult": {"success": True, "troops": {}},
+        "movementsResult": None, "movementsSkipped": "low_odds",
+    }]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    monkeypatch.setattr(fm, "_movements_decoys_ok", lambda c: decoys_ok)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    return added
+
+
+def test_low_odds_movements_without_decoys_anywhere_skips_the_round(monkeypatch, tmp_path):
+    """Movements held back on poor odds and no city can pay its decoys: re-scouting in minutes
+    would roll the same odds — skip the round at once."""
+    added = _low_odds_sweep(monkeypatch, tmp_path, decoys_ok=False)
+    t = db_manager.farm_get("100")
+    assert added == [] and t["state"] == "IDLE"
+    assert t["scout_fail_count"] == 0 and t["scout_fail_rounds"] == 1
+
+
+def test_low_odds_movements_rescouts_when_a_city_can_pay_decoys(monkeypatch, tmp_path):
+    added = _low_odds_sweep(monkeypatch, tmp_path, decoys_ok=True)
+    t = db_manager.farm_get("100")
+    assert added == [] and t["state"] == "IDLE" and t["scout_fail_count"] == 1
+
+
+def test_pick_spy_origin_prefers_a_city_that_pays_movement_decoys(monkeypatch):
+    own = [{"cityId": "1", "name": "Near", "safehousePosition": 3, "x": 10, "y": 10},
+           {"cityId": "2", "name": "Sulfur", "safehousePosition": 3, "x": 20, "y": 20}]
+    counts = {"byCityId": {"1": {"inDefense": 20}, "2": {"inDefense": 20}}}
+    monkeypatch.setattr(fm, "_movements_decoys_ok", lambda c: c["cityId"] == "2")
+    target = {"island_x": 10, "island_y": 10}
+    assert fm._pick_spy_origin(own, counts, target, want=10)["cityId"] == "1"
+    assert fm._pick_spy_origin(own, counts, target, want=10, need_movements=True)["cityId"] == "2"
+    # Fielding the whole scout still comes first.
+    counts["byCityId"]["2"]["inDefense"] = 3
+    assert fm._pick_spy_origin(own, counts, target, want=10, need_movements=True)["cityId"] == "1"

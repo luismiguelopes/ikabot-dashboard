@@ -262,3 +262,77 @@ def test_empty_port_still_runs_the_movements_leg(monkeypatch):
         "troops": {}, "fleet": {}, "success": True, "targetCityId": "100", "targetCityName": "Alvo"}})
     em.collect_garrison_results(session=object())
     assert h["missions"][0]["state"] == "WAITING_FOR_MOVEMENTS"
+
+
+# ── Movements floor and worn pools ──────────────────────────────────────────────
+
+def _movements_leg(monkeypatch, stationed, settings):
+    h = _patch(monkeypatch, [_mission(state="WAITING_FOR_MOVEMENTS",
+                                      movementsExecuteAfter=_now() - 10, numAgents=stationed)])
+
+    def view(*a, **k):
+        em._view_params[("1", "100")] = PARAMS
+        return stationed, "<html>"
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", view)
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    monkeypatch.setattr(em, "_decoys_affordable", lambda o, p, mt, w: 0)      # no sulfur
+    monkeypatch.setattr(em, "_load_espionage_settings", lambda: settings)
+    monkeypatch.setattr(em, "_report_baseline", lambda *a, **k: 0)
+    sent = []
+    monkeypatch.setattr(em, "_execute_spy_mission",
+                        lambda s, o, t, p, sid, n, mt, num_decoys=0: (sent.append((n, num_decoys)),
+                                                                     (True, "ok"))[1])
+    em.execute_movements_missions(session=object())
+    return h["missions"][0], sent
+
+
+def test_movements_below_the_floor_are_not_run(monkeypatch):
+    m, sent = _movements_leg(monkeypatch, 2, {"spyMinMovementsSuccess": 60})
+    assert sent == []
+    assert m["state"] == "DONE" and m["movementsSkipped"] == "low_odds"
+    assert m.get("movementsResult") is None
+
+
+def test_movements_floor_zero_always_runs(monkeypatch):
+    m, sent = _movements_leg(monkeypatch, 2, {"spyMinMovementsSuccess": 0})
+    assert len(sent) == 1 and m["state"] == "EXECUTING_MOVEMENTS"
+    assert m["legOdds"]["7"]["stationed"] == 2
+
+
+def _parked_after_movements(**kw):
+    now = _now()
+    return _done(garrisonResult={"success": True, "troops": {}, "reportedAt": now - 500},
+                 movementsResult=None, **kw)
+
+
+def test_shrunk_pool_below_target_is_not_reused(monkeypatch):
+    em._view_params.clear()
+    _patch(monkeypatch, [_parked_after_movements(
+        numAgents=5, legOdds={"7": {"success": 49, "stationed": 10}})])
+    assert em.reexecute_stationed_spy("100", need_garrison=True, need_movements=True) is False
+
+
+def test_shrunk_pool_reused_when_the_odds_still_hold(monkeypatch):
+    em._view_params.clear()
+    em._view_params[("1", "100")] = PARAMS
+    monkeypatch.setattr(em, "_decoys_affordable", lambda o, p, mt, w: w)
+    h = _patch(monkeypatch, [_done(garrisonResult={"success": False, "error": "falhou"},
+                                   numAgents=8, legOdds={"6": {"success": 93, "stationed": 10}})])
+    assert em.reexecute_stationed_spy("100", need_garrison=True, need_movements=True)
+    assert h["missions"][0]["state"] == "WAITING_FOR_GARRISON"
+
+
+def test_low_odds_pool_reused_only_once_the_origin_pays_decoys(monkeypatch):
+    m = _parked_after_movements(movementsSkipped="low_odds")
+    _patch(monkeypatch, [m])
+    monkeypatch.setattr(em, "decoys_affordable", lambda o, mt, w: 0)
+    assert em.reexecute_stationed_spy("100", need_garrison=True, need_movements=True) is False
+    monkeypatch.setattr(em, "decoys_affordable", lambda o, mt, w: w)
+    assert em.reexecute_stationed_spy("100", need_garrison=True, need_movements=True)
+    assert m["state"] == "WAITING_FOR_MOVEMENTS"
+
+
+def test_decoys_affordable_uses_default_costs_without_a_view(tmp_path, monkeypatch):
+    em._view_params.clear()
+    _resources(tmp_path, monkeypatch, gold=10**6, sulfur=150)
+    assert em.decoys_affordable("1", 7, 2) == 1                   # 100 sulfur each

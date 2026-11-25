@@ -16,6 +16,7 @@ interface EspionageSettings {
   missionRetentionDays?: number
   spyTargetSuccess?: number
   spyMaxDecoys?: number
+  spyMinMovementsSuccess?: number
 }
 
 // Same defaults as the server (app.py `_DEFAULT_ESPIONAGE_SETTINGS` / `_auto_mark_ignored`).
@@ -161,7 +162,7 @@ function pick<T extends object>(obj: T, keys: string[]): Partial<T> {
 }
 
 // Same defaults and limits as the server (settings_registry "espionage").
-const LOADOUT_DEFAULTS = { spyTargetSuccess: 90, spyMaxDecoys: 2 }
+const LOADOUT_DEFAULTS = { spyTargetSuccess: 90, spyMaxDecoys: 2, spyMinMovementsSuccess: 60 }
 
 function LoadoutCard() {
   const t = useT()
@@ -171,6 +172,7 @@ function LoadoutCard() {
   const v = {
     spyTargetSuccess: s.spyTargetSuccess ?? LOADOUT_DEFAULTS.spyTargetSuccess,
     spyMaxDecoys: s.spyMaxDecoys ?? LOADOUT_DEFAULTS.spyMaxDecoys,
+    spyMinMovementsSuccess: s.spyMinMovementsSuccess ?? LOADOUT_DEFAULTS.spyMinMovementsSuccess,
   }
   return (
     <>
@@ -190,6 +192,12 @@ function LoadoutCard() {
               <NumberField value={v.spyMaxDecoys} min={0} max={10} size="lg" className="w-20"
                 onCommit={x => settings.set({ spyMaxDecoys: x })} />
               <span className="text-[10px] text-slate-400">{t('spy_max_decoys_hint')}</span>
+            </label>
+            <label className="flex items-center gap-3">
+              <span className="text-xs font-medium text-slate-600 whitespace-nowrap">{t('spy_min_movements_label')}</span>
+              <NumberField value={v.spyMinMovementsSuccess} min={0} max={99} size="lg" className="w-20"
+                onCommit={x => settings.set({ spyMinMovementsSuccess: x })} />
+              <span className="text-[10px] text-slate-400">{t('spy_min_movements_hint')}</span>
             </label>
             <div className="bg-slate-50 rounded-lg px-3 py-2.5 space-y-1">
               <p className="text-[11px] text-slate-500">{t('spy_decoy_cost_hint')}</p>
