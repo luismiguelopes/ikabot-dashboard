@@ -22,10 +22,10 @@ def _parse_safehouse_page(html, city_name):
 
     Semantics (confirmed against live dumps 2026-11-13 — free + defense + deployed == building
     capacity in every city with nothing in training):
-      trainable  "Podes treinar N"        → building capacity (= safehouse level)
+      trainable  "Podes treinar N"        → building capacity (= safehouse level); br: "Pode treinar N"
       freeSlots  "N esperam por treino"   → EMPTY slots (citizens waiting to BE trained) — this
                                             was mislabelled inTraining until F14
-      inDefense  "N estão a trabalhar na defesa" → spies at home
+      inDefense  "N estão a trabalhar na defesa" → spies at home; br: "N estão trabalhando na defesa"
       deployed   "N estão em uso"         → spies out on missions
       inTraining derived: capacity − free − defense − deployed (spies currently training)
       orderMax   the train slider's maxValue → most spies one buildSpy order may ask for now
@@ -59,8 +59,8 @@ def _parse_safehouse_page(html, city_name):
     if m:
         counts["deployed"] = int(m.group(1))
 
-    # "15 estão a trabalhar na defesa" → defense assignment
-    m = re.search(r'(\d+)\s+est[aã]o?\s+a\s+trabalhar\s+na\s+defesa', text, re.IGNORECASE)
+    # "15 estão a trabalhar na defesa" (pt) / "15 estão trabalhando na defesa" (br) → defense
+    m = re.search(r'(\d+)\s+est[aã]o?\s+(?:a\s+trabalhar|trabalhando)\s+na\s+defesa', text, re.IGNORECASE)
     if m:
         counts["inDefense"] = int(m.group(1))
 
@@ -69,8 +69,8 @@ def _parse_safehouse_page(html, city_name):
     if m:
         counts["freeSlots"] = int(m.group(1))
 
-    # "Podes treinar 40" → remaining capacity
-    m = re.search(r'[Pp]odes\s+treinar\s+(\d+)', text, re.IGNORECASE)
+    # "Podes treinar 40" (pt) / "Pode treinar 40" (br) → remaining capacity
+    m = re.search(r'[Pp]odes?\s+treinar\s+(\d+)', text, re.IGNORECASE)
     if m:
         counts["trainable"] = int(m.group(1))
 
