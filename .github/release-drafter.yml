@@ -8,7 +8,11 @@
 #   anything else (bug, translation…) -> patch  (v1.4.2 -> v1.4.3)
 name-template: 'v$RESOLVED_VERSION'
 tag-template: 'v$RESOLVED_VERSION'
-change-template: '- $TITLE (#$NUMBER) $AUTHORS'
+# User-facing notes in the style of edde746/plezy: one plain line per change, grouped by
+# area, with no PR numbers, author handles or contributor lists. AI use is disclosed in the
+# PR description (see CONTRIBUTING.md), not in the release notes. Before publishing, the
+# maintainer can reword lines from the PR titles into what changes for the user.
+change-template: '- $TITLE'
 # Escape characters that would otherwise turn PR titles into mentions or markup.
 change-title-escapes: '\<*_&'
 
@@ -42,11 +46,3 @@ categories:
 
 template: |
   $CHANGES
-
-  ## Contributors
-
-  $CONTRIBUTORS
-
-  ## New contributors
-
-  $NEW_CONTRIBUTORS
