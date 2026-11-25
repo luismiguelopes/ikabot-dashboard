@@ -349,9 +349,11 @@ Versions follow `MAJOR.MINOR.PATCH`:
 The dashboard shows the version it was built from under **Settings → General**. Please include
 it in bug reports.
 
-Release notes are generated from the titles of the merged pull requests, grouped by label
-(`enhancement`, `bug`, `translation`, `documentation`; see `.github/release.yml`). PRs labelled
-`skip-changelog` are left out.
+After every merge to `main`, [Release Drafter](https://github.com/release-drafter/release-drafter)
+updates a **draft** of the next release: its notes list the merged pull requests grouped by
+label, and its version number follows from those labels (`breaking` → major, `enhancement` →
+minor, anything else → patch). The maintainer publishes the draft when `main` has proven stable.
+PRs labelled `skip-changelog` are left out. See `.github/release-drafter.yml`.
 
 ## Contributing
 
