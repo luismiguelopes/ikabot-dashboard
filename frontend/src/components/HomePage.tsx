@@ -521,7 +521,7 @@ export function HomePage({ data, thresholds, lastAlive, paused }: {
           <table className="w-full">
             <thead>
               <tr className="bg-slate-800 text-white text-xs uppercase tracking-wide">
-                <Th align="text-left" className="px-5">Type</Th>
+                <Th align="text-left" className="px-5">{t('col_type')}</Th>
                 {MATERIALS.map(m => (
                   <Th key={m.en}><i className={`fa-solid ${m.icon} mr-1 ${m.color}`} /> {m[lang]}</Th>
                 ))}

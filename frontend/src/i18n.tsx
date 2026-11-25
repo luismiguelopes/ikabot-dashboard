@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import { BR_OVERRIDES } from './i18n_br'
 
 const TRANSLATIONS: Record<string, Record<string, string>> = {
   en: {
@@ -15,6 +16,7 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     all_cities:'All cities', loading:'Loading…', col_city:'City', col_dist:'Dist.',
     col_alliance:'Alliance', col_mark:'Mark',
     home_title:'Empire Summary',
+    col_type:'Type',
     ships_available:'Available Ships', ships_total:'Total Ships',
     housing_space:'Housing Space', citizens:'Citizens',
     gold_total:'Total Gold', gold_production:'Gold Production',
@@ -522,6 +524,7 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
     all_cities:'Todas as cidades', loading:'A carregar…', col_city:'Cidade', col_dist:'Dist.',
     col_alliance:'Aliança', col_mark:'Marcação',
     home_title:'Resumo do Império',
+    col_type:'Tipo',
     ships_available:'Navios Disponíveis', ships_total:'Navios Totais',
     housing_space:'Espaço Habitacional', citizens:'Cidadãos',
     gold_total:'Ouro Total', gold_production:'Produção de Ouro',
@@ -1017,12 +1020,29 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
   },
 }
 
+// 'br' (pt-BR) is European Portuguese plus the overrides in i18n_br.ts.
+TRANSLATIONS.br = { ...TRANSLATIONS.pt, ...BR_OVERRIDES }
+
+export const LANGS = ['en', 'pt', 'br'] as const
+
 export const LangContext = createContext('en')
 
-export function useLang() { return useContext(LangContext) }
+// Base language ('en' | 'pt') for data tables keyed by language; 'br' maps to 'pt'.
+export function baseLang(lang: string): string { return lang === 'br' ? 'pt' : lang }
+
+export function useLang() { return baseLang(useContext(LangContext)) }
+
+// The language actually selected in the UI ('en' | 'pt' | 'br').
+export function useUiLang() { return useContext(LangContext) }
+
+let _uiLang = 'en'
+export function setUiLang(lang: string) { _uiLang = lang }
+
+// Thousands separator for fmt(): '.' in Brazilian Portuguese, a no-break space otherwise.
+export function thousandsSep(): string { return _uiLang === 'br' ? '.' : '\u00a0' }
 
 export function useT() {
-  const lang = useLang()
+  const lang = useUiLang()
   return (key: string, params?: Record<string, string | number>) => {
     const str = (TRANSLATIONS[lang] || TRANSLATIONS.en)[key] ?? key
     if (!params) return str
@@ -1032,7 +1052,11 @@ export function useT() {
   }
 }
 
-export function getLocale(lang: string): string { return lang === 'pt' ? 'pt-PT' : 'en-GB' }
+export function getLocale(lang: string): string {
+  if (lang === 'br') return 'pt-BR'
+  if (lang === 'pt') return _uiLang === 'br' ? 'pt-BR' : 'pt-PT'
+  return 'en-GB'
+}
 
 export function loadLang(): string {
   try { return localStorage.getItem('ikabot_lang') || 'en' } catch { return 'en' }

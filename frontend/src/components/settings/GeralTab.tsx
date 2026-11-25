@@ -1,4 +1,4 @@
-import { useT, useLang } from '../../i18n'
+import { useT, useUiLang, LANGS } from '../../i18n'
 import { Card } from '../ui/Card'
 import { CardTitle, SELECT_CLS } from './shared'
 
@@ -15,12 +15,12 @@ const NAV_LABEL_KEYS: Record<NavKey, string> = {
 }
 
 export function GeralTab({ toggleLang, defaultTab, onSaveDefaultTab }: {
-  toggleLang: () => void
+  toggleLang: (target?: string) => void
   defaultTab: string
   onSaveDefaultTab: (tab: string) => void
 }) {
   const t = useT()
-  const lang = useLang()
+  const lang = useUiLang()
 
   return (
     <div className="grid gap-4 max-w-lg">
@@ -28,10 +28,10 @@ export function GeralTab({ toggleLang, defaultTab, onSaveDefaultTab }: {
         <div className="px-5 py-4">
           <CardTitle icon="fa-language">{t('settings_language')}</CardTitle>
           <div className="flex gap-2">
-            {(['en', 'pt'] as const).map(l => (
+            {LANGS.map(l => (
               <button
                 key={l}
-                onClick={() => { if (l !== lang) toggleLang() }}
+                onClick={() => { if (l !== lang) toggleLang(l) }}
                 aria-pressed={lang === l}
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
                   lang === l
@@ -40,7 +40,7 @@ export function GeralTab({ toggleLang, defaultTab, onSaveDefaultTab }: {
                 }`}
               >
                 <i className="fa-solid fa-language" />
-                {l === 'en' ? 'English' : 'Português'}
+                {l === 'en' ? 'English' : l === 'pt' ? 'Português (PT)' : 'Português (BR)'}
               </button>
             ))}
           </div>
