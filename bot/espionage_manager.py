@@ -272,6 +272,21 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
         its own, outside the farm's control and on top of its backoff (target A, 15/11)."""
         return m.get("state") == "FAILED" and not _spy_pool_gone(m.get("error"))
 
+    # Targets with agents still on the way from this origin. A WAITING entry for the same
+    # target is then an OLDER pool, not our TRAVELING mission arriving: flipping it early made
+    # the bot ask for 4 agents with 1 there, which the game flags as cheating (25/11).
+    en_route = set()
+    for entry in active_entries:
+        if entry.get("state") == "TRAVELING":
+            if entry.get("cityId"):
+                en_route.add(("id", str(entry.get("cityId"))))
+            if entry.get("x") is not None and entry.get("y") is not None:
+                en_route.add(("xy", entry.get("x"), entry.get("y")))
+
+    def _has_agents_en_route(m):
+        return (("id", str(m.get("targetCityId", ""))) in en_route
+                or ("xy", m.get("islandX"), m.get("islandY")) in en_route)
+
     for entry in active_entries:
         ex     = entry.get("x")
         ey     = entry.get("y")
@@ -299,7 +314,10 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
 
         if match_idx is not None:
             m = missions[match_idx]
-            if estate == "WAITING_AT_CITY" and m.get("state") == "TRAVELING":
+            if estate == "WAITING_AT_CITY" and m.get("state") == "TRAVELING" \
+                    and _has_agents_en_route(m):
+                pass   # older pool; the TRAVELING entry below carries our ETA
+            elif estate == "WAITING_AT_CITY" and m.get("state") == "TRAVELING":
                 missions[match_idx]["state"]     = "WAITING_AT_CITY"
                 missions[match_idx]["arrivedAt"] = now
                 if not missions[match_idx].get("executeAfter"):
@@ -309,7 +327,7 @@ def _sync_active_spy_missions(active_entries, origin_city_id):
                 changed = True
             elif estate == "TRAVELING" and m.get("state") == "TRAVELING":
                 countdown = entry.get("countdown_secs")
-                if countdown and not missions[match_idx].get("executeAfter"):
+                if countdown and (missions[match_idx].get("executeAfter") or 0) < now + countdown:
                     arrival_ts = now + countdown
                     missions[match_idx]["executeAfter"] = arrival_ts + random.randint(5, 15) * 60
                     logger.info("[espionage] sync: countdown para %s: +%dm",
@@ -812,6 +830,36 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
 # Game's own text for the last executeMission rejection (read right after the call).
 _last_execute_feedback = ""
 
+# The game's anti-cheat answer ("Foi detectada uma tentativa de fazer batota! O endereço de IP e
+# ID de Jogador foi registada!") comes back as a plain type=11 when a form carries a value the UI
+# could never send — e.g. more agents than are stationed (25/11: 4 agents asked, 1 there, six
+# flags in a morning). Matched on the text: the feedback carries no locakey.
+_CHEAT_FLAG_MARKERS = ("batota", "cheat")
+
+
+def _is_cheat_flag(feedback_text):
+    t = str(feedback_text or "").lower()
+    return any(k in t for k in _CHEAT_FLAG_MARKERS)
+
+
+def _agents_to_send(m, spy_count, leg):
+    """Agents for an executeMission: the mission's numAgents, never more than the game says are
+    stationed (spy_count = the slider max). Asking for more is what the game flags as cheating."""
+    want = max(1, int(m.get("numAgents") or 1))
+    if spy_count >= want:
+        return want
+    logger.warning("[espionage] %s: %s com %d agente(s) em vez de %d — só %d estacionado(s)",
+                   m.get("targetCityName", "?"), leg, spy_count, want, spy_count)
+    return spy_count
+
+
+def _alert_cheat_flag(m, leg):
+    try:
+        from telegram_notifier import notify_game_cheat_flag
+        notify_game_cheat_flag(m.get("targetCityName", "?"), leg, _last_execute_feedback)
+    except Exception:
+        pass
+
 
 def _execute_spy_mission(session, origin_city_id, target_city_id, position,
                          spy_session_id, num_agents, mission_type, num_decoys=0):
@@ -870,9 +918,15 @@ def _execute_spy_mission(session, origin_city_id, target_city_id, position,
             # The reason is in provideFeedback[].text; the raw response opens with a long
             # updateGlobalData blob, so the old raw[:300] dump never reached it.
             _last_execute_feedback = " | ".join(t for t in texts if t) or "sem texto"
+            save_capture("spy_execute_rejected.json", resp)
+            if _is_cheat_flag(_last_execute_feedback):
+                # The game logs IP + player id for this one: never retry the same call.
+                logger.error("[espionage] executeMission tipo=%d (%d agente(s)) marcado como BATOTA "
+                             "pelo jogo — pedido não será repetido: %s",
+                             mission_type, int(num_agents or 0), _last_execute_feedback)
+                return False, "cheat_flag"
             logger.warning("[espionage] executeMission tipo=%d rejeitado — types=%s motivo: %s",
                            mission_type, types, _last_execute_feedback)
-            save_capture("spy_execute_rejected.json", resp)
             return False, "rejected"
         logger.warning("[espionage] executeMission tipo=%d sem feedback (re-render, missão não executou) — raw: %s",
                        mission_type, resp[:300])
@@ -1247,7 +1301,16 @@ def check_spy_arrivals(session):
         if spy_count is None:
             continue
 
-        if spy_count > 0:
+        countdown = _parse_arrival_countdown(html or "") if spy_count is not None else None
+        if 0 < spy_count < max(1, int(m.get("numAgents") or 1)) and countdown:
+            # Agents already there are an older pool from the same origin; ours are still
+            # travelling — not arrived yet (25/11: executed early, game flagged it as cheating).
+            jitter = random.randint(30, 90) if m.get("fast") else random.randint(5, 15) * 60
+            missions[i]["executeAfter"] = int(now) + countdown + jitter
+            logger.info("[espionage] %s: %d agente(s) antigo(s) no local, os novos chegam em %dm",
+                        m["targetCityName"], spy_count, countdown // 60)
+            changed = True
+        elif spy_count > 0:
             spy_id = _parse_spy_session_id(html)
             missions[i]["state"] = "WAITING_AT_CITY"
             missions[i]["arrivedAt"] = int(now)
@@ -1351,13 +1414,25 @@ def execute_waiting_missions(session):
             changed = True
             continue
 
+        # Fewer stationed than sent while some are still on the way (an older survivor made the
+        # mission look arrived): wait for the rest instead of running with the wrong count.
+        want = max(1, int(m.get("numAgents") or 1))
+        countdown = _parse_arrival_countdown(html or "") if spy_count < want else None
+        if countdown:
+            jitter = random.randint(30, 90) if m.get("fast") else random.randint(5, 15) * 60
+            missions[i]["executeAfter"] = now + countdown + jitter
+            logger.info("[espionage] %s: só %d de %d agente(s) no local, resto chega em %dm — "
+                        "a aguardar", m["targetCityName"], spy_count, want, countdown // 60)
+            changed = True
+            continue
+
         spy_id = _parse_spy_session_id(html) or m.get("spySessionId")
         missions[i]["reportBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
         ok, reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, m.get("numAgents", 1), MISSION_WAREHOUSE,
+            spy_id, _agents_to_send(m, spy_count, "armazém"), MISSION_WAREHOUSE,
         )
 
         if ok:
@@ -1370,6 +1445,14 @@ def execute_waiting_missions(session):
             missions[i]["spySessionId"] = spy_id
             missions[i]["warehouseRetries"] = 0
             logger.info("[espionage] missão armazém executada → %s", m["targetCityName"])
+        elif reason == "cheat_flag":
+            # Never repeat a call the game flagged: fail now, spies stay stationed (reusable —
+            # the next run re-reads the safehouse and sends only what is there).
+            missions[i]["state"] = "FAILED"
+            missions[i]["error"] = ("executeMission marcado como batota pelo jogo — não repetido "
+                                    "(espião continua estacionado)")
+            missions[i]["warehouseRetries"] = 0
+            _alert_cheat_flag(m, "armazém")
         elif reason == "no_feedback":
             # The server just re-rendered the safehouse tab without running the mission —
             # the spy is busy or there's nothing to inspect (common at a city we're
@@ -1596,8 +1679,10 @@ def execute_garrison_missions(session):
         time.sleep(random.randint(5, 15))
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, m.get("numAgents", 1), MISSION_GARRISON,
+            spy_id, _agents_to_send(m, spy_count, "guarnição"), MISSION_GARRISON,
         )
+        if _reason == "cheat_flag":
+            _alert_cheat_flag(m, "guarnição")
 
         if ok:
             missions[i]["state"] = "EXECUTING_GARRISON"
@@ -1761,8 +1846,10 @@ def execute_movements_missions(session):
         time.sleep(random.randint(5, 15))
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, m.get("numAgents", 1), MISSION_MOVEMENTS,
+            spy_id, _agents_to_send(m, spy_count, "movimentos"), MISSION_MOVEMENTS,
         )
+        if _reason == "cheat_flag":
+            _alert_cheat_flag(m, "movimentos")
 
         if ok:
             missions[i]["state"] = "EXECUTING_MOVEMENTS"

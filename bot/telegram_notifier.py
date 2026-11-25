@@ -506,6 +506,13 @@ def notify_spy_failed(target_city: str, player: str, error: str, spies_lost: boo
               f"{_esc(error)}", level="activity", category="spy")
 
 
+def notify_game_cheat_flag(target_city: str, leg: str, text: str) -> None:
+    """The game answered an executeMission with its anti-cheat message (logs IP + player id).
+    The bot never repeats that call, but it must be looked at."""
+    _send(f"🚨 <b>Jogo marcou um pedido como batota</b>\n{_esc(target_city)} — espionagem "
+          f"({_esc(leg)})\n{_esc(text)[:200]}", level="error", category="spy")
+
+
 def notify_spy_agents_lost(target_city: str, player: str, lost: int, sent: int, subject: str = "") -> None:
     """Agents lost on a mission that otherwise went through (numbers from the game's report)."""
     _record(spiesLost=1)

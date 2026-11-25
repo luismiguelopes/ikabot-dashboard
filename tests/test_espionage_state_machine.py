@@ -1046,3 +1046,114 @@ def test_add_column_only_tolerates_a_duplicate():
     db_manager._add_column(conn, "ALTER TABLE t ADD COLUMN b INTEGER")      # already there: fine
     with pytest.raises(sqlite3.OperationalError):
         db_manager._add_column(conn, "ALTER TABLE missing ADD COLUMN b INTEGER")
+
+
+# ── Game anti-cheat flag: never ask for more agents than are stationed (25/11) ────
+
+def test_is_cheat_flag_matches_game_text():
+    assert em._is_cheat_flag("Foi detectada uma tentativa de fazer batota!\n\nO endereço de IP "
+                             "e ID de Jogador foi registada!")
+    assert em._is_cheat_flag("A cheating attempt has been detected!")
+    assert not em._is_cheat_flag("Não selecionaste nenhuma unidade")
+
+
+def test_execute_spy_mission_reports_cheat_flag(monkeypatch):
+    import json as _json
+
+    class _S:
+        def post(self, params=None):
+            return _json.dumps([["provideFeedback", [{"location": 5, "type": 11,
+                                 "text": "Foi detectada uma tentativa de fazer batota!"}]]])
+    monkeypatch.setattr(em, "save_capture", lambda *a, **k: None)
+    ok, reason = em._execute_spy_mission(_S(), "1", "100", 3, "SID", 4, em.MISSION_WAREHOUSE)
+    assert (ok, reason) == (False, "cheat_flag")
+
+
+def test_execute_sends_at_most_the_stationed_agents(monkeypatch):
+    """Mission sent 4 agents but the view says 1 is there and nothing is on the way: send 1."""
+    h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10,
+                                      numAgents=4)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    sent = []
+    monkeypatch.setattr(em, "_execute_spy_mission",
+                        lambda s, o, t, p, sid, n, mt, **k: (sent.append(n), (True, "ok"))[1])
+    em.execute_waiting_missions(session=object())
+    assert sent == [1]
+    assert h["missions"][0]["state"] == "EXECUTING_WAREHOUSE"
+
+
+def test_execute_waits_while_the_rest_of_the_agents_travel(monkeypatch):
+    """1 old agent stationed, the 4 new ones still on the way: wait for them, no executeMission."""
+    h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10,
+                                      numAgents=4)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view",
+                        lambda *a, **k: (1, "<span>Chegada 52m 10s</span>"))
+    monkeypatch.setattr(em, "_execute_spy_mission",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("não devia executar")))
+    em.execute_waiting_missions(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "WAITING_AT_CITY"
+    assert m["executeAfter"] >= _now() + 52 * 60
+
+
+def test_execute_cheat_flag_fails_without_retry(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="WAITING_AT_CITY", executeAfter=_now() - 10)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (1, "<html>"))
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    calls = []
+    monkeypatch.setattr(em, "_execute_spy_mission",
+                        lambda *a, **k: (calls.append(1), (False, "cheat_flag"))[1])
+    em.execute_waiting_missions(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "FAILED"
+    assert "batota" in m["error"]
+    assert not em._spy_pool_gone(m["error"])     # spies still stationed → reusable
+    assert len(calls) == 1
+
+
+def test_garrison_leg_clamps_agents_to_stationed(monkeypatch):
+    """Agents lost on the warehouse leg: the garrison leg must not ask for the original count."""
+    h = _patch(monkeypatch, [_mission(state="WAITING_FOR_GARRISON", numAgents=4,
+                                      garrisonExecuteAfter=_now() - 10)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view", lambda *a, **k: (3, "<html>"))
+    monkeypatch.setattr(em, "_parse_spy_session_id", lambda html: "SID")
+    sent = []
+    monkeypatch.setattr(em, "_execute_spy_mission",
+                        lambda s, o, t, p, sid, n, mt, **k: (sent.append(n), (True, "ok"))[1])
+    em.execute_garrison_missions(session=object())
+    assert sent == [3]
+
+
+def test_arrival_ignores_an_older_pool_while_new_agents_travel(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", numAgents=4,
+                                      dispatchedAt=_now() - 2000)])
+    monkeypatch.setattr(em, "_fetch_spy_missions_view",
+                        lambda *a, **k: (1, "<span>Chegada 40m</span>"))
+    em.check_spy_arrivals(session=object())
+    m = h["missions"][0]
+    assert m["state"] == "TRAVELING"
+    assert m["executeAfter"] >= _now() + 40 * 60
+
+
+def test_sync_does_not_flip_travelling_mission_on_an_older_stationed_pool(monkeypatch):
+    """25/11: 1 survivor from yesterday stationed + 4 new agents on the way from the same
+    origin. The survivor's WAITING entry must not mark the new mission as arrived."""
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", targetCityId="200", numAgents=4)])
+    em._sync_active_spy_missions(
+        [{"cityId": "200", "x": 40, "y": 50, "cityName": "A", "state": "WAITING_AT_CITY"},
+         {"cityId": "200", "x": 40, "y": 50, "cityName": "A", "state": "TRAVELING",
+          "countdown_secs": 3000}],
+        origin_city_id="1")
+    m = h["missions"][0]
+    assert m["state"] == "TRAVELING"
+    assert m["executeAfter"] >= _now() + 3000
+    assert len(h["missions"]) == 1
+
+
+def test_sync_flips_when_nothing_is_on_the_way(monkeypatch):
+    h = _patch(monkeypatch, [_mission(state="TRAVELING", targetCityId="200")])
+    em._sync_active_spy_missions(
+        [{"cityId": "200", "x": 40, "y": 50, "cityName": "A", "state": "WAITING_AT_CITY"}],
+        origin_city_id="1")
+    assert h["missions"][0]["state"] == "WAITING_AT_CITY"
