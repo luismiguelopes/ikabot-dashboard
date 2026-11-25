@@ -139,7 +139,7 @@ export function DispatchPanel() {
     }).catch(() => {})
 
     // what one wave can carry home, whatever the fleet size (learned from real returns)
-    fetch('/api/farm/army').then(r => r.json()).then((d: any) => setRaidCap(d?.lootCapPerRaid ?? null)).catch(() => {})
+    fetch('/api/farm/army').then(r => r.json()).then((d: any) => setRaidCap(d?.lootCapInUse ?? null)).catch(() => {})
 
     loadLive()
   }, [originCityName, loadLive])

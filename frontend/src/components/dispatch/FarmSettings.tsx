@@ -1,91 +1,61 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useT } from '../../i18n'
-import { apiAction } from '../../api'
+import { useSettings } from '../../hooks/useSettings'
 import { Toggle } from '../ui/Toggle'
 import { NumberField } from '../ui/NumberField'
 import type { MilitaryData } from './shared'
 
+// What /api/farm/army stores (GET and POST answer the same keys). `lootCapPerRaid` is the
+// MANUAL ceiling (0 = learn); `lootCapInUse` is the ceiling in use now, only on the GET.
+interface FarmSettingsData {
+  army: Record<string, number>
+  fleet: Record<string, number>
+  spyAgents: number
+  shipReserveEnabled: boolean
+  reserveHorizonMin: number
+  earlyRespyEnabled: boolean
+  earlyReportMaxAgeMins: number
+  spyFreshnessHours: number
+  lootCapPerRaid: number
+  fleetDemoteAfterSweeps: number
+  minShipFraction: number
+  emptyReturnStrikes: number
+  lootCapInUse?: number | null
+}
+
 // Farm-wide settings: the minimal army loadout sent per raid, the combat-fleet loadout for
 // blockading flee-fleet targets, the ship reserve, and pipelined re-spy. Extracted from the
 // Combat Farm panel so the same controls can live in the unified world/target view (P11.6).
-// Self-contained: fetches its own military + /api/farm/army and persists via /api/farm/army.
+// Saved through the shared settings hook: "saved" only on a 2xx, the server's (clamped)
+// values replace what is shown, and a failed save shows what is really stored.
 export function FarmSettings() {
   const t = useT()
+  const s = useSettings<FarmSettingsData>('/api/farm/army')
+  const [military, setMilitary] = useState<MilitaryData | null>(null)
+  // Loadouts being typed (null = untouched, show what is stored). They stay out of the hook's
+  // data, so a toggle saved meanwhile never sends a half-typed loadout (P13.37).
+  const [armyDraft,  setArmyDraft]  = useState<Record<string, number> | null>(null)
+  const [fleetDraft, setFleetDraft] = useState<Record<string, number> | null>(null)
 
-  const [military,       setMilitary]       = useState<MilitaryData | null>(null)
-  const [farmArmy,       setFarmArmy]       = useState<Record<string, number>>({})
-  const [farmFleet,      setFarmFleet]      = useState<Record<string, number>>({})
-  const [farmSpyAgents,  setFarmSpyAgents]  = useState(1)
-  const [shipReserve,    setShipReserve]    = useState(true)
-  const [reserveHorizon, setReserveHorizon] = useState(45)
-  const [earlyRespy,     setEarlyRespy]     = useState(true)
-  const [farmArmySaved,  setFarmArmySaved]  = useState(false)
-  // Advanced rules (P13.30): numbers the bot already read from farm_settings.json but that had
-  // no field. `lootCap` is the MANUAL ceiling (0 = learn); `lootCapEffective` is what is in use.
-  const [adv, setAdv] = useState({
-    spyFreshnessHours: 24, earlyReportMaxAgeMins: 120, minShipFraction: 0.5,
-    fleetDemoteAfterSweeps: 3, emptyReturnStrikes: 2, lootCap: 0, lootCapEffective: 0,
-  })
-
-  const loadAll = useCallback(() => {
+  useEffect(() => {
     fetch('/api/military').then(r => r.json()).then(setMilitary).catch(() => {})
-    fetch('/api/farm/army').then(r => r.json()).then((data: any) => {
-      setFarmArmy(data?.army ?? {})
-      setFarmFleet(data?.fleet ?? {})
-      setFarmSpyAgents(data?.spyAgents ?? 1)
-      setShipReserve(data?.shipReserveEnabled ?? true)
-      setReserveHorizon(data?.reserveHorizonMin ?? 45)
-      setEarlyRespy(data?.earlyRespyEnabled ?? true)
-      setAdv(prev => ({
-        spyFreshnessHours:      data?.spyFreshnessHours ?? prev.spyFreshnessHours,
-        earlyReportMaxAgeMins:  data?.earlyReportMaxAgeMins ?? prev.earlyReportMaxAgeMins,
-        minShipFraction:        data?.minShipFraction ?? prev.minShipFraction,
-        fleetDemoteAfterSweeps: data?.fleetDemoteAfterSweeps ?? prev.fleetDemoteAfterSweeps,
-        emptyReturnStrikes:     data?.emptyReturnStrikes ?? prev.emptyReturnStrikes,
-        lootCap:                data?.lootCapPerRaidManual ?? prev.lootCap,
-        lootCapEffective:       data?.lootCapPerRaid ?? prev.lootCapEffective,
-      }))
-    }).catch(() => {})
   }, [])
 
-  useEffect(() => { loadAll() }, [loadAll])
-
-  // Each control saves only its own key (P13.37): a toggle used to send the half-typed army
-  // draft along with it. "Saved" only on a 2xx; the server's (clamped) values are kept.
-  async function saveFarm(patch: Record<string, unknown>): Promise<boolean> {
-    setFarmArmySaved(false)
-    const d: any = await apiAction('/api/farm/army', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(patch),
-    })
-    if (!d) return false
-    if ('army' in patch)              setFarmArmy(d.army ?? {})
-    if ('fleet' in patch)             setFarmFleet(d.fleet ?? {})
-    if ('spyAgents' in patch)         setFarmSpyAgents(d.spyAgents ?? 1)
-    if ('reserveHorizonMin' in patch) setReserveHorizon(d.reserveHorizonMin ?? 45)
-    // the stored (clamped) advanced values; settings.lootCapPerRaid is the manual ceiling
-    const st = d.settings
-    if (st) setAdv(prev => ({
-      ...prev,
-      spyFreshnessHours:      st.spyFreshnessHours ?? prev.spyFreshnessHours,
-      earlyReportMaxAgeMins:  st.earlyReportMaxAgeMins ?? prev.earlyReportMaxAgeMins,
-      minShipFraction:        st.minShipFraction ?? prev.minShipFraction,
-      fleetDemoteAfterSweeps: st.fleetDemoteAfterSweeps ?? prev.fleetDemoteAfterSweeps,
-      emptyReturnStrikes:     st.emptyReturnStrikes ?? prev.emptyReturnStrikes,
-      lootCap:                st.lootCapPerRaid ?? prev.lootCap,
-    }))
-    if ('lootCapPerRaid' in patch) loadAll()   // the ceiling in use is computed by the server
-    setFarmArmySaved(true)
-    return true
-  }
+  const d = s.data
+  const farmArmy  = armyDraft  ?? d?.army  ?? {}
+  const farmFleet = fleetDraft ?? d?.fleet ?? {}
 
   const positive = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).filter(([, v]) => v > 0))
 
-  async function toggleSetting(key: 'shipReserveEnabled' | 'earlyRespyEnabled', next: boolean) {
-    const set = key === 'shipReserveEnabled' ? setShipReserve : setEarlyRespy
-    set(next)
-    if (!(await saveFarm({ [key]: next }))) set(!next)   // failed → show what is really stored
+  async function saveArmy() {
+    if (await s.saveNow({ army: positive(farmArmy) })) setArmyDraft(null)
+  }
+  async function saveFleet() {
+    if (await s.saveNow({ fleet: positive(farmFleet) })) setFleetDraft(null)
+  }
+  // the ceiling in use is computed by the server from the manual one
+  async function saveLootCap(v: number) {
+    if (await s.saveNow({ lootCapPerRaid: v })) s.reload()
   }
 
   const troopTypes: Record<string, string> = {}
@@ -98,6 +68,9 @@ export function FarmSettings() {
   })
 
   const fleetEmpty = !Object.values(farmFleet).some(v => v > 0)
+
+  if (!d) return null
+  const capInUse = d.lootCapInUse ?? 0
 
   const advRow = (label: string, hint: string, field: React.ReactNode) => (
     <div className="flex items-start justify-between gap-3 py-1.5">
@@ -119,10 +92,10 @@ export function FarmSettings() {
           </span>
           <span className="flex items-center gap-1.5 text-xs text-slate-500">
             {t('farm_spies')}
-            <NumberField value={farmSpyAgents} min={1} max={99} label={t('farm_spies')}
-              onCommit={v => { setFarmSpyAgents(v); saveFarm({ spyAgents: v }) }}
+            <NumberField value={d.spyAgents} min={1} max={99} label={t('farm_spies')}
+              onCommit={v => s.saveNow({ spyAgents: v })}
               size="sm" className="w-14" />
-            {farmArmySaved && <span className="text-emerald-600 ml-1">{t('transport_saved')}</span>}
+            {s.saved && <span className="text-emerald-600 ml-1">{t('transport_saved')}</span>}
           </span>
         </div>
         {Object.keys(troopTypes).length === 0 ? (
@@ -139,8 +112,7 @@ export function FarmSettings() {
                     value={farmArmy[uid] ?? 0}
                     onChange={e => {
                       const v = Math.max(0, Number(e.target.value))
-                      setFarmArmy(prev => ({ ...prev, [uid]: v }))
-                      setFarmArmySaved(false)
+                      setArmyDraft({ ...farmArmy, [uid]: v })
                     }}
                     className="w-16 border border-slate-200 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
@@ -148,7 +120,7 @@ export function FarmSettings() {
               ))}
             </div>
             <button
-              onClick={() => saveFarm({ army: positive(farmArmy) })}
+              onClick={saveArmy}
               className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >
               <i className="fa-solid fa-floppy-disk" /> {t('transport_save')}
@@ -181,8 +153,7 @@ export function FarmSettings() {
                     value={farmFleet[uid] ?? 0}
                     onChange={e => {
                       const v = Math.max(0, Number(e.target.value))
-                      setFarmFleet(prev => ({ ...prev, [uid]: v }))
-                      setFarmArmySaved(false)
+                      setFleetDraft({ ...farmFleet, [uid]: v })
                     }}
                     className="w-16 border border-slate-200 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
@@ -190,7 +161,7 @@ export function FarmSettings() {
               ))}
             </div>
             <button
-              onClick={() => saveFarm({ fleet: positive(farmFleet) })}
+              onClick={saveFleet}
               className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700"
             >
               <i className="fa-solid fa-floppy-disk" /> {t('transport_save')}
@@ -205,14 +176,14 @@ export function FarmSettings() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
             {t('farm_reserve')}
           </span>
-          <Toggle size="sm" on={shipReserve} label={t('farm_reserve')} onChange={v => toggleSetting('shipReserveEnabled', v)} />
+          <Toggle size="sm" on={d.shipReserveEnabled} label={t('farm_reserve')} onChange={v => s.saveNow({ shipReserveEnabled: v })} />
         </div>
         <p className="text-xs text-slate-400 mt-1">{t('farm_reserve_hint')}</p>
-        {shipReserve && (
+        {d.shipReserveEnabled && (
           <label className="flex items-center gap-2 mt-2 text-xs text-slate-500">
             {t('farm_reserve_horizon')}
-            <NumberField value={reserveHorizon} min={0} max={720} label={t('farm_reserve_horizon')}
-              onCommit={v => { setReserveHorizon(v); saveFarm({ reserveHorizonMin: v }) }}
+            <NumberField value={d.reserveHorizonMin} min={0} max={720} label={t('farm_reserve_horizon')}
+              onCommit={v => s.saveNow({ reserveHorizonMin: v })}
               size="sm" className="w-16" />
             min
           </label>
@@ -225,7 +196,7 @@ export function FarmSettings() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
             {t('farm_earlyrespy')}
           </span>
-          <Toggle size="sm" on={earlyRespy} label={t('farm_earlyrespy')} onChange={v => toggleSetting('earlyRespyEnabled', v)} />
+          <Toggle size="sm" on={d.earlyRespyEnabled} label={t('farm_earlyrespy')} onChange={v => s.saveNow({ earlyRespyEnabled: v })} />
         </div>
         <p className="text-xs text-slate-400 mt-1">{t('farm_earlyrespy_hint')}</p>
       </div>
@@ -237,29 +208,29 @@ export function FarmSettings() {
         </span>
         <div className="mt-1 divide-y divide-slate-50">
           {advRow(t('farm_adv_strikes'), t('farm_adv_strikes_hint'),
-            <NumberField value={adv.emptyReturnStrikes} min={0} max={20} label={t('farm_adv_strikes')}
-              onCommit={v => { setAdv(p => ({ ...p, emptyReturnStrikes: v })); saveFarm({ emptyReturnStrikes: v }) }}
+            <NumberField value={d.emptyReturnStrikes} min={0} max={20} label={t('farm_adv_strikes')}
+              onCommit={v => s.saveNow({ emptyReturnStrikes: v })}
               size="sm" className="w-16" />)}
           {advRow(t('farm_adv_fresh'), t('farm_adv_fresh_hint'),
-            <><NumberField value={adv.spyFreshnessHours} min={0} max={720} integer={false} step={0.5} label={t('farm_adv_fresh')}
-              onCommit={v => { setAdv(p => ({ ...p, spyFreshnessHours: v })); saveFarm({ spyFreshnessHours: v }) }}
+            <><NumberField value={d.spyFreshnessHours} min={0} max={720} integer={false} step={0.5} label={t('farm_adv_fresh')}
+              onCommit={v => s.saveNow({ spyFreshnessHours: v })}
               size="sm" className="w-16" />h</>)}
           {advRow(t('farm_adv_early_age'), t('farm_adv_early_age_hint'),
-            <><NumberField value={adv.earlyReportMaxAgeMins} min={10} max={1440} label={t('farm_adv_early_age')}
-              onCommit={v => { setAdv(p => ({ ...p, earlyReportMaxAgeMins: v })); saveFarm({ earlyReportMaxAgeMins: v }) }}
+            <><NumberField value={d.earlyReportMaxAgeMins} min={10} max={1440} label={t('farm_adv_early_age')}
+              onCommit={v => s.saveNow({ earlyReportMaxAgeMins: v })}
               size="sm" className="w-16" />min</>)}
           {advRow(t('farm_adv_ship_frac'), t('farm_adv_ship_frac_hint'),
-            <><NumberField value={Math.round(adv.minShipFraction * 100)} min={0} max={100} label={t('farm_adv_ship_frac')}
-              onCommit={v => { setAdv(p => ({ ...p, minShipFraction: v / 100 })); saveFarm({ minShipFraction: v / 100 }) }}
+            <><NumberField value={Math.round(d.minShipFraction * 100)} min={0} max={100} label={t('farm_adv_ship_frac')}
+              onCommit={v => s.saveNow({ minShipFraction: v / 100 })}
               size="sm" className="w-16" />%</>)}
           {advRow(t('farm_adv_demote'), t('farm_adv_demote_hint'),
-            <NumberField value={adv.fleetDemoteAfterSweeps} min={0} max={50} label={t('farm_adv_demote')}
-              onCommit={v => { setAdv(p => ({ ...p, fleetDemoteAfterSweeps: v })); saveFarm({ fleetDemoteAfterSweeps: v }) }}
+            <NumberField value={d.fleetDemoteAfterSweeps} min={0} max={50} label={t('farm_adv_demote')}
+              onCommit={v => s.saveNow({ fleetDemoteAfterSweeps: v })}
               size="sm" className="w-16" />)}
           {advRow(t('farm_adv_cap'),
-            `${t('farm_adv_cap_hint')} ${adv.lootCapEffective > 0 ? `${t('farm_adv_cap_now')} ${adv.lootCapEffective.toLocaleString('pt-PT')}.` : t('farm_adv_cap_none')}`,
-            <NumberField value={adv.lootCap} min={0} label={t('farm_adv_cap')}
-              onCommit={v => { setAdv(p => ({ ...p, lootCap: v })); saveFarm({ lootCapPerRaid: v }) }}
+            `${t('farm_adv_cap_hint')} ${capInUse > 0 ? `${t('farm_adv_cap_now')} ${capInUse.toLocaleString('pt-PT')}.` : t('farm_adv_cap_none')}`,
+            <NumberField value={d.lootCapPerRaid} min={0} label={t('farm_adv_cap')}
+              onCommit={saveLootCap}
               size="sm" className="w-24" />)}
         </div>
       </div>
