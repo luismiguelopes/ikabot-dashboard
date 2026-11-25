@@ -1,22 +1,21 @@
 
 services:
   ikabot:
-    # STABLE channel — pinned to a validated digest (ikabot 7.7.2).
+    # STABLE channel — pinned to a validated digest (image tag v7.7.3: upstream master
+    # 3ea1e0e, built 2026-11-23; the code still reports 7.7.2, upstream has no 7.7.3 tag).
     # Our anti-detection tweaks are injected surgically at runtime by bot_launcher
     # (see planroutes_overrides.py / loadcustommodule_overrides.py), so additive
     # upstream changes no longer break us. Promotion flow: test :latest as "beta"
     # (diff stock files, re-run the offline import check, one live boot), then pin
     # its digest here as the next stable.
     # The login caches sessions in ~/.ikabot (persisted on the ikabot_home volume),
-    # so redeploys reuse the cookie instead of a fresh login. 7.7.1 -> 7.7.2 (validated
-    # 2026-10-27): planRoutes byte-identical (main override intact); loadCustomModule
-    # swapped an inline processList block for session.updateProcessEntry(), but we
-    # whole-replace that function so it lands regardless; session.py additive
-    # (updateProcessEntry/IkariamErrorPage/__isSessionAlive, setSessionData gains
-    # keep_process_list=True with a safe default) — public API untouched; config.py
-    # version-string only. Offline import check clean.
-    # Previous stable: 7.7.1 @sha256:bcde48707af2fc58d8e13e974d30b29b79320ad2b92b6da459268732d79f527f
-    image: ghcr.io/luismiguelopes/ikabot@sha256:6224352eaa5f8d474d4d42b256d1814c7197a5b340fd2bd7ff154fdd714bf11f
+    # so redeploys reuse the cookie instead of a fresh login. 7.7.2 -> v7.7.3 (validated
+    # 2026-11-25): planRoutes, loadCustomModule, constructionList, buyResources and
+    # market unchanged; session.py gains an opt-in connection warm pool (only the web
+    # server turns it on; the bot never does) and now refreshes the cached CSRF token
+    # when the action is in the URL; requests>=2.32. Offline import check clean.
+    # Previous stable: 7.7.2 @sha256:6224352eaa5f8d474d4d42b256d1814c7197a5b340fd2bd7ff154fdd714bf11f
+    image: ghcr.io/luismiguelopes/ikabot@sha256:f1c8c0b095d575cd199c4f7fbcf88b3f3e161e2add0eeff6cf36ff0515d3973a
     container_name: ikabot
     restart: unless-stopped
     stdin_open: true
