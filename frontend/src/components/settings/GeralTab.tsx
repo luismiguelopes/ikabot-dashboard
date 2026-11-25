@@ -63,6 +63,23 @@ export function GeralTab({ toggleLang, defaultTab, onSaveDefaultTab }: {
           <p className="mt-2 text-xs text-slate-400">{t('settings_default_tab_hint')}</p>
         </div>
       </Card>
+
+      <Card>
+        <div className="px-5 py-4">
+          <CardTitle icon="fa-code-branch">{t('settings_version')}</CardTitle>
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <code className="px-2 py-1 rounded bg-slate-100 text-slate-700">{__APP_VERSION__}</code>
+            <a
+              href="https://github.com/luismiguelopes/ikabot-dashboard/releases"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-indigo-600 hover:underline"
+            >
+              {t('settings_version_releases')} <i className="fa-solid fa-arrow-up-right-from-square text-xs" />
+            </a>
+          </div>
+        </div>
+      </Card>
     </div>
   )
 }

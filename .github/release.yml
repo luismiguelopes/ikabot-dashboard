@@ -1,0 +1,26 @@
+# Categories for the notes GitHub generates on a release ("Generate release notes" or
+# `gh release create <tag> --generate-notes`). A merged PR lands in the first category
+# whose labels it carries; unlabelled PRs go under "Other changes".
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: New features
+      labels:
+        - enhancement
+    - title: Bug fixes
+      labels:
+        - bug
+    - title: Translations and other servers
+      labels:
+        - translation
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"

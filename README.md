@@ -325,6 +325,34 @@ Stock files are **no longer shadowed** by whole-file copies (which froze and bro
 
 All custom modules (`empireFunction.py` and siblings) are mounted into the ikabot container at `/ikabot/ikabot/function/` via volume mounts — no rebuild of the base image is needed when editing them, but **both containers must be restarted** after a `.py` change (Python caches modules; the Flask auto-reloader is unreliable with bind-mounted inodes).
 
+## Versions and releases
+
+`main` always holds the latest merged work; it is tested by CI but may change several times a
+day. **Releases** are tags on `main` that have run well in production for a while — use the
+[latest release](https://github.com/luismiguelopes/ikabot-dashboard/releases/latest) if you
+want a stable setup:
+
+```bash
+git fetch --tags
+git checkout v1.0.0          # the release you want
+docker compose up -d --force-recreate
+cd frontend && npm ci && npm run build
+```
+
+Versions follow `MAJOR.MINOR.PATCH`:
+
+- **PATCH** (`v1.0.1`): bug fixes only.
+- **MINOR** (`v1.1.0`): new features; nothing to change when updating.
+- **MAJOR** (`v2.0.0`): updating needs action on your side (a new required `.env` setting, a
+  data migration, …) — the release notes say what.
+
+The dashboard shows the version it was built from under **Settings → General**. Please include
+it in bug reports.
+
+Release notes are generated from the titles of the merged pull requests, grouped by label
+(`enhancement`, `bug`, `translation`, `documentation`; see `.github/release.yml`). PRs labelled
+`skip-changelog` are left out.
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Issues, pull requests and commit messages are in English.
