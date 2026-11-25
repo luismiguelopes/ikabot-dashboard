@@ -462,6 +462,9 @@ export function InactivosTab({ scanData, loading, error, onForceRefresh, ownCiti
         return false
       const farm = p.cityId ? farmByCity[String(p.cityId)] : undefined
       if (farm?.enabled) return true
+      // A target paused after empty returns has a real yield near 0 by definition, so the loot
+      // floor below would hide exactly the rows whose "paused" note the user needs to see.
+      if (farm && farm.empty_returns) return true
       const known = lootScore(p)
       return known === null || known >= minLootTotal
     })

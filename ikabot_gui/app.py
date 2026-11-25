@@ -1346,11 +1346,11 @@ def _loot_cap_per_raid(settings):
 def api_farm_army_get():
     s = _load_farm_settings()
     return jsonify({
+        # the STORED values, as the POST returns them: the dashboard card posts this object
+        # back whole, so lootCapPerRaid is the manual ceiling (0 = learn), never the learned one
         **{k: s[k] for k in settings_registry.defaults("farm")},
-        # what one wave can carry home (manual setting, else learned from real returns);
-        # the stored manual value (0 = learn) is lootCapPerRaidManual
-        "lootCapPerRaid": _loot_cap_per_raid(s),
-        "lootCapPerRaidManual": s["lootCapPerRaid"],
+        # what one wave can carry home now (manual ceiling, else learned from real returns)
+        "lootCapInUse": _loot_cap_per_raid(s),
     })
 
 

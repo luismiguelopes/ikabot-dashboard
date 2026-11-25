@@ -137,12 +137,12 @@ SPECS = {
             "shipReserveEnabled":     _bool(True),
             "reserveHorizonMin":      _int(45, 0, 720),
             "earlyRespyEnabled":      _bool(True),
-            "earlyReportMaxAgeMins":  _int(120, 10),      # a fleet target's early report is stale after this
-            "spyFreshnessHours":      _float(24, 0),      # 0 = never re-scout a safe target on age
+            "earlyReportMaxAgeMins":  _int(120, 10, 1440),  # a fleet target's early report is stale after this
+            "spyFreshnessHours":      _float(24, 0, 720), # 0 = never re-scout a safe target on age
             "lootCapPerRaid":         _int(0, 0),         # 0 = learn it from the real returns
-            "fleetDemoteAfterSweeps": _int(3, 0),         # 0 = a fleet target stays one for ever
+            "fleetDemoteAfterSweeps": _int(3, 0, 50),     # 0 = a fleet target stays one for ever
             "minShipFraction":        _float(0.5, 0, 1),
-            "emptyReturnStrikes":     _int(2, 0),         # empty returns in a row that pause a target; 0 = never
+            "emptyReturnStrikes":     _int(2, 0, 20),     # empty returns in a row that pause a target; 0 = never
         },
     },
     "espionage": {
