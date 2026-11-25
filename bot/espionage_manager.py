@@ -579,6 +579,7 @@ def _dispatch_item(session, item, spy_data):
         fast=bool(item.get("fast")),
         need_garrison=bool(item.get("needGarrison", True)),
         need_movements=bool(item.get("needMovements", False)),
+        need_warehouse=bool(item.get("needWarehouse", True)),
     )
     if ok:
         # Decrementar em memória para que o pre-check funcione correctamente
@@ -629,7 +630,7 @@ def _append_failed_mission(item, error):
 def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
                   target_player_name, target_city_name, island_x, island_y,
                   num_agents=1, num_decoys=0, fast=False, need_garrison=True,
-                  need_movements=False):
+                  need_movements=False, need_warehouse=True):
     """
     Dispatch spies from origin_city_id to target_city_id.
     `fast` (farm re-scouts): execute warehouse/garrison back-to-back with second-scale
@@ -728,6 +729,7 @@ def _dispatch_spy(session, origin_city_id, target_city_id, target_island_id,
         "fast":              bool(fast),
         "needGarrison":      bool(need_garrison) or bool(need_movements),
         "needMovements":     bool(need_movements),
+        "needWarehouse":     bool(need_warehouse) or not (need_garrison or need_movements),
         "safehousePosition": safehouse_pos,
         "spySessionId":      None,
         "dispatchedAt":      int(time.time()),
@@ -807,6 +809,16 @@ def _fetch_spy_missions_view(session, origin_city_id, target_city_id, position):
                 html = inner[1]
             break
 
+    try:
+        params = _parse_view_params(resp_data)
+        key = (str(origin_city_id), str(target_city_id))
+        if params:
+            _view_params[key] = params
+        else:
+            _view_params.pop(key, None)
+    except Exception:
+        logger.debug("[espionage] parâmetros da missão ilegíveis", exc_info=True)
+
     spy_count = 0
     for entry in resp_data:
         if isinstance(entry, list) and entry[0] == "updateTemplateData":
@@ -842,15 +854,153 @@ def _is_cheat_flag(feedback_text):
     return any(k in t for k in _CHEAT_FLAG_MARKERS)
 
 
-def _agents_to_send(m, spy_count, leg):
-    """Agents for an executeMission: the mission's numAgents, never more than the game says are
-    stationed (spy_count = the slider max). Asking for more is what the game flags as cheating."""
+# ── Agents and decoys from the game's own odds ───────────────────────────────────
+# The spyMissions view ships the numbers its mission window uses (updateTemplateData.load_js
+# params): the target's free spies, city level, safehouse level, inactivity, and per mission
+# riskBefore / riskPerSpy / successChance / decoy cost. spy_odds() is the window's script, line
+# for line (the game's spy-missions JS), so the bot sees exactly the odds a player sees.
+# Kept per (origin, target) from the last view fetch — every leg fetches it right before
+# executing, so planning costs no extra request.
+_view_params = {}
+
+# Decoy cost resource ids (missionData[...]["301"] = {resource id: amount per decoy}).
+_DECOY_RESOURCE_NAMES = {0: "Wood", 1: "Wine", 2: "Marble", 3: "Crystal", 4: "Sulfur"}
+_DECOY_GOLD_FLOOR = 50000          # never spend gold on decoys below this
+_DECOY_WINE_HOURS = 24             # keep a day of the origin's wine consumption
+
+
+def _parse_view_params(resp_data):
+    """The mission window's parameters from a spyMissions response, or None."""
+    for entry in resp_data or []:
+        if not (isinstance(entry, list) and len(entry) > 1 and entry[0] == "updateTemplateData"):
+            continue
+        td = entry[1] if isinstance(entry[1], dict) else {}
+        loads = td.get("load_js")
+        for lj in (loads if isinstance(loads, list) else [loads]):
+            if not isinstance(lj, dict) or not lj.get("params"):
+                continue
+            try:
+                p = json.loads(lj["params"]) if isinstance(lj["params"], str) else lj["params"]
+            except (ValueError, TypeError):
+                continue
+            if isinstance(p, dict) and isinstance(p.get("missionData"), dict):
+                return p
+    return None
+
+
+def spy_odds(params, mission_type, agents, decoys=0):
+    """(success %, discovery risk %) for `agents` + `decoys` on one mission — the game's own
+    formula from the mission window. None if the view carried no data for this mission."""
+    md = (params or {}).get("missionData", {}).get(str(mission_type))
+    if not isinstance(md, dict) or "successChance" not in md:
+        return None
+
+    def c(key, default):
+        try:
+            return float(params.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    min_chance, max_chance = c("cEspionageMinChance", 5), c("cEspionageMaxChance", 95)
+    basic = c("targetFreeSpies", 0) * 5 - c("targetCityLevel", 0) * 2
+    mission_risk = basic + float(md.get("riskBefore", 0)) + c("remainingRisk", 0)
+    minimum_risk = max(min_chance, agents * float(md.get("riskPerSpy", 0)))
+    if params.get("isTargetInactive"):
+        mission_risk /= c("cSpyRiskReductionFactorInactivity", 10)
+        minimum_risk /= c("cSpyRiskReductionFactorInactivity", 10)
+    elif c("targetSafehouseLevel", 1) == 0:
+        mission_risk /= c("cSpyRiskReductionFactorNoSafehouse", 2)
+        minimum_risk /= c("cSpyRiskReductionFactorNoSafehouse", 2)
+    risk = min(max_chance, c("targetGovFactor", 0)
+               + max(minimum_risk, mission_risk - decoys * c("cEspionageDecoyRiskREduction", 10)))
+    chance = min(round((1.0 - (1.0 - float(md["successChance"]) / 100.0) ** agents) * 100),
+                 c("cEspionageMaxSuccessChance", 99))
+    success = min(max_chance, max(min_chance, (100 - risk) * chance / 100)) if agents > 0 else 0
+    return success, risk
+
+
+def plan_spy_loadout(params, mission_type, stationed, target_success=90, max_decoys=2):
+    """(agents, decoys, success, risk) for one mission with `stationed` spies at the target.
+    Agents and decoys come out of the same stationed pool. The smallest loadout (fewest spies,
+    then fewest decoys) that reaches `target_success`; if none does, the best success the pool
+    allows. None when the odds are unknown."""
+    if stationed < 1 or spy_odds(params, mission_type, 1) is None:
+        return None
+    best_hit = best_any = None
+    for d in range(0, max(0, min(max_decoys, stationed - 1)) + 1):
+        for n in range(1, stationed - d + 1):
+            success, risk = spy_odds(params, mission_type, n, d)
+            cand = (n, d, success, risk)
+            if success >= target_success:
+                if best_hit is None or (n + d, d) < (best_hit[0] + best_hit[1], best_hit[1]):
+                    best_hit = cand
+                break   # more agents with the same decoys only costs more
+            if best_any is None or (success, -(n + d)) > (best_any[2], -(best_any[0] + best_any[1])):
+                best_any = cand
+    return best_hit or best_any
+
+
+def _decoys_affordable(origin_id, params, mission_type, wanted):
+    """How many of `wanted` decoys the origin can pay for (gold is global; goods come from the
+    origin). Unknown resources → 0: a decoy the game can't charge is a rejected mission."""
+    if wanted <= 0:
+        return 0
+    md = (params or {}).get("missionData", {}).get(str(mission_type)) or {}
+    cost = md.get(str((params or {}).get("cEspionageDecoy", 301))) or {}
+    if not isinstance(cost, dict) or not cost:
+        return 0
+    try:
+        gold_id = int(params.get("cGold", 5))
+        with open(OWN_CITIES_PATH) as f:
+            name = next((c.get("name") for c in json.load(f)
+                         if str(c.get("cityId")) == str(origin_id)), None)
+        with open(os.path.join(LOGS_DIR, "resources.json")) as f:
+            res = json.load(f).get(name) or {}
+        with open(os.path.join(LOGS_DIR, "statusSummary.json")) as f:
+            gold = int(((json.load(f).get("gold") or {}).get("total")) or 0)
+    except Exception:
+        return 0
+    n = wanted
+    for rid, per in cost.items():
+        per = int(per or 0)
+        if per <= 0:
+            continue
+        rid = int(rid)
+        if rid == gold_id:
+            spare = gold - _DECOY_GOLD_FLOOR
+        else:
+            have = int(res.get(_DECOY_RESOURCE_NAMES.get(rid, ""), 0) or 0)
+            spare = have - (int(res.get("wineConsumptionPerHour", 0) or 0) * _DECOY_WINE_HOURS
+                            if rid == 1 else 0)
+        n = min(n, max(0, spare) // per)
+    return n
+
+
+def _mission_loadout(m, spy_count, mission_type, leg):
+    """(agents, decoys) for this leg. Never more spies than the game says are stationed
+    (spy_count = the slider max) — asking for more is what it flags as cheating. With the
+    view's odds, the smallest loadout reaching the target success (decoys only if the origin
+    can pay for them); without them, the mission's agents capped to what is there."""
     want = max(1, int(m.get("numAgents") or 1))
+    params = _view_params.get((str(m.get("originCityId")), str(m.get("targetCityId"))))
+    plan = None
+    if params and spy_count > 0:
+        settings = _load_espionage_settings()
+        max_decoys = _decoys_affordable(m.get("originCityId"), params, mission_type,
+                                        int(settings.get("spyMaxDecoys", 2)))
+        plan = plan_spy_loadout(params, mission_type, spy_count,
+                                int(settings.get("spyTargetSuccess", 90)), max_decoys)
+    if plan:
+        agents, decoys, success, risk = plan
+        logger.info("[espionage] %s: %s com %d agente(s)%s — sucesso %d%%, risco %.1f%% "
+                    "(%d estacionado(s))", m.get("targetCityName", "?"), leg, agents,
+                    (" + %d isca(s)" % decoys) if decoys else "", round(success), risk, spy_count)
+        return agents, decoys
     if spy_count >= want:
-        return want
+        return want, 0
     logger.warning("[espionage] %s: %s com %d agente(s) em vez de %d — só %d estacionado(s)",
                    m.get("targetCityName", "?"), leg, spy_count, want, spy_count)
-    return spy_count
+    return spy_count, 0
 
 
 def _alert_cheat_flag(m, leg):
@@ -1389,6 +1539,19 @@ def execute_waiting_missions(session):
         if now < m.get("executeAfter", now + 1):
             continue
 
+        if m.get("needWarehouse") is False and m.get("needGarrison", True):
+            # Inactive fleet target with a known warehouse (the farm estimates it from its own
+            # returns): only the garrison is read. No request here — the garrison leg fetches
+            # the view itself.
+            missions[i]["state"] = "WAITING_FOR_GARRISON"
+            missions[i]["garrisonExecuteAfter"] = now
+            missions[i]["garrisonExecutedAt"] = None
+            missions[i]["garrisonResult"] = None
+            logger.info("[espionage] %s: armazém dispensado (estimativa do farm) — guarnição a "
+                        "seguir", m["targetCityName"])
+            changed = True
+            continue
+
         origin_id = str(m["originCityId"])
         position = m.get("safehousePosition") or _get_city_safehouse_position(origin_id)
         if not position:
@@ -1430,9 +1593,10 @@ def execute_waiting_missions(session):
         missions[i]["reportBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
+        agents, decoys = _mission_loadout(m, spy_count, MISSION_WAREHOUSE, "armazém")
         ok, reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, _agents_to_send(m, spy_count, "armazém"), MISSION_WAREHOUSE,
+            spy_id, agents, MISSION_WAREHOUSE, num_decoys=decoys,
         )
 
         if ok:
@@ -1677,9 +1841,10 @@ def execute_garrison_missions(session):
         missions[i]["garrisonBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
+        agents, decoys = _mission_loadout(m, spy_count, MISSION_GARRISON, "guarnição")
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, _agents_to_send(m, spy_count, "guarnição"), MISSION_GARRISON,
+            spy_id, agents, MISSION_GARRISON, num_decoys=decoys,
         )
         if _reason == "cheat_flag":
             _alert_cheat_flag(m, "guarnição")
@@ -1701,6 +1866,15 @@ def execute_garrison_missions(session):
     if changed:
         data["missions"] = missions
         _save_missions(data)
+
+
+def _ships_in_port(report):
+    """Enemy ships a garrison report counted in the harbour (its "Frotas em" section)."""
+    try:
+        from attack_manager import _classify_enemy_fleet
+        return sum(_classify_enemy_fleet(report.get("troops") or {}, report.get("fleet")))
+    except Exception:
+        return 0
 
 
 def collect_garrison_results(session):
@@ -1770,7 +1944,20 @@ def collect_garrison_results(session):
                         if _tr else "sem tropas")
             # Fleet target: chain a spy-on-movements leg to read the enemy fleet's REAL return
             # ETA before finishing (F4.b), instead of marking DONE on the garrison alone.
-            if m.get("needMovements"):
+            # Ships counted in the harbour already settle it: a blockade goes first whatever is
+            # at sea, so the movements leg (the lowest odds of all, 20% a spy) adds nothing. It
+            # only runs when the port reads EMPTY — the one case where a fleet may be out and
+            # due back (94 of ~102 movements reports in two weeks said "nothing returning").
+            ships_in_port = _ships_in_port(report)
+            if m.get("needMovements") and ships_in_port > 0:
+                missions[i]["state"] = "DONE"
+                missions[i]["movementsResult"] = {"enemyReturnAt": None,
+                                                  "skipped": "shipsInPort",
+                                                  "shipsInPort": ships_in_port}
+                logger.info("[espionage] garrison %s: %d navio(s) no porto — movimentos "
+                            "dispensados (bloqueio vai primeiro)", m["targetCityName"],
+                            ships_in_port)
+            elif m.get("needMovements"):
                 delay = random.randint(15, 40) if m.get("fast") else random.randint(1, 4) * 60
                 missions[i]["state"] = "WAITING_FOR_MOVEMENTS"
                 missions[i]["movementsExecuteAfter"] = now + delay
@@ -1844,9 +2031,10 @@ def execute_movements_missions(session):
         missions[i]["movementsBaselineId"] = _report_baseline(session, origin_id, position)
 
         time.sleep(random.randint(5, 15))
+        agents, decoys = _mission_loadout(m, spy_count, MISSION_MOVEMENTS, "movimentos")
         ok, _reason = _execute_spy_mission(
             session, origin_id, m["targetCityId"], position,
-            spy_id, _agents_to_send(m, spy_count, "movimentos"), MISSION_MOVEMENTS,
+            spy_id, agents, MISSION_MOVEMENTS, num_decoys=decoys,
         )
         if _reason == "cheat_flag":
             _alert_cheat_flag(m, "movimentos")
@@ -1976,7 +2164,34 @@ def _spy_pool_gone(error):
     return any(k in e for k in _SPY_GONE_MARKERS)
 
 
-def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_movements=False):
+# A leg that already succeeded is reused on a re-run for this long instead of being redone —
+# a failed garrison or movements leg is retried on its own, not from a fresh warehouse.
+_LEG_REUSE_MAX_AGE = 2 * 3600
+
+
+def _leg_time(res, fallback=None):
+    ts = (res or {}).get("reportedAt") or fallback
+    try:
+        return int(ts or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _warehouse_leg_ok(m, now):
+    res = m.get("result") or {}
+    return (bool(res.get("success")) and isinstance(res.get("resources"), dict)
+            and bool(res.get("resources"))
+            and now - _leg_time(res, m.get("executedAt")) <= _LEG_REUSE_MAX_AGE)
+
+
+def _garrison_leg_ok(m, now):
+    g = m.get("garrisonResult") or {}
+    return (bool(g.get("success")) and "troops" in g and g.get("error") is None
+            and now - _leg_time(g, m.get("garrisonExecutedAt")) <= _LEG_REUSE_MAX_AGE)
+
+
+def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_movements=False,
+                            need_warehouse=True, min_agents=0):
     """Reuse spies already stationed at the target instead of sending fresh ones: a real
     player re-runs the warehouse mission on the spies sitting in the safehouse. Returns
     True if a stationed spy was found (re-executed, or already mid-mission → caller waits),
@@ -2024,6 +2239,10 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
     for i in pools:
         m = missions[i]
         st = m.get("state")
+        # A pool worn down by losses (1 survivor of 4) runs every leg on poor odds — let the
+        # caller send a fresh batch instead (it joins this pool when it comes from the same city).
+        if min_agents and m.get("numAgents") is not None and int(m.get("numAgents") or 0) < min_agents:
+            continue
         # DONE = spy parked after a clean run. FAILED = a run was abandoned, but the spy
         # may still be sitting in the safehouse (a transient executeMission rejection, or
         # a report that never arrived — NOT the same as "detected/gone"). In both cases we
@@ -2034,24 +2253,52 @@ def reexecute_stationed_spy(target_city_id, fast=True, need_garrison=True, need_
             continue
         if st in ("DONE", "FAILED"):
             offset = random.randint(30, 90) if fast else random.randint(5, 15) * 60
-            missions[i]["state"] = "WAITING_AT_CITY"
-            missions[i]["executeAfter"] = now + offset
+            need_g = bool(need_garrison) or bool(need_movements)
+            # Resume where the last run stopped: legs that already succeeded (fresh) are kept,
+            # only what failed or never ran is redone — a failed movements leg no longer costs
+            # a new warehouse and garrison (target I: 33 warehouses for 17 garrisons in 6 days).
+            keep_wh = need_g and _warehouse_leg_ok(m, now)
+            keep_g = keep_wh and bool(need_movements) and _garrison_leg_ok(m, now)
+            skip_wh = need_g and not need_warehouse and not keep_wh
+            if keep_g:
+                start, reset = "WAITING_FOR_MOVEMENTS", ("movementsResult", "movementsExecutedAt",
+                                                         "movementsCollectAfter")
+                missions[i]["movementsExecuteAfter"] = now + offset
+                leg = "movimentos"
+            elif keep_wh or skip_wh:
+                start, reset = "WAITING_FOR_GARRISON", ("garrisonResult", "garrisonExecutedAt",
+                                                        "garrisonCollectAfter", "movementsResult",
+                                                        "movementsExecutedAt", "movementsExecuteAfter",
+                                                        "movementsCollectAfter")
+                missions[i]["garrisonExecuteAfter"] = now + offset
+                if skip_wh:
+                    for k in ("result", "executedAt", "collectAfter"):
+                        missions[i][k] = None
+                leg = "guarnição"
+            else:
+                start, reset = "WAITING_AT_CITY", ("result", "garrisonResult", "garrisonExecutedAt",
+                                                   "garrisonExecuteAfter", "garrisonCollectAfter",
+                                                   "collectAfter", "executedAt", "movementsResult",
+                                                   "movementsExecutedAt", "movementsExecuteAfter",
+                                                   "movementsCollectAfter")
+                missions[i]["executeAfter"] = now + offset
+                missions[i]["missionType"] = None
+                leg = "armazém"
+            missions[i]["state"] = start
             missions[i]["dispatchedAt"] = now   # treat the re-run as a fresh attempt
             missions[i]["fast"] = bool(fast)
-            missions[i]["needGarrison"] = bool(need_garrison) or bool(need_movements)
+            missions[i]["needGarrison"] = need_g
             missions[i]["needMovements"] = bool(need_movements)
-            missions[i]["missionType"] = None
+            missions[i]["needWarehouse"] = not skip_wh
             missions[i]["warehouseRetries"] = 0
             missions[i]["error"] = None
-            for k in ("fullSweepAt", "result", "garrisonResult", "garrisonExecutedAt", "garrisonExecuteAfter",
-                      "garrisonCollectAfter", "collectAfter", "executedAt",
-                      "movementsResult", "movementsExecutedAt", "movementsExecuteAfter",
-                      "movementsCollectAfter"):
+            missions[i]["fullSweepAt"] = None
+            for k in reset:
                 missions[i][k] = None
             data["missions"] = missions
             _save_missions(data)
-            logger.info("[espionage] re-execução nos espiões estacionados (%s) → %s",
-                        st, m.get("targetCityName"))
+            logger.info("[espionage] re-execução nos espiões estacionados (%s) → %s, a partir "
+                        "de: %s", st, m.get("targetCityName"), leg)
             return True
     return False
 

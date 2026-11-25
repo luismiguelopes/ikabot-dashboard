@@ -86,6 +86,19 @@ def test_troops_are_released_and_retimed_when_the_blockade_leaves(monkeypatch, t
     assert not am.has_due_attacks()
 
 
+def test_blockade_departure_retimes_the_enemy_return(monkeypatch, tmp_path):
+    """The farm predicted the driven-off fleet's return from when it PLANNED the blockade. When
+    the blockade really leaves, the prediction moves to its true landing + disperse_min, so the
+    second wave and the flee-time learning start from the real landing."""
+    _world(monkeypatch, tmp_path, garrison={"Lancha rápida": 2})
+    db_manager.farm_update("100", {"enemy_return_at": 1, "disperse_min": 240})
+    _dispatcher(monkeypatch, {"fleet": [True], "army": []})
+    before = int(time.time())
+    am.process_attack_queue(session=object())
+    ret = int(db_manager.farm_get("100")["enemy_return_at"])
+    assert before + 3600 + 240 * 60 <= ret <= before + 3600 + 240 * 60 + 5
+
+
 def test_blockade_retry_holds_the_troops(monkeypatch, tmp_path):
     q = _world(monkeypatch, tmp_path, garrison={"Lancha rápida": 2})
     sent = _dispatcher(monkeypatch, {"fleet": [False], "army": []})

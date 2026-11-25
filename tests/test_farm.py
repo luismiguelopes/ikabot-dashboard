@@ -2619,3 +2619,118 @@ def test_blocked_port_is_recorded_for_the_dashboard(monkeypatch, tmp_path):
     free = {k: v for k, v in _BLOCKED_CITY.items() if k != "infos"}
     fm._confirm_inactive(_island_session(monkeypatch, free), t)
     assert json.load(open(path)) == {}
+
+
+# ── Spy loadout / sweep economy (25/11) ─────────────────────────────────────────
+
+def _fleet_t(**kw):
+    t = {"target_city_id": "100", "is_fleet_target": 1, "swept_at": 1, "mode": "farm",
+         "min_loot": 50000}
+    t.update(kw)
+    return t
+
+
+def _wh_mission(age_secs, now):
+    return [{"targetCityId": "100", "state": "DONE",
+             "result": {"success": True, "resources": {"wood": 1}, "reportedAt": now - age_secs}}]
+
+
+def test_warehouse_scout_needed_rules():
+    now = int(time.time())
+    fresh = _wh_mission(3600, now)
+    # inactive fleet target, rich estimate, recent real reading → garrison only
+    assert fm.warehouse_scout_needed(_fleet_t(), fresh, now, 3_000_000, 207_000, 207_000) is False
+    # not a fleet target / never swept / loop mode → always read the warehouse
+    assert fm.warehouse_scout_needed(_fleet_t(is_fleet_target=0), fresh, now, 3_000_000, None, 0)
+    assert fm.warehouse_scout_needed(_fleet_t(swept_at=0), fresh, now, 3_000_000, None, 0)
+    assert fm.warehouse_scout_needed(_fleet_t(mode="loop"), fresh, now, 3_000_000, None, 0)
+    # estimate near the floor, or under two full waves
+    assert fm.warehouse_scout_needed(_fleet_t(), fresh, now, 140_000, None, 0)
+    assert fm.warehouse_scout_needed(_fleet_t(), fresh, now, 400_000, None, 207_000)
+    # a short return (co-plunderer) or a stale/absent reading
+    assert fm.warehouse_scout_needed(_fleet_t(), fresh, now, 3_000_000, 20_000, 207_000)
+    assert fm.warehouse_scout_needed(_fleet_t(), _wh_mission(25 * 3600, now), now, 3_000_000, None, 0)
+    assert fm.warehouse_scout_needed(_fleet_t(), [], now, 3_000_000, None, 0)
+
+
+def test_learned_disperse_min_from_observed_return():
+    now = int(time.time())
+    landed = now - 3600
+    t = {"enemy_return_at": landed + 240 * 60, "disperse_min": 240, "last_attack_at": landed - 7200}
+    # fleet came back 20 min later than predicted → 260
+    assert fm.learned_disperse_min(t, landed + 260 * 60, now) == 260
+    # within 5 minutes: no change worth writing
+    assert fm.learned_disperse_min(t, landed + 243 * 60, now) is None
+    # far off: a different event, not a correction
+    assert fm.learned_disperse_min(t, landed + 600 * 60, now) is None
+    # no blockade of ours behind the prediction
+    assert fm.learned_disperse_min(dict(t, last_attack_at=0), landed + 260 * 60, now) is None
+    assert fm.learned_disperse_min(dict(t, enemy_return_at=0), landed + 260 * 60, now) is None
+
+
+def test_pick_spy_origin_prefers_a_city_that_fields_the_whole_scout():
+    own = [{"cityId": "1", "x": 40, "y": 50, "safehousePosition": 3},
+           {"cityId": "2", "x": 45, "y": 55, "safehousePosition": 3}]
+    counts = {"byCityId": {"1": {"inDefense": 4}, "2": {"inDefense": 30}}}
+    target = {"island_x": 40, "island_y": 50}
+    assert fm._pick_spy_origin(own, counts, target, want=10)["cityId"] == "2"
+    assert fm._pick_spy_origin(own, counts, target, want=4)["cityId"] == "1"
+
+
+def test_latest_done_report_dates_a_resumed_run_by_its_newest_leg():
+    now = int(time.time())
+    m = {"state": "DONE", "targetCityId": "100", "originCityId": "1",
+         "result": {"resources": {"wood": 1}, "reportedAt": now - 3000},
+         "garrisonResult": {"success": True, "troops": {}, "reportedAt": now - 60},
+         "garrisonExecutedAt": now - 90}
+    assert fm._latest_done_report([m], "100", now - 600) is m
+
+
+def test_fleet_target_scouts_garrison_only_on_a_known_warehouse(monkeypatch, tmp_path):
+    """Inactive fleet target with a rich estimate and a recent real reading: the re-scout skips
+    the warehouse (needWarehouse False) and the estimate becomes the scouted value."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 40,
+                         "islandY": 50, "islandId": "7"})
+    db_manager.farm_update("100", {"next_run_at": 0, "next_action": "spy", "is_fleet_target": 1,
+                                   "swept_at": 1, "last_loot": 3_000_000, "last_spy_at": now - 3600})
+    missions = [{"targetCityId": "100", "state": "DONE", "originCityId": "9",
+                 "result": {"success": True, "resources": {"wood": 3_000_000},
+                            "reportedAt": now - 3600}}]
+    added = _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    import espionage_manager as em
+    monkeypatch.setattr(em, "reexecute_stationed_spy", lambda *a, **k: False)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    (q, item), = added
+    assert q == "spy_dispatch" and item["needWarehouse"] is False and item["needGarrison"]
+    assert db_manager.farm_get("100")["state"] == "SPYING"
+
+
+def test_skipped_warehouse_raids_on_the_estimate(monkeypatch, tmp_path):
+    """The SPYING gate takes a garrison-only sweep (warehouse skipped on purpose) with ships in
+    port (movements dispensed) as complete, and sizes the raid on the estimate."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    db_manager.farm_add({"targetCityId": "100", "targetCityName": "Alvo", "islandX": 41,
+                         "islandY": 43, "islandId": "7", "minLoot": 50000, "maxEnemyShips": 0})
+    db_manager.farm_update("100", {"state": "SPYING", "swept_at": 1, "spy_dispatched_at": now - 300,
+                                   "last_spy_at": now - 300, "is_fleet_target": 1,
+                                   "last_loot": 2_500_000})
+    missions = [{"state": "DONE", "targetCityId": "100", "originCityId": "1",
+                 "needWarehouse": False, "needMovements": True, "result": None,
+                 "garrisonResult": {"success": True, "troops": {}, "fleet": {"Navio Reparador": 3},
+                                    "reportedAt": now - 60},
+                 "garrisonExecutedAt": now - 90,
+                 "movementsResult": {"enemyReturnAt": None, "skipped": "shipsInPort"}}]
+    _common_patches(monkeypatch, tmp_path, missions=missions)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+    t = db_manager.farm_get("100")
+    assert t["last_loot"] == 2_500_000            # estimate used, not "0 loot / drained"
+    assert t["enabled"] == 1
+    assert int(t.get("scout_fail_count") or 0) == 0   # not an incomplete sweep
+    assert int(t["swept_at"]) > 1                      # sealed as a complete sweep

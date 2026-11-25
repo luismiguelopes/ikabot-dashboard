@@ -133,7 +133,7 @@ SPECS = {
         "fields": {
             "army":                   _units(),           # empty = every troop in the origin
             "fleet":                  _units(),           # blockade loadout; empty = whole fleet
-            "spyAgents":              _int(1, 1, 99),
+            "spyAgents":              _int(10, 1, 99),
             "shipReserveEnabled":     _bool(True),
             "reserveHorizonMin":      _int(45, 0, 720),
             "earlyRespyEnabled":      _bool(True),
@@ -154,6 +154,10 @@ SPECS = {
             "ignoreExpiryDays":       _int(60, 1, 365),   # a temporary ignore lifts after this
             "ignorePermanentAfter":   _int(4, 1, 20),     # strikes before an ignore is permanent
             "missionRetentionDays":   _int(30, 1),
+            # Agents + decoys per mission leg, chosen with the game's own odds (see
+            # espionage_manager.spy_odds): the smallest loadout reaching this success chance.
+            "spyTargetSuccess":       _int(90, 50, 99),
+            "spyMaxDecoys":           _int(2, 0, 10),     # 0 = never use decoys
         },
     },
     "world_scan": {

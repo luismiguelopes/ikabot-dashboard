@@ -638,6 +638,23 @@ def _release_wave_after_fleet(fleet_item, queue_add):
         queue_add(ATTACK_QUEUE, dict(it, waitsForFleet="", fleetSentAt=now, dispatchAfter=after))
         logger.info("[attack] bloqueio a caminho de %s — tropas libertadas, saem em %dmin",
                     it.get("targetCityName"), max(0, (after - now) // 60))
+        if fleet_travel > 0 and it.get("source") == "farm":
+            _retime_enemy_return(it.get("targetCityId"), now + fleet_travel)
+
+
+def _retime_enemy_return(target_city_id, landed_at):
+    """The farm predicted the driven-off fleet's return from when it PLANNED the blockade; the
+    blockade may have left later (retried, waiting for ships). Re-time the prediction to the
+    real departure, so the farm's second wave and its flee-time learning use the true landing."""
+    try:
+        from db_manager import farm_get, farm_update
+        t = farm_get(str(target_city_id))
+        if not t:
+            return
+        disperse = max(1, int(t.get("disperse_min", 240) or 240))
+        farm_update(str(target_city_id), {"enemy_return_at": int(landed_at) + disperse * 60})
+    except Exception:
+        logger.warning("[attack] re-temporizar o regresso da frota inimiga falhou", exc_info=True)
 
 
 def _skip_farm_target_vacation(target_city_id):

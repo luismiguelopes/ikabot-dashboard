@@ -41,7 +41,7 @@ def _farm_readers():
 
 
 _FARM_DEFAULT_READS = {
-    "army": {}, "fleet": {}, "spyAgents": 1, "minShipFraction": 0.5, "demote": 3,
+    "army": {}, "fleet": {}, "spyAgents": 10, "minShipFraction": 0.5, "demote": 3,
     "earlyRespy": True, "earlyAge": 7200, "fresh": 86400, "reserve": (True, 45),
 }
 
@@ -83,7 +83,7 @@ def test_farm_readers_survive_junk_and_out_of_range_values(monkeypatch, tmp_path
     _farm(monkeypatch, tmp_path, {"spyAgents": "abc", "minShipFraction": "abc",
                                   "spyFreshnessHours": "abc", "earlyReportMaxAgeMins": "abc"})
     r = _farm_readers()
-    assert (r["spyAgents"], r["minShipFraction"], r["fresh"], r["earlyAge"]) == (1, 0.5, 86400, 7200)
+    assert (r["spyAgents"], r["minShipFraction"], r["fresh"], r["earlyAge"]) == (10, 0.5, 86400, 7200)
 
 
 def test_unknown_farm_keys_are_kept_on_load(monkeypatch, tmp_path):

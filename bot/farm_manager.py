@@ -638,6 +638,11 @@ def _returned_since_scout(t):
     return total
 
 
+def _min_stationed_pool(spy_agents):
+    """Below this many agents left at the target, a fresh batch is sent instead of reusing them."""
+    return max(3, int(spy_agents or 0) // 2)
+
+
 # ── Per-raid loot ceiling ─────────────────────────────────────────────────────
 # Seen live (07-09/11): EVERY raid comes home with ~206-207k whatever the ship count —
 # 6016 ships on Town-VIII, 217 on target C, 1459 on target B all returned ~207k. The game
@@ -759,8 +764,9 @@ def apply_ship_reserve(ships_available, label, now=None):
     return usable
 
 
-def _pick_spy_origin(own_cities, spy_counts, target):
-    """Closest own city that has a safehouse and spies available to send.
+def _pick_spy_origin(own_cities, spy_counts, target, want=1):
+    """Closest own city that has a safehouse and spies available to send — preferring one that
+    can field all `want` spies (a short scout runs every leg on worse odds).
 
     Ties on distance (all own cities often share one island, hence identical
     coordinates) go to the city with the MOST spies at home — never just the first in
@@ -779,7 +785,7 @@ def _pick_spy_origin(own_cities, spy_counts, target):
         if not avail or avail <= 0:
             continue
         d = (c.get("x", 0) - tx) ** 2 + (c.get("y", 0) - ty) ** 2
-        key = (d, -int(avail))
+        key = (int(avail) < want, d, -int(avail))
         if best_key is None or key < best_key:
             best_key, best = key, c
     return best
@@ -803,7 +809,12 @@ def _latest_done_report(missions, target_city_id, since):
         # reportedAt is the game's own date for the report (server clock); the execution
         # time is ours. A report cannot predate the execution that produced it, so take the
         # later of the two — a clock difference with the server must not hide a fresh report.
-        ts = (max(int(res.get("reportedAt") or 0), int(m.get("executedAt") or 0))
+        # A run resumed at a later leg (warehouse kept from the previous attempt, or skipped)
+        # is as new as its newest leg.
+        gres = m.get("garrisonResult") or {}
+        ts = (max(int(res.get("reportedAt") or 0), int(m.get("executedAt") or 0),
+                  int(gres.get("reportedAt") or 0) if isinstance(gres, dict) else 0,
+                  int(m.get("garrisonExecutedAt") or 0), int(m.get("movementsExecutedAt") or 0))
               or m.get("dispatchedAt") or 0)
         if ts >= best_ts:
             best, best_ts = m, ts
@@ -850,6 +861,68 @@ def _recent_full_sweep(missions, t, now):
     if (m.get("movementsResult") or {}).get("enemyReturnAt"):
         return None
     return m, oldest
+
+
+# A fleet target's warehouse is only re-inspected when the estimate can't be trusted: an
+# inactive owner produces nothing, so the warehouse only shrinks by what our raids bring home
+# (loot_log). Re-read it when the estimate nears the floor, a return came back short (someone
+# else is plundering too), or the last real reading is older than this.
+_WAREHOUSE_READING_MAX_AGE = 24 * 3600
+
+
+def _last_warehouse_reading_at(missions, target_city_id):
+    """When the warehouse of this target was last actually read by a spy (0 = never)."""
+    best = 0
+    for m in missions or []:
+        if str(m.get("targetCityId", "")) != str(target_city_id) or m.get("importedFromReport"):
+            continue
+        res = m.get("result") or {}
+        if res.get("success") and isinstance(res.get("resources"), dict) and res.get("resources"):
+            best = max(best, int(res.get("reportedAt") or m.get("executedAt") or 0))
+    return best
+
+
+def warehouse_scout_needed(t, missions, now, est, recent, cap):
+    """False when a fleet target's next scout can skip the warehouse leg and use the estimate.
+    Pure. Only for an already-swept fleet target in farm mode, with the estimate worth at least
+    three thresholds and two full waves, no short return since, and a real reading < 24h old."""
+    if int(t.get("is_fleet_target", 0) or 0) != 1 or _never_swept(t):
+        return True
+    if str(t.get("mode", "farm")) == "loop":
+        return True
+    min_loot = int(t.get("min_loot", 50000) or 0)
+    if recent is not None and recent < min_loot:
+        return True
+    if est < max(3 * min_loot, 2 * int(cap or 0)):
+        return True
+    last = _last_warehouse_reading_at(missions, t["target_city_id"])
+    return last <= 0 or now - last > _WAREHOUSE_READING_MAX_AGE
+
+
+# The driven-off fleet's absence (disperse_min) is learned per target from what a movements
+# report actually shows after our blockade landed: the prediction is re-timed to the real
+# blockade departure by the attack manager, so the gap between prediction and the report is
+# the error in disperse_min.
+_DISPERSE_MIN_BOUNDS = (60, 600)
+_DISPERSE_MATCH_WINDOW = 3 * 3600   # a report this far off is a different event, not a correction
+
+
+def learned_disperse_min(t, observed_return_at, now):
+    """New disperse_min (minutes) for this target from an observed enemy-fleet return, or None
+    when the observation can't be tied to our last blockade. Pure."""
+    predicted = int(t.get("enemy_return_at", 0) or 0)
+    current = max(1, int(t.get("disperse_min", 240) or 240))
+    last_atk = int(t.get("last_attack_at", 0) or 0)
+    if predicted <= 0 or last_atk <= 0 or not observed_return_at:
+        return None
+    landed = predicted - current * 60
+    if landed < last_atk or landed > now:
+        return None   # the prediction isn't from a blockade of ours that already landed
+    err = int(observed_return_at) - predicted
+    if abs(err) > _DISPERSE_MATCH_WINDOW or abs(err) < 5 * 60:
+        return None
+    lo, hi = _DISPERSE_MIN_BOUNDS
+    return int(max(lo, min(hi, current + err / 60)))
 
 
 def _free_ships(session):
@@ -1499,12 +1572,31 @@ def process_farm_targets(session, in_active_hours=True):
         first_contact = _never_swept(t)
         need_movements = need_garrison and (
             int(t.get("is_fleet_target", 0)) == 1 or first_contact)
+        # Inactive fleet target with a trustworthy estimate: read only the garrison (and the
+        # movements if the port is empty). The estimate becomes the scouted value from now on,
+        # so the next estimate keeps subtracting what comes home after this scout.
+        need_warehouse = True
+        if need_garrison:
+            est, recent = _drain_inputs(t)
+            need_warehouse = warehouse_scout_needed(t, missions, now, est, recent,
+                                                    per_raid_loot_cap(now))
+
+        def _adopt_estimate():
+            if not need_warehouse:
+                t["last_loot"] = est
+                farm_update(tid, {"last_loot": est})
+                logger.info("[farm] %s: armazém estimado %d (inactivo, sem produção) — "
+                            "re-espionagem só da guarnição", t.get("target_city_name", tid), est)
+
         if not force_fresh:
             from espionage_manager import reexecute_stationed_spy
             if reexecute_stationed_spy(tid, fast=True, need_garrison=need_garrison,
-                                       need_movements=need_movements):
+                                       need_movements=need_movements,
+                                       need_warehouse=need_warehouse,
+                                       min_agents=_min_stationed_pool(spy_agents)):
+                _adopt_estimate()
                 return "stationed"
-        origin = _pick_spy_origin(own_cities, spy_counts, t)
+        origin = _pick_spy_origin(own_cities, spy_counts, t, want=spy_agents)
         if not origin:
             return None
         queue_add("spy_dispatch", {
@@ -1520,8 +1612,10 @@ def process_farm_targets(session, in_active_hours=True):
             "fast":             True,   # warehouse→garrison back-to-back
             "needGarrison":     bool(need_garrison),
             "needMovements":    bool(need_movements),
+            "needWarehouse":    bool(need_warehouse),
             "queuedAt":         now,
         })
+        _adopt_estimate()
         return "dispatched"
 
     def _safe_target_verdict(t):
@@ -1878,7 +1972,13 @@ def process_farm_targets(session, in_active_hours=True):
             # crashed the pass. An unusable reading is a failed scout: try again.
             wres = m.get("result") or {}
             resources = wres.get("resources")
-            if not isinstance(resources, dict) or not resources or wres.get("success") is False:
+            skipped_wh = m.get("needWarehouse") is False and not resources
+            if skipped_wh:
+                # Warehouse not inspected on purpose (inactive fleet target, see
+                # warehouse_scout_needed): the estimate set at launch stands in for it.
+                resources = {"estimate": _estimated_warehouse(t)}
+            if (not isinstance(resources, dict) or not resources
+                    or (wres.get("success") is False and not skipped_wh)):
                 tries = int(t.get("scout_fail_count", 0) or 0) + 1
                 if tries >= _MAX_SCOUT_FAILS:
                     rounds, wait = _scout_round_backoff(t, interval)
@@ -1905,6 +2005,15 @@ def process_farm_targets(session, in_active_hours=True):
             # guess). Both t and the DB are updated so _enqueue_attack sees the fresh value.
             mv = m.get("movementsResult")
             if isinstance(mv, dict) and mv.get("enemyReturnAt"):
+                learned = learned_disperse_min(t, mv["enemyReturnAt"], now)
+                if learned is not None:
+                    old_d = max(1, int(t.get("disperse_min", 240) or 240))
+                    t["disperse_min"] = learned
+                    farm_update(tid, {"disperse_min": learned})
+                    logger.info("[farm] %s: frota inimiga voltou %+dmin face ao previsto — tempo de "
+                                "fuga ajustado %dmin → %dmin", name,
+                                (int(mv["enemyReturnAt"]) - int(t.get("enemy_return_at", 0) or 0)) // 60,
+                                old_d, learned)
                 was_safe = int(t.get("is_fleet_target", 0) or 0) == 0
                 t["enemy_return_at"] = int(mv["enemyReturnAt"])
                 # P12.2: a fleet at sea and due back means this IS a fleet target even if the
