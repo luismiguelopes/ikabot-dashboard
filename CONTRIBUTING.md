@@ -29,6 +29,8 @@ keep it private.
   straight to a PR.
 - Keep each PR **small and focused** on one thing.
 - Describe *what* changed and *why*, and how you tested it.
+- The PR title becomes a line in the release notes, so write it as what changes for the user
+  (e.g. "Spy counts are read on the Brazilian server") rather than how the code changed.
 - Write commit messages in English, in the imperative mood ("Fix wine buyer price check").
 
 ### Before opening a PR
