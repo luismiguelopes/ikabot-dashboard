@@ -1,0 +1,24 @@
+name: Release Drafter
+
+# Updates the draft of the next release after every merge to main. It never publishes:
+# the maintainer reviews the draft on the Releases page and clicks "Publish release".
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-drafter
+  cancel-in-progress: false
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: release-drafter/release-drafter@v7
+        with:
+          config-name: release-drafter.yml

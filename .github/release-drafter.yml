@@ -1,0 +1,52 @@
+# Release Drafter (.github/workflows/release-drafter.yml) keeps a draft of the next release
+# up to date on every merge to main. Publishing the draft is a manual click.
+#
+# The next version number comes from the labels of the PRs merged since the last release
+# (the biggest increment wins):
+#   breaking                          -> major  (v1.4.2 -> v2.0.0)
+#   enhancement                       -> minor  (v1.4.2 -> v1.5.0)
+#   anything else (bug, translation…) -> patch  (v1.4.2 -> v1.4.3)
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+change-template: '- $TITLE (#$NUMBER) $AUTHORS'
+# Escape characters that would otherwise turn PR titles into mentions or markup.
+change-title-escapes: '\<*_&'
+
+categories:
+  - type: 'pre-exclude'
+    when:
+      labels:
+        - 'skip-changelog'
+        - 'duplicate'
+        - 'invalid'
+        - 'wontfix'
+  - title: 'Breaking changes'
+    semver-increment: major
+    when:
+      label: 'breaking'
+  - title: 'New features'
+    semver-increment: minor
+    when:
+      label: 'enhancement'
+  - title: 'Bug fixes'
+    when:
+      label: 'bug'
+  - title: 'Translations and other servers'
+    when:
+      label: 'translation'
+  - title: 'Documentation'
+    when:
+      label: 'documentation'
+  - type: 'version-resolver'
+    semver-increment: 'patch'
+
+template: |
+  $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
+
+  ## New contributors
+
+  $NEW_CONTRIBUTORS
