@@ -155,6 +155,20 @@ def test_registry_update_merges_units_and_floats(tmp_path):
     assert json.load(open(p))["spyFreshnessHours"] == 12.5
 
 
+def test_farm_update_caps_values_at_the_dashboard_limits(tmp_path):
+    # The dashboard fields cap these numbers, but the API took any value (999 empty returns
+    # before a pause): the registry now holds the same upper limits as the form.
+    p = str(tmp_path / "farm_settings.json")
+    s = reg.update("farm", {"emptyReturnStrikes": 999, "spyFreshnessHours": 9999,
+                            "earlyReportMaxAgeMins": 99999, "fleetDemoteAfterSweeps": 999}, p)
+    assert (s["emptyReturnStrikes"], s["spyFreshnessHours"],
+            s["earlyReportMaxAgeMins"], s["fleetDemoteAfterSweeps"]) == (20, 720, 1440, 50)
+    s = reg.update("farm", {"emptyReturnStrikes": 20, "spyFreshnessHours": 720,
+                            "earlyReportMaxAgeMins": 1440, "fleetDemoteAfterSweeps": 50}, p)
+    assert (s["emptyReturnStrikes"], s["spyFreshnessHours"],
+            s["earlyReportMaxAgeMins"], s["fleetDemoteAfterSweeps"]) == (20, 720, 1440, 50)
+
+
 def test_world_scan_default_radius_follows_the_env(monkeypatch):
     monkeypatch.setenv("WORLD_SCAN_RADIUS", "18")
     assert reg.defaults("world_scan")["radius"] == 18
