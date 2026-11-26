@@ -25,7 +25,7 @@ import random
 import time
 
 import settings_registry
-from empire_utils import LOGS_DIR, logger
+from empire_utils import LOGS_DIR, lm, logger
 
 # P7.1: last-resort backstop, NOT the primary timeout. A live/executing mission is owned by
 # the espionage state machine, which terminalises it on its own (FAILED at 12h no-arrival /
@@ -78,6 +78,7 @@ _MAX_CONCURRENT_FARM = 2
 _PARALLEL_SHIP_FLOOR = 50
 _PARALLEL_RETRY_BACKOFF = 7 * 60   # wait before retrying a slot the ship floor / cap just blocked
 _DISPATCH_SPACING_RANGE = (15, 30)  # jitter (s) between launches when only the per-cycle cap held
+_SLOT_FREE_JITTER_RANGE = (30, 120)  # jitter (s) after the soonest raid return before retrying a held raid
 _MAX_LAUNCHES_PER_CYCLE = 1
 FARM_SETTINGS_PATH = os.path.join(LOGS_DIR, "farm_settings.json")
 MOVEMENTS_PATH = os.path.join(LOGS_DIR, "movements.json")
@@ -1680,6 +1681,30 @@ def process_farm_targets(session, in_active_hours=True):
     _state = {"attacking": sum(1 for x in targets if x.get("state") == "ATTACKING"),
               "budget": _MAX_LAUNCHES_PER_CYCLE, "free_ships": None, "wine_reserve": None}
 
+    # Raids held this cycle, by reason ("slots", "ships", "cycle"), logged as one summary line
+    # per reason after the loop instead of one line per target.
+    _held = {"slots": [], "ships": [], "cycle": []}
+    _name_counts = {}
+    for x in targets:
+        n = x.get("target_city_name", "")
+        _name_counts[n] = _name_counts.get(n, 0) + 1
+
+    def _label(t):
+        """Target name for a log line, with its city id when another target has the same name."""
+        name = t.get("target_city_name", "") or str(t["target_city_id"])
+        if _name_counts.get(t.get("target_city_name", ""), 0) > 1:
+            return "%s (%s)" % (name, t["target_city_id"])
+        return name
+
+    def _soonest_return():
+        """The raid in flight that comes back first, as (target, return_at), or (None, 0)."""
+        flying = [x for x in targets if x.get("state") == "ATTACKING"
+                  and int(x.get("attack_return_at", 0) or 0) > now]
+        if not flying:
+            return None, 0
+        first = min(flying, key=lambda x: int(x["attack_return_at"]))
+        return first, int(first["attack_return_at"])
+
     def _wine_reserve_once():
         if _state["wine_reserve"] is None:
             try:
@@ -1757,26 +1782,55 @@ def process_farm_targets(session, in_active_hours=True):
         _spent_dispatch()
 
     def _attack_backoff():
-        """How long to hold a raid that couldn't launch. A full wait only when a slot or the ship
-        floor is genuinely unavailable (needs a return first); otherwise it was just this cycle's
-        one-dispatch cap — a short human-like jitter so the queue keeps a 1-2 min cadence, not 7."""
+        """How long to hold a raid that couldn't launch, and why: (seconds, reason).
+          • "slots": every attack slot is taken. Nothing can launch before a raid comes back, so
+            hold until the soonest known return (plus jitter). The scheduler does not wake for a
+            held raid while the slots are full (has_due_farm), so this is the real retry time.
+          • "ships": a parallel slot is free but the ship floor is not met.
+          • "cycle": only this cycle's one-dispatch cap held it — a short human-like jitter so the
+            queue keeps a 1-2 min cadence. The best target still goes first: when a slot opens the
+            working set is sorted by priority again."""
         if _state["attacking"] >= _MAX_CONCURRENT_FARM:
-            return _PARALLEL_RETRY_BACKOFF
+            _, back_at = _soonest_return()
+            if back_at:
+                return (max(60, back_at - now) + random.randint(*_SLOT_FREE_JITTER_RANGE),
+                        "slots")
+            return _PARALLEL_RETRY_BACKOFF, "slots"
         if _state["attacking"] >= 1 and _free_ships_once() < _PARALLEL_SHIP_FLOOR:
-            return _PARALLEL_RETRY_BACKOFF
-        return random.randint(*_DISPATCH_SPACING_RANGE)
+            return _PARALLEL_RETRY_BACKOFF, "ships"
+        return random.randint(*_DISPATCH_SPACING_RANGE), "cycle"
 
-    def _defer_parallel(t, backoff, **extra):
+    def _defer_parallel(t, backoff, reason, **extra):
         """A launch was blocked only by the parallel budget/slot/ship floor — not by intel. Hold
         the target for `backoff` seconds and keep its report/loot (pass last_loot/last_enemy_ships
         via extra) so it retries directly, without re-scouting. The backoff also stops the
-        scheduler busy-waking while the ship floor is unmet (P0.1 loop guard)."""
+        scheduler busy-waking while the ship floor is unmet (P0.1 loop guard). The log line is
+        written once per reason after the loop (_log_held)."""
         fields = {"state": "IDLE", "next_run_at": now + backoff, "next_action": "attack"}
         fields.update(extra)
         farm_update(t["target_city_id"], fields)
-        logger.info("[farm] %s: despacho adiado (cap do ciclo / slot / barcos) — "
-                    "nova tentativa em %ds", t.get("target_city_name", t["target_city_id"]),
-                    backoff)
+        _held[reason].append(_label(t))
+
+    def _log_held():
+        """One summary line per reason for the raids held this cycle."""
+        if _held["slots"]:
+            first, back_at = _soonest_return()
+            if first is not None:
+                logger.info(lm("farm_held_slots", busy=_state["attacking"],
+                               max=_MAX_CONCURRENT_FARM, who=_label(first),
+                               at=time.strftime("%H:%M", time.localtime(back_at)),
+                               n=len(_held["slots"]), targets=", ".join(_held["slots"])))
+            else:
+                logger.info(lm("farm_held_slots_unknown", busy=_state["attacking"],
+                               max=_MAX_CONCURRENT_FARM, n=len(_held["slots"]),
+                               targets=", ".join(_held["slots"])))
+        if _held["ships"]:
+            logger.info(lm("farm_held_ships", free=_free_ships_once(),
+                           floor=_PARALLEL_SHIP_FLOOR, mins=_PARALLEL_RETRY_BACKOFF // 60,
+                           n=len(_held["ships"]), targets=", ".join(_held["ships"])))
+        if _held["cycle"]:
+            logger.info(lm("farm_held_cycle", n=len(_held["cycle"]),
+                           targets=", ".join(_held["cycle"])))
 
     # Working set (P11.9): advance committed targets (spying/attacking) AND offer the free attack
     # slot to the best due IDLE target, instead of freezing behind a single head. The `continue`-
@@ -1814,7 +1868,7 @@ def process_farm_targets(session, in_active_hours=True):
                 # P11.9: a safe direct raid needs an attack slot. If one isn't free this cycle,
                 # hold the target (keep intel) instead of spending the pre-attack island fetch.
                 if not _can_launch_attack():
-                    _defer_parallel(t, _attack_backoff())
+                    _defer_parallel(t, *_attack_backoff())
                     continue
                 # No point sending (or even queuing) a raid the attack manager would defer for
                 # lack of ships — keep the intel and retry when the fleet is back.
@@ -1898,7 +1952,8 @@ def process_farm_targets(session, in_active_hours=True):
             # P11.9: one dispatch per cycle (scout or raid). If spent, hold this scout for the
             # next wake so launches never fire in a burst.
             if not _can_dispatch():
-                _defer_parallel(t, random.randint(*_DISPATCH_SPACING_RANGE), next_action="spy")
+                _defer_parallel(t, random.randint(*_DISPATCH_SPACING_RANGE), "cycle",
+                                next_action="spy")
                 continue
             spy = _launch_respy(t, need_garrison=need_garrison,
                                 force_fresh=bool(int(t.get("force_fresh_spy", 0) or 0)))
@@ -2200,7 +2255,8 @@ def process_farm_targets(session, in_active_hours=True):
             # may be taken by a parallel raid (or this cycle's one launch is spent). Hold it with
             # its loot so it retries directly, no re-scout. (A clean scout already cleared above.)
             if not _can_launch_attack():
-                _defer_parallel(t, _attack_backoff(), last_loot=loot, last_enemy_ships=enemy_ships)
+                _defer_parallel(t, *_attack_backoff(), last_loot=loot,
+                                last_enemy_ships=enemy_ships)
                 continue
 
             # Don't launch while the previous raid's ships are still returning — keep
@@ -2468,3 +2524,5 @@ def process_farm_targets(session, in_active_hours=True):
                 logger.info("[farm] %s: tropas regressaram — próxima ronda em %dmin (%s)",
                             name, delay // 60, next_action)
             continue
+
+    _log_held()
