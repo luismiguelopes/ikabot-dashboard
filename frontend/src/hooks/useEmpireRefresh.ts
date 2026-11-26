@@ -8,6 +8,10 @@ export function useEmpireRefresh(onDone?: () => void) {
   const [status, setStatus] = useState<ScanStatus | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest callback, read by the polling interval. Keeping it out of the effect's dependencies
+  // means a caller passing an inline callback cannot restart the interval on every render.
+  const onDoneRef = useRef(onDone)
+  useEffect(() => { onDoneRef.current = onDone }, [onDone])
 
   useEffect(() => {
     return () => {
@@ -30,7 +34,7 @@ export function useEmpireRefresh(onDone?: () => void) {
           setStatus(s)
           if (s.status === 'done' || s.status === 'idle' || s.status === 'error') {
             setState('done')
-            if (onDone) onDone()
+            onDoneRef.current?.()
             timeoutRef.current = setTimeout(() => setState('idle'), 3000)
           }
         })
