@@ -266,11 +266,11 @@ export function BuildingQueueTab({ data }: { data: ApiData | null }) {
 
 
   const empireData = data?.empireData || NO_EMPIRE
-  const cityNames  = Object.keys(empireData).sort()
+  const cityNames  = useMemo(() => Object.keys(empireData).sort(), [empireData])
 
   useEffect(() => {
     if (!selCity && cityNames.length > 0) setSelCity(cityNames[0])
-  }, [cityNames.length])
+  }, [cityNames, selCity])
 
   const buildingsInCity = useMemo((): BuildingInCity[] => {
     if (!selCity || !empireData[selCity]) return []
