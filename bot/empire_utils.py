@@ -125,6 +125,11 @@ SCAN_NIGHT_INTERVAL = _parse_duration(os.getenv("SCAN_NIGHT_INTERVAL", "4h"), 4 
 WINE_CRITICAL_NOTIFY_SECS = _parse_duration(os.getenv("WINE_CRITICAL_NOTIFY_HOURS", "2h"), 7200)
 
 _LM = {
+    "costs_not_updated": {
+        "en": "[costs] %s: costs not updated in this cycle — keeping previous ones",
+        "pt": "[costs] %s: custos não actualizados neste ciclo — mantidos os anteriores"
+    },
+
     "own_cities_missing": {
         "en": "[world_scan] own_cities.json not found, waiting for next cycle...",
         "pt": "[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...",

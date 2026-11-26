@@ -269,7 +269,7 @@ def collect_building_costs(session, ids):
         for name, old in previous.items():
             if old and not all_costs.get(name) and (failed_ids or name in all_costs):
                 all_costs[name] = old
-                logger.warning("[costs] %s: custos não actualizados neste ciclo — mantidos os anteriores", name)
+                logger.warning(lm("costs_not_updated", name=name))
 
         costs_data = {"lastUpdated": int(time.time()), "cities": all_costs}
         from db_manager import save_building_costs
