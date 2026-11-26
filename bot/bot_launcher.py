@@ -75,6 +75,37 @@ def _apply_surgical_patches():
             traceback.print_exc()
 
 
+def _has_saved_session(email):
+    """True if ikabot already has a saved session file for this email. With a saved
+    session the login reuses the cookies and never asks for the password."""
+    try:
+        from ikabot.helpers.sessionStorage import find_user_file_for_email
+        return bool(find_user_file_for_email(email or "")[0])
+    except Exception:
+        users_dir = os.path.expanduser("~/.ikabot/users")
+        return os.path.isdir(users_dir) and any(
+            name.endswith(".json") for name in os.listdir(users_dir)
+        )
+
+
+def _queue_world_choice(queue, world, has_saved_session):
+    """Answer the "With which account do you want to log in?" prompt for lobbies with
+    several worlds, using IKABOT_WORLD (1-based, as listed by ikabot).
+
+    The queue holds [email, password]. With a saved session the password is never
+    popped, so it would be read as the world number and crash the login
+    (TypeError: str - int). Drop it in that case, then queue the world number.
+    Does nothing when IKABOT_WORLD is unset or not a positive integer.
+    """
+    world = (world or "").strip()
+    if not world.isdigit() or int(world) < 1:
+        return queue
+    if has_saved_session and len(queue) >= 2:
+        queue.pop(1)
+    queue.append(int(world))
+    return queue
+
+
 def _register_worker(session, process):
     """Best-effort: list the worker in the process table so it shows up in the menu,
     just like a menu-launched task. Never fatal."""
@@ -210,6 +241,13 @@ def _run():
             config.predetermined_input.append(int(arg))
         except ValueError:
             config.predetermined_input.append(arg)
+
+    # Multi-world lobbies: answer the world prompt from IKABOT_WORLD (see helper).
+    _queue_world_choice(
+        config.predetermined_input,
+        os.environ.get("IKABOT_WORLD"),
+        _has_saved_session(os.environ.get("IKABOT_EMAIL")),
+    )
 
     # Logs in; pops the email and (on a fresh login) the password from
     # predetermined_input.
