@@ -37,7 +37,7 @@ export function useEmpireRefresh(onDone?: () => void) {
         .catch(() => {})
     }, 2000)
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [state])
+  }, [state, onDone])
 
   return { trigger, state, status }
 }
