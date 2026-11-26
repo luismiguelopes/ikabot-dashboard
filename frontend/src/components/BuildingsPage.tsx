@@ -14,7 +14,7 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
   const t = useT()
   const { trigger: forceUpdate, state: refreshState, status: refreshStatus } = useEmpireRefresh(onRefresh)
   const { empireData } = data
-  const cities = Object.keys(empireData)
+  const cities = useMemo(() => Object.keys(empireData), [empireData])
   const [filter, setFilter] = useState('all')
   const visible = filter === 'all' ? cities : cities.filter(c => c === filter)
   const [queue, setQueue] = useState<BuildingQueue | null>(null)
@@ -28,7 +28,7 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
     const names = new Set<string>()
     cities.forEach(c => Object.keys(empireData[c]).forEach(k => { if (!k.startsWith('_')) names.add(k) }))
     return [...names]
-  }, [empireData])
+  }, [cities, empireData])
 
   const averages = useMemo(() => {
     const avgs: Record<string, number> = {}
@@ -37,7 +37,7 @@ export function BuildingsPage({ data, onRefresh }: { data: ApiData; onRefresh?: 
       avgs[b] = vals.length > 0 ? vals.reduce((a, v) => a + v, 0) / vals.length : 0
     })
     return avgs
-  }, [empireData])
+  }, [buildingNames, cities, empireData])
 
   const queuedSet = useMemo(() => {
     const s = new Set<string>()

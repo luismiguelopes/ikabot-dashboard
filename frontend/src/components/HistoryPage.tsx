@@ -130,7 +130,7 @@ export function HistoryPage({ data }: Props) {
         scales,
       },
     })
-  }, [shown, metric, lang])
+  }, [shown, metric, lang, t])
 
   const RANGES = [
     { days: 1, label: t('range_24h') }, { days: 7, label: t('range_7d') },
