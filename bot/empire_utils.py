@@ -125,6 +125,22 @@ SCAN_NIGHT_INTERVAL = _parse_duration(os.getenv("SCAN_NIGHT_INTERVAL", "4h"), 4 
 WINE_CRITICAL_NOTIFY_SECS = _parse_duration(os.getenv("WINE_CRITICAL_NOTIFY_HOURS", "2h"), 7200)
 
 _LM = {
+    "farm_held_slots": {
+        "en": "[farm] {busy}/{max} attack slots busy ({who} returns at {at}) — {n} raid(s) waiting: {targets}",
+        "pt": "[farm] {busy}/{max} slots de ataque ocupados ({who} regressa às {at}) — {n} ataque(s) à espera: {targets}",
+    },
+    "farm_held_slots_unknown": {
+        "en": "[farm] {busy}/{max} attack slots busy — {n} raid(s) waiting: {targets}",
+        "pt": "[farm] {busy}/{max} slots de ataque ocupados — {n} ataque(s) à espera: {targets}",
+    },
+    "farm_held_ships": {
+        "en": "[farm] {free} free ships (< {floor}) for a parallel raid — {n} raid(s) retry in {mins}min: {targets}",
+        "pt": "[farm] {free} navios livres (< {floor}) para um ataque em paralelo — {n} ataque(s) tentam de novo em {mins}min: {targets}",
+    },
+    "farm_held_cycle": {
+        "en": "[farm] one dispatch per cycle — {n} target(s) go on the next wakes, by priority: {targets}",
+        "pt": "[farm] um despacho por ciclo — {n} alvo(s) seguem nos próximos acordares, por prioridade: {targets}",
+    },
     "own_cities_missing": {
         "en": "[world_scan] own_cities.json not found, waiting for next cycle...",
         "pt": "[world_scan] own_cities.json não encontrado, a aguardar próximo ciclo...",

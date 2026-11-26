@@ -1765,6 +1765,63 @@ def test_max_two_concurrent_raids(monkeypatch, tmp_path):
     assert db_manager.farm_get("3")["state"] == "IDLE"        # held, cap at 2
 
 
+def _capture_farm_log(monkeypatch):
+    lines = []
+    monkeypatch.setattr(fm.logger, "info", lambda msg, *a, **k: lines.append(msg % a if a else msg))
+    return lines
+
+
+def test_slots_full_holds_raids_until_soonest_return(monkeypatch, tmp_path):
+    """Both attack slots busy: a held raid is retried at the soonest raid return (plus jitter),
+    not after a fixed 7 minutes — the scheduler does not wake for it before then anyway."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    for cid, back in (("1", 3000), ("2", 9999)):
+        db_manager.farm_add({"targetCityId": cid, "targetCityName": "Voo" + cid, "islandX": 40,
+                             "islandY": 50, "islandId": "7", "minLoot": 30000})
+        db_manager.farm_update(cid, {"state": "ATTACKING", "attack_return_at": now + back,
+                                     "last_attack_at": now})
+    _add_safe_due("3", "Terceiro")
+    _add_safe_due("4", "Quarto")
+    _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    lines = _capture_farm_log(monkeypatch)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    lo, hi = fm._SLOT_FREE_JITTER_RANGE
+    for cid in ("3", "4"):
+        t = db_manager.farm_get(cid)
+        assert t["state"] == "IDLE" and t["next_action"] == "attack"
+        assert now + 3000 + lo - 5 <= t["next_run_at"] <= now + 3000 + hi + 5
+    held = [line for line in lines if "Terceiro" in line or "Quarto" in line]
+    assert len(held) == 1                                  # one summary line, not one per target
+    assert "Terceiro" in held[0] and "Quarto" in held[0] and "Voo1" in held[0]
+    assert "2/2" in held[0]
+
+
+def test_held_raids_log_names_duplicate_targets_by_id(monkeypatch, tmp_path):
+    """Two targets with the same name are told apart by their city id in the summary line."""
+    _setup_db(tmp_path)
+    now = int(time.time())
+    for cid in ("1", "2"):
+        db_manager.farm_add({"targetCityId": cid, "targetCityName": "Voo" + cid, "islandX": 40,
+                             "islandY": 50, "islandId": "7", "minLoot": 30000})
+        db_manager.farm_update(cid, {"state": "ATTACKING", "attack_return_at": now + 9999,
+                                     "last_attack_at": now})
+    _add_safe_due("3", "Twin")
+    _add_safe_due("4", "Twin")
+    _common_patches(monkeypatch, tmp_path)
+    monkeypatch.setattr(fm, "_confirm_inactive", lambda s, t: True)
+    lines = _capture_farm_log(monkeypatch)
+
+    fm.process_farm_targets(session=object(), in_active_hours=True)
+
+    held = [line for line in lines if "Twin" in line]
+    assert len(held) == 1
+    assert "Twin (3)" in held[0] and "Twin (4)" in held[0]
+
+
 def test_one_launch_per_cycle(monkeypatch, tmp_path):
     """Anti-detection: with two ready safe targets and no raid in flight, only ONE launches this
     cycle (the richer one by loot/hour); the other is held for the next wake."""
