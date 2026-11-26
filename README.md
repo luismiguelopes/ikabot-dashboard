@@ -13,9 +13,9 @@ empire on one page: resources, buildings, fleet movements, a building queue with
 resource transports, wine logistics, espionage and an automated farm of inactive targets.
 
 > [!NOTE]
-> Screenshots use **fictional data**: every city, player, island and alliance name is replaced
-> before the page is drawn. Building and mission names appear in Portuguese because they come
-> from the game server the dashboard was built on.
+> Screenshots use **fictional data**: city, player, island and alliance names are replaced,
+> coordinates are shifted, every quantity is scaled by a random factor and only some of the
+> cities are shown. See [tools/screenshots](tools/screenshots/README.md).
 
 ## Screenshots
 
@@ -191,6 +191,7 @@ restart `ikabot-gui`.
 │   ├── loadcustommodule_overrides.py # Surgical runtime patch for loadCustomModule
 │   ├── telegram_notifier.py # Telegram Bot API notifications
 │   └── healthcheck.py       # Freeze-aware heartbeat healthcheck (used by compose + autoheal)
+├── tools/screenshots/       # Takes the README screenshots with fictional data
 ├── tests/                   # pytest — ~700 tests (db, queues, parsers, spy state machine,
 │                            #   farm/respy/reserve/loot, attack payload golden-files, wine, throttle, health, downtime, Flask API)
 ├── ikabot_gui/
