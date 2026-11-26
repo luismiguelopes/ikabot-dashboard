@@ -67,6 +67,11 @@ which model(s) were used** (e.g. Claude, GPT, Gemini, with the version if you kn
 are responsible for every line you submit: review it, understand it and test it as if you had
 written it yourself.
 
+Pull requests opened by fully automated agents (no person who reviewed the change, tested
+it and can answer questions about it) will be closed without review. The same applies to PRs
+that don't follow the issue's instructions, such as claiming the task in a comment first or
+describing how the change was tested.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the
