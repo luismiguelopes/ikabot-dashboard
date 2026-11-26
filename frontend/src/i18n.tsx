@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { createContext, useCallback, useContext } from 'react'
 import { BR_OVERRIDES } from './i18n_br'
 
 const TRANSLATIONS: Record<string, Record<string, string>> = {
@@ -1043,13 +1043,14 @@ export function thousandsSep(): string { return _uiLang === 'br' ? '.' : '\u00a0
 
 export function useT() {
   const lang = useUiLang()
-  return (key: string, params?: Record<string, string | number>) => {
+  // Stable per language, so `t` can sit in hook dependency arrays without re-running them.
+  return useCallback((key: string, params?: Record<string, string | number>) => {
     const str = (TRANSLATIONS[lang] || TRANSLATIONS.en)[key] ?? key
     if (!params) return str
     return Object.entries(params).reduce(
       (s, [k, v]) => s.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v)), str
     )
-  }
+  }, [lang])
 }
 
 export function getLocale(lang: string): string {
