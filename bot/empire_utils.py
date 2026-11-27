@@ -229,6 +229,16 @@ _LM = {
         "en": "[empire] Warning: could not collect movements:",
         "pt": "[empire] Aviso: não foi possível recolher movimentos:",
     },
+    "costs_table_unreadable": {
+        "en": "[costs] Cost table for %s unreadable",
+        "pt": "[costs] Tabela de custos de %s ilegível",
+    },
+    "costs_no_cities_read": {
+        "en": "[costs] No cities read — previous costs kept",
+        "pt": "[costs] nenhuma cidade lida — custos anteriores mantidos",
+    }
+        "pt": "[empire] Aviso: não foi possível recolher movimentos:",
+    },
     "empire_start_1": {
         "en": "[empire] Empire Function started in background!",
         "pt": "[empire] Empire Function arrancada em Segundo Plano!",

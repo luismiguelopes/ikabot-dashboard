@@ -171,7 +171,7 @@ def _fetch_cost_tables(session, city, types, state, icon_material):
             html_costs = json.loads(session.post(cost_url), strict=False)[1][1][1]
             tables[btype] = _parse_cost_table(html_costs, icon_material)
         except Exception:
-            logger.warning("[costs] tabela de custos de %s ilegível", btype, exc_info=True)
+            logger.warning(lm("costs_table_unreadable", btype=btype), exc_info=True)
     return tables
 
 
@@ -211,7 +211,7 @@ def collect_building_costs(session, ids):
                 failed_ids.append(city_id)
                 logger.error(lm("costs_city_error", id=city_id), exc_info=True)
         if not cities:
-            logger.warning("[costs] nenhuma cidade lida — custos anteriores mantidos")
+            logger.warning(lm("costs_no_cities_read"))
             return
         levels = {cid: _levels_of(c) for cid, c in cities.items()}
 
